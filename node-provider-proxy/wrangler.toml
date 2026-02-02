@@ -1,0 +1,66 @@
+main = "src/index.ts"
+
+# support most-recent cloudflare workers features as of writing
+compatibility_date = "2022-08-11"
+# node_compat is needed to access builtins, e.g. Buffer
+node_compat = true
+# unbound workers have an extended subrequest limit of 1,000/invocation
+usage_model = "unbound"
+# worker will not deploy to *.workers.dev built-in preview/dev environment
+workers_dev = false
+
+# (Optional CF account_id) worker should deploy to Cloudflare account
+account_id = "a656743ba7c011abcc58ed5ed0b300ed" # Your CF account id here.
+
+# the default environment is "local"
+name = "node-provider-proxy-local"
+
+# running locally, the worker should bind to ephemeral KV stores
+# [preview_]id are meaningless but mandatory for `wrangler dev --local`
+kv_namespaces = [
+    { binding = "kv", preview_id = "preview:kv", id = "nil" },
+]
+
+[vars]
+# secrets
+allowedAppKey = ''
+allowedHosts = []
+infuraKey = 'INFURA_XXX'
+alchemyEthMainnet = 'ALCHEMY_XXX'
+alchemyArbMainnet = 'ALCHEMY_XXX'
+alchemyPolygonMainnet = 'ALCHEMY_XXX'
+alchemyRoninMainnet = 'ALCHEMY_XXX'
+quicknodeBaseMainnet = 'QUICK_NODE_XXX'
+quicknodeBaseMainnetSubdomain = 'QUICK_NODE_XXX'
+quicknodeScrollMainnet = 'QUICK_NODE_XXX'
+quicknodeScrollMainnetSubdomain = 'QUICK_NODE_XXX'
+quicknodeMantleMainnet = 'QUICK_NODE_XXX'
+quicknodeMantleMainnetSubdomain = 'QUICK_NODE_XXX'
+goldskyKey = 'VJhkeClNogwJYGmXmjYvnuGWtf3dd8W2'
+
+[vars.settings]
+maskUpstreamErrors                    = false # show errors for debugging
+retryWithActiveFallback               = false # do not retry for clients
+retryIndividualFailedRpcs             = false # do not retry single rpcs
+defaultFallbackExpirationTtlSeconds   = 60    # 60s = 1m fallback TTL
+defaultRetryAfterUpstreamErrorSeconds = 5     #  5s backoff Retry-After
+
+[env.production-v2.vars]
+allowedHosts = ["v2-app.comp.xyz", "v2-pinanta-host.comp.xyz"]
+
+# secrets: ^^^ same as above, manage with wrangler
+[env.production-v2.vars.settings]
+maskUpstreamErrors                    = true  # obscure upstream errors
+retryWithActiveFallback               = false # do not retry for clients
+retryIndividualFailedRpcs             = true  # retry single failed rpcs
+defaultFallbackExpirationTtlSeconds   = 600   # 10 * 60s = 10m
+defaultRetryAfterUpstreamErrorSeconds = 10    # 30s backoff Retry-After
+
+[env.production-v2]
+name = "node-provider-proxy-v2"
+routes = [
+    { pattern = "node-provider-v2.comp.xyz", custom_domain = true },
+]
+kv_namespaces = [
+    { binding = "kv", id = "b656c8d3ba254c2189a436373efab3ef" },
+]

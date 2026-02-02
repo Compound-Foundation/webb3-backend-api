@@ -1,0 +1,22 @@
+{
+  "name": "@compound-finance/well-known-networks",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "version": "1.0.0-alpha.1",
+  "main": "./dist/network.js",
+  "types": "./dist/network.d.ts",
+  "dependencies": {
+    "fallible": "1.0.0-alpha.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^3.14.1",
+    "@types/node": "^18.0.6",
+    "typescript": "^4.9.4"
+  },
+  "scripts": {
+    "test": "node --test",
+    "clean": "rm -rf dist",
+    "build": "tsc"
+  }
+}

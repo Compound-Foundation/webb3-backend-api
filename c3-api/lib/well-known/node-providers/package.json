@@ -1,0 +1,20 @@
+{
+  "name": "@compound-finance/well-known-node-providers",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "version": "1.0.0-alpha.3",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+    "@compound-finance/well-known-networks": "1.0.0-alpha.1"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.4"
+  },
+  "scripts": {
+    "test": "node --test",
+    "clean": "rm -rf dist",
+    "build": "tsc"
+  }
+}

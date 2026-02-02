@@ -1,0 +1,20 @@
+{
+  "name": "testutil.mock",
+  "type": "module",
+  "private": true,
+  "license": "UNLICENSED",
+  "version": "1.0.0-alpha.1",
+  "main": "./dist/mock.js",
+  "types": "./dist/mock.d.ts",
+  "dependencies": {
+    "json-rpc": "1.0.0-alpha.1"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.4"
+  },
+  "scripts": {
+    "test": "node --test",
+    "clean": "rm -rf dist",
+    "build": "tsc"
+  }
+}

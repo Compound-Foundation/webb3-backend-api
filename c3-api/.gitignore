@@ -1,0 +1,16 @@
+**.js
+dist/
+
+# cloudflare local secrets .env-style file
+.dev.vars
+
+kv-dumps/*/**
+compare.out/
+
+.bisync-workdir/
+
+tests/dumps/*
+!tests/dumps/sync.sh
+.nyc_output/
+
+.wrangler/*

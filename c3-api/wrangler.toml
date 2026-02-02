@@ -1,0 +1,38 @@
+main = "./entrypoint"
+
+# support most-recent cloudflare workers features as of writing
+compatibility_date = "2022-06-01"
+# node_compat is needed to access builtins, e.g. Buffer
+node_compat = true
+# unbound workers have an extended subrequest limit of 1,000/invocation
+usage_model = "unbound"
+# worker will not deploy to *.workers.dev built-in preview/dev environment
+workers_dev = false
+
+# in the default env, the worker should run locally
+name = "v3-api-local"
+
+# and running locally, the worker should bind to ephemeral KV stores
+# [preview_]id are meaningless but mandatory for `wrangler dev --local`
+kv_namespaces = [
+    { binding = "kv_testnet", preview_id = "local:kv_testnet", id = "nil" },
+    { binding = "kv_mainnet", preview_id = "local:kv_mainnet", id = "nil" },
+]
+
+# [1] in deployed environments, we need service bindings in order to send
+# requests to other workers within the same Cloudflare zone -- but when
+# developing locally, we can just invoke other workers over the network
+services = []
+
+[vars]
+DEBUG = "fetch"
+ENVIRONMENT = "local"
+MEMORY_CACHE_SEED = "local"
+V3_API_HOST = "your-domain-host_XXX"
+NODE_PROXY_HOST = "node-proxy-endpoint_XXX"
+NODE_PROXY_KEY = "optional-node-proxy-key_XXX"
+BLOCK_NATIVE_API_KEY = "optional-BN-key_XXX"
+FLAGS_ETH_COMPUTATION_INDEX_BIAS = "default"
+
+[[vars.URL_SERVICE_BINDING_OVERRIDES]]
+# we don't need to map any URLs to service bindings, there are none [1]

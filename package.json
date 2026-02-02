@@ -1,0 +1,11 @@
+{
+  "README": "Not a package! Workspace root to share code among workers",
+  "private": true,
+  "workspaces": [
+    "c3-api/lib/fallible",
+    "c3-api/lib/json-rpc",
+    "c3-api/lib/well-known/networks",
+    "c3-api/lib/well-known/node-providers",
+    "c3-api/tests/util/mock"
+  ]
+}

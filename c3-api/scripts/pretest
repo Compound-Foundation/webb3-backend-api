@@ -1,0 +1,7 @@
+#!/usr/bin/env -S zsh -euo pipefail
+
+# load the path to the git-root
+git_path=$(git rev-parse --show-prefix)
+
+# run the ./tests/dumps/sync.sh script within c3-api
+${git_path}/cloudflare/workers/c3-api/tests/dumps/sync.sh

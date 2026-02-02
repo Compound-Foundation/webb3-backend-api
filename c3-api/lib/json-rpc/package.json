@@ -1,0 +1,19 @@
+{
+  "name": "json-rpc",
+  "type": "module",
+  "private": true,
+  "version": "1.0.0-alpha.1",
+  "main": "./dist/json-rpc.js",
+  "types": "./dist/json-rpc.d.ts",
+  "dependencies": {
+    "fallible": "1.0.0-alpha.1"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.5"
+  },
+  "scripts": {
+    "test": "node --test",
+    "clean": "rm -rf dist",
+    "build": "tsc"
+  }
+}

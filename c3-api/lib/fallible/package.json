@@ -1,0 +1,16 @@
+{
+  "name": "fallible",
+  "type": "module",
+  "private": true,
+  "version": "1.0.0-alpha.1",
+  "main": "./dist/fallible.js",
+  "types": "./dist/fallible.d.ts",
+  "devDependencies": {
+    "typescript": "^4.9.4"
+  },
+  "scripts": {
+    "test": "node --test",
+    "clean": "rm -rf dist",
+    "build": "tsc"
+  }
+}

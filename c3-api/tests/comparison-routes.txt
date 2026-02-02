@@ -1,0 +1,112 @@
+# ethereum-mainnet cUSDCv3 rewards dapp-data
+market/ethereum-mainnet/0xc3d688b66703497daa19211eedff47f25384cdc3/rewards/dapp-data
+
+# ethereum-mainnet cWETHv3 rewards dapp-data
+market/ethereum-mainnet/0xa17581a9e3356d9a858b789d68b4d866e593ae94/rewards/dapp-data
+
+# polygon-mainnet cUSDCv3 rewards dapp-data
+market/polygon-mainnet/0xF25212E676D1F7F89Cd72fFEe66158f541246445/rewards/dapp-data
+
+# arbitrum-mainnet cUSDCev3 rewards dapp-data
+market/arbitrum-mainnet/0xA5EDBDD9646f8dFF606d7448e414884C7d905dCA/rewards/dapp-data
+
+# arbitrum-mainnet cUSDCv3 rewards dapp-data
+market/arbitrum-mainnet/0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf/rewards/dapp-data
+
+# base-mainnet cUSDbCv3 rewards dapp-data
+market/base-mainnet/0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf/rewards/dapp-data
+
+# base-mainnet cWETHv3 rewards dapp-data
+market/base-mainnet/0x46e6b214b524310239732D51387075E0e70970bf/rewards/dapp-data
+
+# account rewards
+account/0xc01e119d19d10ab6b60b95b28c201b09cf95360b/rewards
+account/0x65aba0bcaa72daf4ab9512a9c73f4fa813f02f82/rewards
+account/0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045/rewards
+
+# some transaction history
+account/0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5/transaction_history
+account/0x420f253087044b8BCf028dd89F8fe83Ba6275E84/transaction_history
+account/0x11b50686d3983C14C0d0972a5e46e38e0D9B2E14/transaction_history
+account/0x5bD458485d40ca6232b8c96AA88A1D69264Ad36D/transaction_history
+# liquidation
+account/0x0cC5A715b06C8eCe9F2fa49Cdc75750539255779/transaction_history
+# DeFi Saver
+account/0xD36Daf280D5F3a972AE77adB451aEBdC87189f67/transaction_history
+# Compound V3 Position Migrator
+account/0xa5e6b86b278ae2511518e0837047ae9595777434/transaction_history
+
+# first 100 proposals
+governance/mainnet/all/proposals?page_size=100
+
+# first 100 vote receipts for proposal 130
+governance/mainnet/all/proposal_vote_receipts?proposal_id=130&page_size=100
+
+# ctokens
+legacy/mainnet/ctokens
+
+# cUSDCv3 mainnet, with different address casings
+market/mainnet/0xc3D688b66703497daa19211eeDFF47F25384CDC3/summary
+market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3/summary
+# cUSDCv3 mainnet latest historical market summary
+market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3/historical/summary
+# cUSDCv3 mainnet latest rewards summary
+market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3/rewards/summary
+
+# cWETHv3 mainnet latest historical summaries
+market/mainnet/0xA17581A9E3356d9A858b789D68B4d866e593aE94/historical/summary
+# cWETHv3 mainnet latest summary
+market/mainnet/0xA17581A9E3356d9A858b789D68B4d866e593aE94/summary
+# cWETHv3 mainnet latest rewards summary
+market/mainnet/0xA17581A9E3356d9A858b789D68B4d866e593aE94/rewards/summary
+
+# cUSDCv3 polygon mumbai and mainnet historical summaries
+market/polygon-mumbai/0xF09F0369aB0a875254fB565E52226c88f10Bc839/historical/summary
+market/polygon-mainnet/0xF25212E676D1F7F89Cd72fFEe66158f541246445/historical/summary
+# cUSDCv3 polygon mumbai and mainnet summary
+market/polygon-mumbai/0xF09F0369aB0a875254fB565E52226c88f10Bc839/summary
+market/polygon-mainnet/0xF25212E676D1F7F89Cd72fFEe66158f541246445/summary
+# cUSDCv3 polygon mumbai and mainnet rewards summary
+market/polygon-mumbai/0xF09F0369aB0a875254fB565E52226c88f10Bc839/rewards/summary
+market/polygon-mainnet/0xF25212E676D1F7F89Cd72fFEe66158f541246445/rewards/summary
+
+# cUSDCev3 arbitrum goerli and mainnet historical summaries
+market/arbitrum-goerli/0x1d573274E19174260c5aCE3f2251598959d24456/historical/summary
+market/arbitrum-mainnet/0xA5EDBDD9646f8dFF606d7448e414884C7d905dCA/historical/summary
+# cUSDCev3 arbitrum goerli and mainnet summary
+market/arbitrum-goerli/0x1d573274E19174260c5aCE3f2251598959d24456/summary
+market/arbitrum-mainnet/0xA5EDBDD9646f8dFF606d7448e414884C7d905dCA/summary
+# cUSDCev3 arbitrum goerli and mainnet rewards summary
+market/arbitrum-goerli/0x1d573274E19174260c5aCE3f2251598959d24456/rewards/summary
+market/arbitrum-mainnet/0xA5EDBDD9646f8dFF606d7448e414884C7d905dCA/rewards/summary
+
+# cUSDCv3 arbitrum goerli and mainnet historical summaries
+market/arbitrum-goerli/0x0C94d3F9D7F211630EDecAF085718Ac80821A6cA/historical/summary
+market/arbitrum-mainnet/0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf/historical/summary
+# cUSDCv3 arbitrum goerli and mainnet summary
+market/arbitrum-goerli/0x0C94d3F9D7F211630EDecAF085718Ac80821A6cA/summary
+market/arbitrum-mainnet/0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf/summary
+# cUSDCv3 arbitrum goerli and mainnet rewards summary
+market/arbitrum-goerli/0x0C94d3F9D7F211630EDecAF085718Ac80821A6cA/rewards/summary
+market/arbitrum-mainnet/0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf/rewards/summary
+
+# base-mainnet cUSDbCv3 market, historical market, and rewards summary
+market/base-mainnet/0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf/summary
+market/base-mainnet/0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf/historical/summary
+market/base-mainnet/0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf/rewards/summary
+# base-mainnet cWETHv3 market, historical market, and rewards summary
+market/base-mainnet/0x46e6b214b524310239732D51387075E0e70970bf/summary
+market/base-mainnet/0x46e6b214b524310239732D51387075E0e70970bf/historical/summary
+market/base-mainnet/0x46e6b214b524310239732D51387075E0e70970bf/rewards/summary
+
+# mainnet and goerli comp accounts
+# NOTE: after proxying to Tally, we lost support for goerli here.
+# governance/goerli/comp/accounts?page_size=100
+governance/mainnet/comp/accounts?page_size=100
+
+# mainnet and goerli comp history
+governance/goerli/comp/history
+governance/mainnet/comp/history
+
+# mainnet comp distribution
+governance/mainnet/comp/distribution
