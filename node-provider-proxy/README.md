@@ -22,10 +22,10 @@ Each of the secrets vars have the following descriptions:
 
 - `allowedAppKey` - Optional application key for the proxy to check for on all proxied requests. The proxy has the url format of `http://hostname/{network}/{optional_appkey}`. 
 - `allowedHosts` - Optional hostnames array to check for on all proxied requests. Can be used to aid in checking the origination of a proxy request comes from a known source.
-- `infuraKey` - Infura RPC Key. The proxy relies on Infura as the primary provider for server most rpc traffic across networks (but not all networks).
-- `alchemyXXXMainnet` - Alchemy RPC Keys. The proxy relies on Alchemy as a secondary provider for rpc traffic and only for certain networks.
-- `quicknodeXXXMainnet` - Quicknode RPC Keys. The proxy relies on Quicknode as provider for rpc traffic that isn't suppored by Infura.
-- `quicknodeXXXMainnetSubdomain` - Quicknode RPC Subdomian. Used in conjuction with a Quicknode RPC key.
+- `alchemyXXXMainnet` - Alchemy RPC Key - The proxy relies on Alchemy as the sole provider for rpc traffic.
+- `infuraKey` - Infura RPC Key (configurable) - The proxy can be configured to use quicknode for rpc traffic.
+- `quicknodeXXXMainnet` - Quicknode RPC Keys (configurable) - The proxy can be configured to use quicknode for rpc traffic.
+- `quicknodeXXXMainnetSubdomain` - Quicknode RPC Subdomian (configurable) - Used in conjuction with a Quicknode RPC keys.
 
 
 ## Running Locally

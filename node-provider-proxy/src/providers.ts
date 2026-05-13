@@ -13,18 +13,18 @@ import {
  */
 type ProviderSecrets = {
   // node provider secrets -- should be injected from Cloudflare Secrets
-  infuraKey:             string;
   alchemyEthMainnet:     string;
   alchemyArbMainnet:     string;
   alchemyPolygonMainnet: string;
+  alchemyBaseMainnet:    string;
+  alchemyScrollMainnet:  string;
+  alchemyOptMainnet:     string;
+  alchemyMantleMainnet:  string;
+  alchemyLineaMainnet:   string;
+  alchemyUnichainMainnet:string;
   alchemyRoninMainnet:   string;
-  quicknodeBaseMainnet:  string;
-  quicknodeBaseMainnetSubdomain: string;
-  quicknodeScrollMainnet:  string;
-  quicknodeScrollMainnetSubdomain: string;
-  quicknodeMantleMainnet:  string;
-  quicknodeMantleMainnetSubdomain: string;
-  goldskyKey: string;
+  quicknodeEthMainnet:   string;
+  quicknodeEthMainnetSubdomain: string;
 };
 
 /*
@@ -44,55 +44,48 @@ function instantiate(env: ProviderSecrets) {
        * preferred over the second, second over the third, etc.
        */
       'ethereum-mainnet': [
-        Goldsky.provide('1', { env: 'goldskyKey' }),
+        Alchemy.provide('eth-mainnet', { env: 'alchemyEthMainnet' }),
+        Quicknode.provide(
+          { env: 'quicknodeEthMainnetSubdomain' },
+          { env: 'quicknodeEthMainnet'          },
+        ),
       ],
       'polygon-mainnet':  [
-        Infura. provide('polygon-mainnet', { env: 'infuraKey'             }),
         Alchemy.provide('polygon-mainnet', { env: 'alchemyPolygonMainnet' }),
       ],
       'arbitrum-mainnet': [
-        Infura. provide('arbitrum-mainnet', { env: 'infuraKey'         }),
-        Alchemy.provide('arb-mainnet',      { env: 'alchemyArbMainnet' }),
+        Alchemy.provide('arb-mainnet', { env: 'alchemyArbMainnet' }),
       ],
       'base-mainnet':     [
-        Infura.provide('base-mainnet', { env: 'infuraKey' }),
-        Quicknode.provide(
-          { env: 'quicknodeBaseMainnetSubdomain' },
-          { env: 'quicknodeBaseMainnet'          },
-        ),
+        Alchemy.provide('base-mainnet', { env: 'alchemyBaseMainnet' }),
       ],
       'scroll-mainnet':   [
-        Quicknode.provide(
-          { env: 'quicknodeScrollMainnetSubdomain' },
-          { env: 'quicknodeScrollMainnet'          },
-        ),
+        Alchemy.provide('scroll-mainnet', { env: 'alchemyScrollMainnet' }),
       ],
       'optimism-mainnet': [
-        Infura. provide('optimism-mainnet', { env: 'infuraKey' }),
+        Alchemy.provide('opt-mainnet', { env: 'alchemyOptMainnet' }),
       ],
       'mantle-mainnet': [
-        Quicknode.provide(
-          { env: 'quicknodeMantleMainnetSubdomain' },
-          { env: 'quicknodeMantleMainnet'          },
-        ),
+        Alchemy.provide('mantle-mainnet', { env: 'alchemyMantleMainnet' }),
       ],
       'linea-mainnet': [
-        Infura. provide('linea-mainnet', { env: 'infuraKey' }),
+        Alchemy.provide('linea-mainnet', { env: 'alchemyLineaMainnet' }),
       ],
       'unichain-mainnet': [
-        Infura. provide('unichain-mainnet', { env: 'infuraKey' }),
+        Alchemy.provide('unichain-mainnet', { env: 'alchemyUnichainMainnet' }),
       ],
       'ronin-mainnet': [
         Alchemy.provide('ronin-mainnet', { env: 'alchemyRoninMainnet' }),
       ],
-      // TODO?: configure fallback node providers for testnets?
-      'ethereum-sepolia': [ Infura.provide('sepolia',         { env: 'infuraKey' }) ],
-      'polygon-mumbai':   [ Infura.provide('polygon-mumbai',  { env: 'infuraKey' }) ],
-      'arbitrum-goerli':  [ Infura.provide('arbitrum-goerli', { env: 'infuraKey' }) ],
-      'optimism-goerli':  [ Infura.provide('optimism-goerli', { env: 'infuraKey' }) ],
-      'base-goerli':      [ Infura.provide('base-goerli',     { env: 'infuraKey' }) ],
-      'base-sepolia':     [ Infura.provide('base-sepolia',    { env: 'infuraKey' }) ],
-      'linea-goerli':     [ Infura.provide('linea-goerli',    { env: 'infuraKey' }) ],
+      // TODO: So far no active testing on any testnets, so using mainnet for now until
+      //       we actually decide on explicit testnets to support.
+      'ethereum-sepolia': [ Alchemy.provide('eth-mainnet', { env: 'alchemyEthMainnet' }) ],
+      'polygon-mumbai':   [ Alchemy.provide('eth-mainnet', { env: 'alchemyEthMainnet' }) ],
+      'arbitrum-goerli':  [ Alchemy.provide('eth-mainnet', { env: 'alchemyEthMainnet' }) ],
+      'optimism-goerli':  [ Alchemy.provide('eth-mainnet', { env: 'alchemyEthMainnet' }) ],
+      'base-goerli':      [ Alchemy.provide('eth-mainnet', { env: 'alchemyEthMainnet' }) ],
+      'base-sepolia':     [ Alchemy.provide('eth-mainnet', { env: 'alchemyEthMainnet' }) ],
+      'linea-goerli':     [ Alchemy.provide('eth-mainnet', { env: 'alchemyEthMainnet' }) ],
     },
   });
 }

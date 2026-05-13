@@ -9,9 +9,6 @@ usage_model = "unbound"
 # worker will not deploy to *.workers.dev built-in preview/dev environment
 workers_dev = false
 
-# (Optional CF account_id) worker should deploy to Cloudflare account
-account_id = "a656743ba7c011abcc58ed5ed0b300ed" # Your CF account id here.
-
 # the default environment is "local"
 name = "node-provider-proxy-local"
 
@@ -25,18 +22,18 @@ kv_namespaces = [
 # secrets
 allowedAppKey = ''
 allowedHosts = []
-infuraKey = 'INFURA_XXX'
 alchemyEthMainnet = 'ALCHEMY_XXX'
 alchemyArbMainnet = 'ALCHEMY_XXX'
 alchemyPolygonMainnet = 'ALCHEMY_XXX'
+alchemyBaseMainnet = 'ALCHEMY_XXX'
+alchemyScrollMainnet = 'ALCHEMY_XXX'
+alchemyOptMainnet = 'ALCHEMY_XXX'
+alchemyMantleMainnet = 'ALCHEMY_XXX'
+alchemyLineaMainnet = 'ALCHEMY_XXX'
+alchemyUnichainMainnet = 'ALCHEMY_XXX'
 alchemyRoninMainnet = 'ALCHEMY_XXX'
-quicknodeBaseMainnet = 'QUICK_NODE_XXX'
-quicknodeBaseMainnetSubdomain = 'QUICK_NODE_XXX'
-quicknodeScrollMainnet = 'QUICK_NODE_XXX'
-quicknodeScrollMainnetSubdomain = 'QUICK_NODE_XXX'
-quicknodeMantleMainnet = 'QUICK_NODE_XXX'
-quicknodeMantleMainnetSubdomain = 'QUICK_NODE_XXX'
-goldskyKey = 'VJhkeClNogwJYGmXmjYvnuGWtf3dd8W2'
+quicknodeEthMainnet = 'QUICK_NODE_XXX'
+quicknodeEthMainnetSubdomain = 'QUICK_NODE_XXX'
 
 [vars.settings]
 maskUpstreamErrors                    = false # show errors for debugging

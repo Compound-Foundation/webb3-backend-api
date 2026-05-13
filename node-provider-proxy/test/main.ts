@@ -20,18 +20,18 @@ function makeTestEnv({ storage }: {
   return {
     allowedAppKey: '',
     allowedHosts: [],
-    infuraKey: 'inf-all',
     alchemyArbMainnet: 'alc-arb',
     alchemyEthMainnet: 'alc-eth',
     alchemyPolygonMainnet: 'alc-polygon',
+    alchemyBaseMainnet: 'alc-base',
+    alchemyScrollMainnet: 'alc-scroll',
+    alchemyOptMainnet: 'alc-optimism',
+    alchemyMantleMainnet: 'alc-mantle',
+    alchemyLineaMainnet: 'alc-linea',
+    alchemyUnichainMainnet: 'alc-unichain',
     alchemyRoninMainnet: 'alc-ronin',
-    quicknodeBaseMainnet: 'qn-base',
-    quicknodeBaseMainnetSubdomain: 'qn-base-subdomain',
-    quicknodeScrollMainnet: 'qn-scroll',
-    quicknodeScrollMainnetSubdomain: 'qn-scroll-subdomain',
-    quicknodeMantleMainnet: 'qn-mantle',
-    quicknodeMantleMainnetSubdomain: 'qn-mantle-subdomain',
-    goldskyKey: 'gold-all',
+    quicknodeEthMainnet: 'qn-eth',
+    quicknodeEthMainnetSubdomain: 'qn-eth-sub',
     kv: new KVNamespace(new MemoryStorage(storage ?? new Map())) as any,
     settings: {
       // use short backoffs and expiries in test, to avoid stalls
@@ -350,11 +350,12 @@ test('upstream errors are masked from clients', async () => {
 test('active fallback is selected by JSON filter object', async () => {
   const env = makeTestEnv({});
   const endpoints = providers.instantiate(env);
+
   await env.kv.put(
-    `provider:default:arbitrum-mainnet:active-fallback`,
-    JSON.stringify(endpoints['arbitrum-mainnet'][1])
+    `provider:default:ethereum-mainnet:active-fallback`,
+    JSON.stringify(endpoints['ethereum-mainnet'][1])
   );
-  fetch.expect(endpoints['arbitrum-mainnet'][1].uri, {
+  fetch.expect(endpoints['ethereum-mainnet'][1].uri, {
     method: 'POST',
     headers: {
       'Accept':       'application/json',
@@ -367,7 +368,7 @@ test('active fallback is selected by JSON filter object', async () => {
   })
     .returns(JSON.stringify({ id: 0, jsonrpc: '2.0', result: '0xbeef' }));
   const request = jsonRpc.preparePost({
-    endpoint: `http://node-provider.test.local/arbitrum-mainnet`,
+    endpoint: `http://node-provider.test.local/ethereum-mainnet`,
     call: { method: 'eth_blockNumber', params: [] },
   });
   const response = await Api.fetch(request, env);
