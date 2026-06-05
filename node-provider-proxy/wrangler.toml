@@ -63,7 +63,7 @@ kv_namespaces = [
 ]
 
 [env.production-v3-app.vars]
-allowedHosts = ["v3-app.compound.xyz", "v3-pinata-host.compound.xyz"]
+allowedHosts = ["app.compound.xyz", "v3-app.compound.xyz", "v3-pinata-host.compound.xyz"]
 
 [env.production-v3-app.vars.settings]
 maskUpstreamErrors                    = true  # obscure upstream errors
