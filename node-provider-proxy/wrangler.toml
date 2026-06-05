@@ -43,7 +43,7 @@ defaultFallbackExpirationTtlSeconds   = 60    # 60s = 1m fallback TTL
 defaultRetryAfterUpstreamErrorSeconds = 5     #  5s backoff Retry-After
 
 [env.production-v2.vars]
-allowedHosts = ["v2-app.comp.xyz", "v2-pinata-host.comp.xyz"]
+allowedHosts = ["v2-app.compound.xyz", "v2-pinata-host.compound.xyz"]
 
 # secrets: ^^^ same as above, manage with wrangler
 [env.production-v2.vars.settings]
@@ -56,14 +56,14 @@ defaultRetryAfterUpstreamErrorSeconds = 10    # 30s backoff Retry-After
 [env.production-v2]
 name = "node-provider-v2"
 routes = [
-    { pattern = "node-provider-v2.comp.xyz", custom_domain = true },
+    { pattern = "node-provider-v2.compound.xyz", custom_domain = true },
 ]
 kv_namespaces = [
     { binding = "kv", id = "b656c8d3ba254c2189a436373efab3ef" },
 ]
 
 [env.production-v3-app.vars]
-allowedHosts = ["v3-app.comp.xyz", "v3-pinata-host.comp.xyz"]
+allowedHosts = ["v3-app.compound.xyz", "v3-pinata-host.compound.xyz"]
 
 [env.production-v3-app.vars.settings]
 maskUpstreamErrors                    = true  # obscure upstream errors
@@ -75,7 +75,7 @@ defaultRetryAfterUpstreamErrorSeconds = 10    # 30s backoff Retry-After
 [env.production-v3-app]
 name = "node-provider-v3-app"
 routes = [
-    { pattern = "node-provider-v3-app.comp.xyz", custom_domain = true },
+    { pattern = "node-provider-v3-app.compound.xyz", custom_domain = true },
 ]
 kv_namespaces = [
     { binding = "kv", id = "d38d6e90c1d44dc0b8a6a9acc4dd2d64" },
@@ -94,7 +94,7 @@ defaultRetryAfterUpstreamErrorSeconds = 10    # 30s backoff Retry-After
 [env.production-v3-api]
 name = "node-provider-v3-api"
 routes = [
-    { pattern = "node-provider-v3-api.comp.xyz", custom_domain = true },
+    { pattern = "node-provider-v3-api.compound.xyz", custom_domain = true },
 ]
 kv_namespaces = [
     { binding = "kv", id = "f3f191a18c474989b97755cd2a938089" },

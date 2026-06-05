@@ -43,13 +43,13 @@ ENVIRONMENT = "stage"
 MEMORY_CACHE_SEED = "stage"
 
 [[env.stage.vars.URL_SERVICE_BINDING_OVERRIDES]]
-host    = "node-provider-v3-api.comp.xyz"
+host    = "node-provider-v3-api.compound.xyz"
 binding = "node_provider_proxy"
 
 [env.stage]
 name = "v3-api-stage"
 routes = [
-    { pattern = "v3-api-stage.comp.xyz", custom_domain = true },
+    { pattern = "v3-api-stage.compound.xyz", custom_domain = true },
 ]
 kv_namespaces = [
     { binding = "kv_testnet", id = "f9a99aa9b36a4f84b0bf4988e824aa19" },
@@ -65,13 +65,13 @@ ENVIRONMENT = "production"
 MEMORY_CACHE_SEED = "production"
 
 [[env.production.vars.URL_SERVICE_BINDING_OVERRIDES]]
-host    = "node-provider-v3-api.comp.xyz"
+host    = "node-provider-v3-api.compound.xyz"
 binding = "node_provider_proxy"
 
 [env.production]
 name = "v3-api"
 routes = [
-    { pattern = "v3-api.comp.xyz", custom_domain = true },
+    { pattern = "v3-api.compound.xyz", custom_domain = true },
 ]
 kv_namespaces = [
     { binding = "kv_testnet", id = "ecf11fcd05ef43748e06efed8ba61aaa" },
