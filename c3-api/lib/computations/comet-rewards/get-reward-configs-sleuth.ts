@@ -5,7 +5,7 @@ import * as Eth from '../../eth-constants.js';
 import * as Perspective from '../../perspective.js';
 
 import { getSleuthContract, SleuthQuery } from '../sleuth/sleuth-query.js';
-import GetRewardConfigsQuery from '../sleuth/out/GetRewardConfigs.sol/GetRewardConfigs.json' assert { type: "json" };
+import GetRewardConfigsQuery from '../sleuth/out/GetRewardConfigs.sol/GetRewardConfigs.json' with { type: "json" };
 
 import * as Index   from '../../symbolic/index.js';
 import * as Compute from '../../symbolic/computation.js';

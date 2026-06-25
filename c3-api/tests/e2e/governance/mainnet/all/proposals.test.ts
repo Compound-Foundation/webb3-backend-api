@@ -1,4 +1,4 @@
-import t from 'tap';
+import t, { Test } from 'tap';
 
 import * as fs         from 'node:fs/promises';
 import * as streamInto from 'node:stream/consumers';
@@ -233,7 +233,7 @@ t.test(`/${route} @ block=${testBlock.number}`, async t => {
 });
 
 function validateProposal(
-  t: Tap.Test,
+  t: Test,
   proposal: governanceModel.proposal.FormattedProposal,
   profilesByAddress: { [address: Eth.Address]: governanceModel.Profile },
 ) {
@@ -372,7 +372,7 @@ function validateProposal(
 }
 
 function validatePaginationSummary(
-  t:    Tap.Test,
+  t:    Test,
   page: ProposalsPage,
 ) {
   const summary = page.pagination_summary;

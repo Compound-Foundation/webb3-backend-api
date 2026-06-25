@@ -15,7 +15,9 @@ import type * as Type from './deps-hacks/type-utilities.js';
 
 type Fetch = typeof self.fetch;
 type NodeFetch = typeof globalThis.fetch;
-type Test  = { ok(_: boolean, msg?: string): void };
+// Minimal structural shape so any test-framework Test (e.g. tap's) is
+// accepted; satisfy() only ever calls t.ok(...).
+type Test  = { ok(...args: any[]): any };
 
 interface MockFetch extends Fetch, NodeFetch {
   // debug logger scoped to 'fetch'
@@ -225,12 +227,16 @@ function satisfy(this: MockFetch, t?: Test) {
   const unexpectedOk = this.options.passthrough;
   const unsatisfied = this.expects.filter(([{ used }]) => !used);
   if (!!t) {
-    t.ok(
+    // Throw rather than call t.ok(): these run inside afterEach hooks, and tap
+    // 18+ rejects assertions made on the test after its promise resolves
+    // ("test assertion after Promise resolution"). A thrown AssertionError
+    // fails the hook (and thus the test) cleanly.
+    assert.ok(
       unsatisfied.length === 0,
       `not all ${this.expects.length} expected fetch() calls were made`
     );
     if (!unexpectedOk) {
-      t.ok(
+      assert.ok(
         this.unexpected.length === 0,
         `${this.unexpected.length} unexpected fetch() calls were made`
       );
@@ -284,20 +290,20 @@ async function matchesExpectation(
         // TODO?(jordan): actually do a streaming chunkwise comparison?
         const actual = await streamInto.buffer(request.body  as any);
         const wanted = await streamInto.buffer(expected.body as any);
-        if (!wanted.equals(actual)) return false;
+        if (!wanted.equals(Uint8Array.from(actual))) return false;
       // ... and if it expects an ArrayBuffer...
       } else if (expected.body instanceof ArrayBuffer) {
         // ... the array buffers MUST be byte-for-byte equal
         const actual = await streamInto.buffer(request.body as any);
         const wanted = Buffer.from(expected.body);
-        if (!wanted.equals(actual)) return false;
+        if (!wanted.equals(Uint8Array.from(actual))) return false;
       // ... and if it expects a Blob...
       } else if (expected.body instanceof Blob) {
         // ... the blob MUST be byte-for-byte equal to the request
         const blob = expected.body;
         const actual = await streamInto.buffer(request.body  as any);
         const wanted = await streamInto.buffer(blob.stream() as any);
-        if (!wanted.equals(actual)) return false;
+        if (!wanted.equals(Uint8Array.from(actual))) return false;
       // ... and if it expects a body of certain URLSearchParams...
       } else if (expected.body instanceof URLSearchParams) {
         const requestText   = await streamInto.text(request.body as any);

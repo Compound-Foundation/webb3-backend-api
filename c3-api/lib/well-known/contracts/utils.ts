@@ -190,7 +190,7 @@ function StaticWellKnownContracts<
 /*
  *
  */
-type WellKnownContractsByNetworkAddress = {
+export type WellKnownContractsByNetworkAddress = {
   [Network in KnownNetwork.Name]: (
     & { [address in Eth.Address]: Contract }
     & { [key: string]: any }
