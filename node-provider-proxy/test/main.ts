@@ -14,6 +14,30 @@ import Api, { Env } from '../src/index.js';
 
 import * as mock from 'testutil.mock';
 
+/*
+ * security headers expected on every response, kept in sync with
+ * SECURITY_HEADERS in src/index.ts. Names are lower-cased to match the
+ * normalized keys produced by `new Map(response.headers)`.
+ */
+const SECURITY_HEADER_ENTRIES: [ string, string ][] = [
+  [ 'strict-transport-security',    'max-age=63072000; includeSubDomains; preload' ],
+  [ 'content-security-policy',      "default-src 'none'; frame-ancestors 'none'"   ],
+  [ 'x-content-type-options',       'nosniff'                                      ],
+  [ 'x-frame-options',              'DENY'                                         ],
+  [ 'referrer-policy',              'no-referrer'                                  ],
+  [ 'cross-origin-resource-policy', 'cross-origin'                                 ],
+];
+
+function assertSecurityHeaders(response: Response) {
+  for (const [ name, value ] of SECURITY_HEADER_ENTRIES) {
+    assert.equal(
+      response.headers.get(name),
+      value,
+      `response has expected '${name}' header`,
+    );
+  }
+}
+
 function makeTestEnv({ storage }: {
   storage?: Map<string, StoredValueMeta<unknown>>,
 }): Env {
@@ -257,6 +281,7 @@ test('OPTIONS requests get proper CORS headers', async () => {
     [ 'access-control-allow-origin',  'https://app.compound.finance'     ],
     [ 'access-control-allow-methods', 'POST, OPTIONS'                    ],
     [ 'access-control-allow-headers', 'Content-Type, User-Agent, Accept' ],
+    ...SECURITY_HEADER_ENTRIES,
   ]));
 });
 
@@ -299,7 +324,32 @@ test('POST requests get proper CORS headers', async () => {
     [ 'access-control-allow-origin',  'https://app.compound.finance'     ],
     [ 'access-control-allow-methods', 'POST, OPTIONS'                    ],
     [ 'access-control-allow-headers', 'Content-Type, User-Agent, Accept' ],
+    ...SECURITY_HEADER_ENTRIES,
   ]));
+});
+
+// security headers are present on every response
+test('OPTIONS responses include security headers', async () => {
+  const endpoint = `http://node-provider.test.local/ethereum-mainnet`;
+  const request = new Request(endpoint, {
+    method: 'OPTIONS',
+    headers: { origin: 'https://app.compound.finance' },
+  });
+  const response = await Api.fetch(request, makeTestEnv({}));
+  assert.equal(response.status, 200);
+  assertSecurityHeaders(response);
+});
+
+test('non-OPTIONS responses include security headers', async () => {
+  // a malformed path resolves to a deterministic 400 without any network
+  // calls, exercising the shared cors() response path.
+  const badPath = 'http://node-provider.test.local/zz/y/too/many';
+  const request = new Request(badPath, {
+    method: 'POST',
+  });
+  const response = await Api.fetch(request, makeTestEnv({}));
+  assert.equal(response.status, 400);
+  assertSecurityHeaders(response);
 });
 
 test('upstream errors are masked from clients', async () => {
