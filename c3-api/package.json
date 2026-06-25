@@ -61,7 +61,7 @@
     "test:tap": "npx tap --disable-coverage --timeout=900 'dist/tests/**/*.test.js'",
     "build": "npx tsc",
     "start": "wrangler dev --local entrypoint.ts",
-    "deploy:stage": "npx wrangler publish --env stage",
-    "deploy:production": "npx wrangler publish --env production"
+    "deploy:stage": "npx wrangler deploy --env stage",
+    "deploy:production": "npx wrangler deploy --env production"
   }
 }
