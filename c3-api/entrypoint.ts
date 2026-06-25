@@ -59,14 +59,35 @@ interface Env extends Flags.Env, ServiceBindings {
 
 export { Env, ServiceBindings };
 
+/*
+ * CORS headers shared between the preflight and the main response
+ */
+const CORS_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+};
+
+/*
+ * security headers applied to every response, per security team recommendation
+ */
+const SECURITY_HEADERS: Record<string, string> = {
+  'Strict-Transport-Security':    'max-age=63072000; includeSubDomains; preload',
+  'Content-Security-Policy':      "default-src 'none'; frame-ancestors 'none'",
+  'X-Content-Type-Options':       'nosniff',
+  'X-Frame-Options':              'DENY',
+  'Referrer-Policy':              'no-referrer',
+  'Cross-Origin-Resource-Policy': 'cross-origin',
+};
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         status: 204,
         headers: {
-          'Access-Control-Allow-Origin': '*',
+          ...CORS_HEADERS,
+          // preflight-only: advertise the methods the API supports
           'Access-Control-Allow-Methods': 'GET',
+          ...SECURITY_HEADERS,
         },
       });
     }
@@ -102,7 +123,9 @@ export default {
         ...sleuthQuery,
       }),
     );
-    response.headers.set('Access-Control-Allow-Origin', '*');
+    for (const [name, value] of Object.entries({ ...CORS_HEADERS, ...SECURITY_HEADERS })) {
+      response.headers.set(name, value);
+    }
     return response;
   },
 };
