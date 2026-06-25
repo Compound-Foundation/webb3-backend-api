@@ -17,6 +17,18 @@ const noopContext: ExecutionContext = {
   passThroughOnException() {},
 };
 
+/*
+ * security headers applied to every response, per security team recommendation
+ */
+const SECURITY_HEADERS: Record<string, string> = {
+  'Strict-Transport-Security':    'max-age=63072000; includeSubDomains; preload',
+  'Content-Security-Policy':      "default-src 'none'; frame-ancestors 'none'",
+  'X-Content-Type-Options':       'nosniff',
+  'X-Frame-Options':              'DENY',
+  'Referrer-Policy':              'no-referrer',
+  'Cross-Origin-Resource-Policy': 'cross-origin',
+};
+
 export default {
   async fetch(
     request: Request,
@@ -41,7 +53,7 @@ export default {
         defer:    context.waitUntil,
       });
     } catch {
-      return new Response(`unexpected error`, { status: 500 });
+      return cors(origin, new Response(`unexpected error`, { status: 500 }));
     }
     // Always respond with proper CORS headers.
     response.headers.set('Content-Type', 'application/json');
@@ -54,6 +66,9 @@ function cors(origin: string, response: Response) {
   headers.set('Access-Control-Allow-Origin', origin);
   headers.set('Access-Control-Allow-Headers', 'Content-Type, User-Agent, Accept');
   headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  for (const [ name, value ] of Object.entries(SECURITY_HEADERS)) {
+    headers.set(name, value);
+  }
   const status = response.status;
   return new Response(response.body, { ...response, headers, status });
 }
