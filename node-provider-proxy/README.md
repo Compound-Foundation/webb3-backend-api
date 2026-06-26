@@ -11,7 +11,7 @@ CloudFlare worker to proxy JSON-RPC requests needed for the v3 App.
 First, install any dependencies:
 
 ```sh
-yarn install
+npm install
 ```
 
 ## Configuration
@@ -33,7 +33,7 @@ Each of the secrets vars have the following descriptions:
 To start a local server for the Web3 Worker, run:
 
 ```
-yarn start
+npm start
 ```
 
 ## Testing
@@ -41,5 +41,5 @@ yarn start
 To test the Web3 Worker, run:
 
 ```sh
-yarn test
+npm test
 ```
