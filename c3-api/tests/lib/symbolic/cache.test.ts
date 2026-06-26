@@ -1,4 +1,4 @@
-import t from 'tap';
+import t, { Test } from 'tap';
 
 import { MemoryKv  } from '../../util/kv.js';
 
@@ -29,7 +29,7 @@ const simpleCases = {
 };
 
 async function testGetsWhatWasPut(
-  t: Tap.Test,
+  t: Test,
   cache: Cache,
   cases: { [key: string]: any },
 ) {

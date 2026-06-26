@@ -18,7 +18,7 @@ const compRate = implement({
   signature: `function compRate() view returns (uint256)`,
   parser: ([ u256 ], { network }) => BigFixnum.from({
     value: BigNumber.from(u256),
-    decimals: Eth.wellKnownContractsByNetwork[network]['COMP']['default'].decimals
+    decimals: (Eth.wellKnownContractsByNetwork[network] as any)['COMP']['default'].decimals
   }),
 });
 

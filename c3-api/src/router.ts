@@ -324,7 +324,7 @@ async function unsafeRoute(
       return AllContracts;
     }
     if (contractSpecifier === DefaultCompContract) {
-      return Eth.wellKnownContractsByNetwork[networkAlias]['COMP']['default'];
+      return (Eth.wellKnownContractsByNetwork[networkAlias] as any)['COMP']['default'];
     }
     return ContractUtils.lookupInWellKnown(
       { network: networkAlias, address: contractSpecifier },

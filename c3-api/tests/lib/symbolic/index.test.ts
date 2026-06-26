@@ -1,4 +1,4 @@
-import t from 'tap';
+import t, { Test } from 'tap';
 
 import * as Index    from '../../../lib/symbolic/index.js';
 import * as Fallible from '../../../lib/fallible/fallible.js';
@@ -29,11 +29,11 @@ type TestMethods = (
  * testing framework: wrap it in an actually not terrible API?
  */
 const testMethod =
-  <MethodName extends TestMethods>(t: Tap.Test, method: MethodName) =>
+  <MethodName extends TestMethods>(t: Test, method: MethodName) =>
   <Args extends Parameters<(typeof blockNumberRangeIndex)[MethodName]>>(...args: Args) =>
   (expect: (
     | ReturnType<(typeof blockNumberRangeIndex)[MethodName]>
-    | ((t: Tap.Test, result: ReturnType<(typeof blockNumberRangeIndex)[MethodName]>) => void)
+    | ((t: Test, result: ReturnType<(typeof blockNumberRangeIndex)[MethodName]>) => void)
   )) =>
 {
   return t.test(`${method}(${args.map(a => JSON.stringify(a)).join(', ')})`, t => {

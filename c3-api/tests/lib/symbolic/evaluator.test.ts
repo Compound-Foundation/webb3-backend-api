@@ -1,11 +1,11 @@
-import t from 'tap';
+import t, { Test } from 'tap';
 
 import * as Flags      from '../../../lib/flags.js';
 import * as Compute    from '../../../lib/symbolic/computation.js';
 import * as Workingset from '../../../lib/symbolic/evaluator/workingset.js';
 
 function expectState<Scope extends Compute.Spec = Compute.Spec>(
-  t:        Tap.Test,
+  t:        Test,
   message:  string,
   state:    Workingset.StepState<Scope>,
   expected: Workingset.StepState.ForTest<Scope>,

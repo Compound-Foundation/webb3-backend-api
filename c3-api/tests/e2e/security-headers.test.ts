@@ -1,4 +1,4 @@
-import t from 'tap';
+import t, { Test } from 'tap';
 import { MemoryKv } from '../util/kv.js';
 import C3Api, { Env } from '../../entrypoint.js';
 import '../../shim/node-self.js';
@@ -28,7 +28,7 @@ const testEnv: Env = {
   'kv_mainnet': MemoryKv({}),
 };
 
-function assertSecurityHeaders(t: Tap.Test, response: Response) {
+function assertSecurityHeaders(t: Test, response: Response) {
   for (const [ name, value ] of Object.entries(EXPECTED_SECURITY_HEADERS)) {
     t.equal(
       response.headers.get(name),

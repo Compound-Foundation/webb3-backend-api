@@ -28,7 +28,12 @@ import * as Timestamp from './evm/timestamp.js';
 import type * as Type from './type-utilities.js';
 import { HexAddress } from './evm/address.js';
 
-const wellKnownContractsByNetwork = {
+// Explicit annotation: the inferred `as const` type of the 17-network merge is
+// too large for TS5 to serialize (TS7056). This is the same type lookupInWellKnown
+// already accepts this object as.
+import type { WellKnownContractsByNetworkAddress } from './well-known/contracts/utils.js';
+
+const wellKnownContractsByNetwork: WellKnownContractsByNetworkAddress = {
   ...sepoliaContracts,
   ...mainnetContracts,
   ...mumbaiContracts,

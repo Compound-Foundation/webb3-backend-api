@@ -14,3 +14,6 @@ tests/dumps/*
 .nyc_output/
 
 .wrangler/*
+
+# tap (v18+) working/coverage directory
+.tap/
