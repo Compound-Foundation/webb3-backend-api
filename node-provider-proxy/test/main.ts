@@ -1,9 +1,64 @@
 import test from 'node:test';
 import { strict as assert } from 'node:assert';
 
-import { KVNamespace   } from '@miniflare/kv';
-import { MemoryStorage } from '@miniflare/storage-memory';
-import type { StoredValueMeta } from '@miniflare/shared';
+/*
+ * In-memory KV test double.
+ *
+ * Replaces @miniflare/kv + @miniflare/storage-memory + @miniflare/shared
+ * (Miniflare v2, EOL). Miniflare v3+ removed these standalone synchronous
+ * classes (its KV is async-only via a workerd instance), and the tests here
+ * construct KV synchronously and introspect the backing storage directly
+ * (entry.expiration), so we ship a tiny shim covering exactly the surface used:
+ * KVNamespace get / put (with expirationTtl) / delete over a MemoryStorage Map
+ * of StoredValueMeta.
+ */
+type StoredValueMeta<Meta = unknown> = {
+  value: Uint8Array;
+  expiration?: number; // epoch seconds
+  metadata?: Meta;
+};
+
+class MemoryStorage {
+  constructor(readonly map: Map<string, StoredValueMeta> = new Map()) {}
+}
+
+const KV_ENCODER = new TextEncoder();
+const KV_DECODER = new TextDecoder();
+
+class KVNamespace<_Key extends string = string> {
+  constructor(private readonly storage: MemoryStorage) {}
+
+  async get(key: string): Promise<string | null> {
+    const entry = this.storage.map.get(key);
+    if (!entry) return null;
+    if (entry.expiration !== undefined && entry.expiration * 1000 <= Date.now()) {
+      this.storage.map.delete(key);
+      return null;
+    }
+    return KV_DECODER.decode(entry.value);
+  }
+
+  async put(
+    key: string,
+    value: string,
+    options: { expirationTtl?: number; expiration?: number; metadata?: unknown } = {},
+  ): Promise<void> {
+    const entry: StoredValueMeta = {
+      value: KV_ENCODER.encode(typeof value === 'string' ? value : String(value)),
+    };
+    if (options.expiration !== undefined) {
+      entry.expiration = options.expiration;
+    } else if (options.expirationTtl !== undefined) {
+      entry.expiration = Math.floor(Date.now() / 1000) + options.expirationTtl;
+    }
+    if (options.metadata !== undefined) entry.metadata = options.metadata;
+    this.storage.map.set(key, entry);
+  }
+
+  async delete(key: string): Promise<void> {
+    this.storage.map.delete(key);
+  }
+}
 
 import * as jsonRpc      from 'json-rpc';
 import * as KnownNetwork from '@compound-finance/well-known-networks';

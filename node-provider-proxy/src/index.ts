@@ -12,10 +12,13 @@ export interface Env extends providers.Secrets {
   allowedHosts: string[];
 }
 
-const noopContext: ExecutionContext = {
+// Stub execution context for the default fetch() arg (and tests). Only
+// waitUntil/passThroughOnException are used; cast past the other
+// ExecutionContext members (props/tracing) added in newer workers-types.
+const noopContext = {
   waitUntil() {},
   passThroughOnException() {},
-};
+} as unknown as ExecutionContext;
 
 /*
  * security headers applied to every response, per security team recommendation
