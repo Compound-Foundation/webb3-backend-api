@@ -1,11 +1,10 @@
 main = "src/index.ts"
 
 # support most-recent cloudflare workers features as of writing
-compatibility_date = "2022-08-11"
-# node_compat is needed to access builtins, e.g. Buffer
-node_compat = true
-# unbound workers have an extended subrequest limit of 1,000/invocation
-usage_model = "unbound"
+compatibility_date = "2026-06-25"
+# nodejs_compat flag is needed to access builtins, e.g. Buffer
+# (replaces the deprecated node_compat = true)
+compatibility_flags = ["nodejs_compat"]
 # worker will not deploy to *.workers.dev built-in preview/dev environment
 workers_dev = false
 

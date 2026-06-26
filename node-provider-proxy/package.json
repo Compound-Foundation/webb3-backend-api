@@ -23,18 +23,29 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240314.0",
-    "@miniflare/kv": "^2.14.2",
-    "@miniflare/shared": "^2.14.2",
-    "@miniflare/storage-memory": "^2.14.2",
     "@types/node": "^20.3.1",
     "testutil.mock": "1.0.0-alpha.1",
-    "typescript": "^4.9.4",
-    "wrangler": "^3.1.1"
+    "typescript": "^5",
+    "wrangler": "^4.59.1"
+  },
+  "overrides": {
+    "elliptic": "^6.6.1",
+    "undici": "^6.24.0",
+    "node-forge": "^1.4.0",
+    "ws": "^8.21.0",
+    "picomatch": "^2.3.2",
+    "braces": "^3.0.3",
+    "cross-spawn": "^7.0.5",
+    "path-to-regexp": "^8.2.0",
+    "bn.js": "^5.2.3",
+    "esbuild": "^0.25.0",
+    "nanoid": "^3.3.8",
+    "cookie": "^0.7.0"
   },
   "scripts": {
     "preinstall": "cd .. && npm install-clean --workspaces && npm run build --workspaces && npm test --workspaces",
     "start": "wrangler dev --local",
-    "test": "node --enable-source-maps --test",
+    "test": "node --enable-source-maps --test 'dist/test/**/*.js'",
     "clean": "rm -rf dist",
     "build": "tsc",
     "postbuild": "corepack npm test",

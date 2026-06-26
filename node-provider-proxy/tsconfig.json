@@ -31,7 +31,7 @@
 
     /* Modules */
     "module": "esnext",                                  /* Specify what module code is generated. */
-    "moduleResolution": "node16",                          /* Specify how TypeScript looks up a file from a given module specifier. */
+    "moduleResolution": "node",                          /* Specify how TypeScript looks up a file from a given module specifier. (TS5 requires module=node16 to pair with moduleResolution=node16; aligned with sibling c3-api instead.) */
     "resolveJsonModule": true,                           /* Enable importing .json files */
     // "rootDir": "./",                                  /* Specify the root folder within your source files. */
     // "rootDirs": [],                                   /* Allow multiple folders to be treated as one when resolving modules. */
