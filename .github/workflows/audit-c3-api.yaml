@@ -1,0 +1,31 @@
+name: c3-api Dependency Audit
+on:
+  push:
+    paths:
+      - 'c3-api/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/audit-c3-api.yaml'
+  workflow_dispatch:
+
+jobs:
+  audit:
+    name: npm audit (high/critical must pass)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # The repo-root lockfile covers the shared workspace libraries
+      # (c3-api/lib/*) that c3-api builds against.
+      - name: Audit shared workspace libraries
+        run: npm audit --audit-level=high
+
+      - name: Audit c3-api
+        working-directory: c3-api
+        run: npm audit --audit-level=high
