@@ -30,6 +30,7 @@
   },
   "overrides": {
     "elliptic": "^6.6.1",
+    "sharp": "^0.35.3",
     "undici": "^6.24.0",
     "node-forge": "^1.4.0",
     "ws": "^8.21.0",
