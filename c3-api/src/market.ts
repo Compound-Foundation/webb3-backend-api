@@ -272,6 +272,47 @@ async function historicalSummary(
             });
           }
 
+          /*
+           * The newest bucket cannot be trusted to describe the market as
+           * it is now: its sample sits on the daily block grid, which
+           * projects the latest block DOWN -- up to a full day back -- and
+           * the computed series is then cached until the projection
+           * crosses a date boundary, so the "today" bucket can carry state
+           * nearly two days old under a fresh timestamp. Mature markets
+           * move too slowly for anyone to notice; a young market can grow
+           * 10x inside that window (ciUSDCv3 did) and the chart then
+           * contradicts the latest-summary endpoint sitting right next to
+           * it. Overwrite the newest bucket with a live sample -- the same
+           * minutely-indexed computation the latest-summary endpoint
+           * serves -- so the series always ends at the market's current
+           * state.
+           */
+          const projectedLatest = Fallible.must(
+            market.marketMinutelySummary.index.project(
+              { apiHost, nodeHost, nodeKey, network, contract, block: latestBlock }
+            )
+          );
+          projectedLatest.block.timestamp = latestBlock.timestamp;
+          const liveSummary = await evaluate(
+            pull1({ marketMinutelySummary: projectedLatest })
+          );
+          const liveBucket = {
+            ...liveSummary,
+            date: Eth.Timestamp.toDateString(latestBlock.timestamp),
+            timestamp: latestBlock.timestamp,
+          };
+          if (historicalSummary[historicalSummary.length - 1].date === liveBucket.date) {
+            historicalSummary[historicalSummary.length - 1] = liveBucket;
+          } else {
+            /*
+             * A cached series can end on an earlier date than today;
+             * append today's live bucket and drop the oldest so the
+             * series length stays at desiredDaysBack.
+             */
+            historicalSummary.push(liveBucket);
+            historicalSummary.shift();
+          }
+
           return historicalSummary;
         })
       );
