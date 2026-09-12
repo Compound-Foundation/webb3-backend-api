@@ -21,25 +21,22 @@ type MarketDaySummary = Compute.Spec<{
 
 const { implement, pipe1 } = Compute.Functor<MarketDaySummary>({});
 const marketDaySummary = implement({
-  version: 5,
+  version: 6,
   index: Index.DailyBlockIndex,
   /*
-   * Key the computation by the materialized `date' of the block,
-   * not based on the exact block number or timestamp.
+   * Key the computation by the projected sample block, NOT by the
+   * materialized `date' of the block. Date keys bind a date to whichever
+   * grid block happened to be newest the first time that date was
+   * computed: a request landing between midnight UTC and the day's grid
+   * advance caches yesterday's sample under today's date, and with no
+   * cache expiry that day is then wrong forever. Block keys make the
+   * cache entry identical to the thing actually computed.
    */
   key(name, context) {
     const { block, ...indexedContext } = (
       Fallible.must(this.index.project(context))
     );
-    const date = (
-      context.block.date
-      ?? Eth.Timestamp.toDateString(
-        Eth.Block.hasTimestamp(context.block)
-          ? Eth.estimateBlockTimestampRelative(context.network, block, context.block)
-          : Eth.estimateBlockTimestamp(context.network, block)
-      )
-    );
-    return Key.toKey(name, { date, ...indexedContext });
+    return Key.toKey(name, { block: block.number, ...indexedContext });
   },
   /*
    * Compute a market-day-summary at the requested block.

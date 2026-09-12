@@ -26,29 +26,27 @@ type HistoricalMarketDaySummaries = Compute.Spec<{
 
 const {
   implement,
-  split,
+  join,
   pull1,
 } = Compute.Functor<HistoricalMarketDaySummaries>({});
 
 const historicalMarketDaySummaries = implement({
-  version: 5,
+  version: 6,
   index: Index.Everything,
   /*
-   * Key computation by materialized date for startBlock's
-   * pseudo-projected block via marketDaySummaryIndex. Slightly hacky, but
-   * should correctly bin cache keys into 1/day matching the date for the
-   * underlying marketDaySummary.
+   * Key the computation by the startBlock's projection onto the daily
+   * block grid, matching the block-number keying of the underlying
+   * marketDaySummary. The key changes exactly when the grid gains a new
+   * sample point, so a cached series is reused until there is genuinely
+   * new data to compute. (Date-derived keys were retired for the same
+   * reason as in marketDaySummary: a date estimate can name a date before
+   * the grid has advanced into it, caching stale data under it forever.)
    */
   key(name, { startBlock, ...context }) {
     const { block, ...indexedContext } = Fallible.must(
       Index.DailyBlockIndex.project({ ...context, block: startBlock })
     );
-    const startDate = Eth.Timestamp.toDateString(
-      Eth.Block.hasTimestamp(startBlock)
-        ? Eth.estimateBlockTimestampRelative(context.network, block, startBlock)
-        : Eth.estimateBlockTimestamp(context.network, block)
-    );
-    return Key.toKey(name, { ...indexedContext, startDate });
+    return Key.toKey(name, { ...indexedContext, startBlock: block.number });
   },
   /*
    * Compute `daysBack` of market-day-summaries, starting from the day
@@ -108,10 +106,25 @@ const historicalMarketDaySummaries = implement({
        */
       .reverse()
     );
-    // Compute market day summary at selected points.
-    return split(dailyBlocks.map(({ block }) => pull1({
-      marketDaySummary: { apiHost, nodeHost, nodeKey, network, contract, block }
-    })));
+    /*
+     * Compute market day summary at selected points, then restamp each
+     * result with this enumeration's date and timestamp labels. A cached
+     * marketDaySummary keeps whatever labels its first caller attached,
+     * which may anchor to an older origin; restamping keeps every
+     * response's labels consistent with each other (exactly one day
+     * apart, anchored at the origin), so no two buckets in a series can
+     * ever share a date.
+     */
+    return join([
+      dailyBlocks.map(({ block }) => pull1({
+        marketDaySummary: { apiHost, nodeHost, nodeKey, network, contract, block }
+      })),
+      (summaries) => summaries.map((summary, index) => ({
+        ...summary,
+        date: dailyBlocks[index].block.date,
+        timestamp: dailyBlocks[index].block.timestamp,
+      })),
+    ]);
   },
 });
 
