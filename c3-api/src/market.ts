@@ -18,13 +18,8 @@ import {
   AllNetworks,
   AllContracts,
   type MarketRouteData,
-  type Context               as RouterContext,
   type UninstantiatedContext as UninstantiatedRouterContext,
 } from './router.js';
-
-interface Context
-  extends RouterContext
-{}
 
 type Dependencies = (
   | evm.Evm
@@ -168,7 +163,7 @@ async function latestRewardsSummary(
 
 async function historicalSummary(
   { apiHost, nodeHost, nodeKey, network, contract, queryParams }: MarketRouteData,
-  context: Context,
+  context: UninstantiatedRouterContext,
 ): Promise<Response> {
   const includeTestnets = queryParams.get('testnets') === 'include';
   const allNetworks = KnownNetwork.getNames({ includeTestnets });
@@ -191,7 +186,31 @@ async function historicalSummary(
   } else if(context.flags.environment && context.flags.environment === 'stage') {
     desiredDaysBack = 2;
   }
-  const { evaluate, pull1 } = context.evaluator;
+
+  const testnet = queryParams.get('testnet') ?? 'exclude';
+  const networkEnv = (
+    network === AllNetworks
+      ? testnet === 'exclude' ? 'mainnet' : 'testnet'
+      : KnownNetwork.isNameOfTestnet(network) ? 'testnet' : 'mainnet'
+  );
+
+  /*
+   * The day-bucket series evaluates on a default evaluator, exactly as
+   * the router used to hand this handler. The live newest bucket instead
+   * evaluates on the batching workingset evaluator that latestSummary
+   * uses: the two share the marketMinutelySummary computation and its
+   * per-minute cache key, so a live bucket is one batched market-summary
+   * evaluation at most once a minute per market -- and free whenever
+   * /summary has already computed that minute.
+   */
+  const { evaluate, pull1 } = context.instantiateEvaluator(networkEnv);
+  const liveEvaluator = context.instantiateEvaluator(networkEnv, {
+    flags: {
+      ...context.flags,
+      batchingEnabled: true,
+      evaluatorAlgorithm: 'workingset',
+    },
+  });
 
   const historicalSummary = await Promise.all(
     selectedNetworks.map(async (network) => {
@@ -275,14 +294,13 @@ async function historicalSummary(
           /*
            * The newest bucket cannot be trusted to describe the market as
            * it is now: its sample sits on the daily block grid, which
-           * projects the latest block DOWN -- up to a full day back -- and
-           * the computed series is then cached until the projection
-           * crosses a date boundary, so the "today" bucket can carry state
-           * nearly two days old under a fresh timestamp. Mature markets
-           * move too slowly for anyone to notice; a young market can grow
-           * 10x inside that window (ciUSDCv3 did) and the chart then
-           * contradicts the latest-summary endpoint sitting right next to
-           * it. Overwrite the newest bucket with a live sample -- the same
+           * projects the latest block DOWN -- up to a full day back -- so
+           * the "today" bucket carries state up to ~24h old under a fresh
+           * timestamp. Mature markets move too slowly for anyone to
+           * notice; a young market can grow 10x inside that window
+           * (ciUSDCv3 did) and the chart then contradicts the
+           * latest-summary endpoint sitting right next to it. Overwrite
+           * the newest bucket with a live sample -- the same
            * minutely-indexed computation the latest-summary endpoint
            * serves -- so the series always ends at the market's current
            * state.
@@ -293,8 +311,8 @@ async function historicalSummary(
             )
           );
           projectedLatest.block.timestamp = latestBlock.timestamp;
-          const liveSummary = await evaluate(
-            pull1({ marketMinutelySummary: projectedLatest })
+          const liveSummary = await liveEvaluator.evaluate(
+            liveEvaluator.pull1({ marketMinutelySummary: projectedLatest })
           );
           const liveBucket = {
             ...liveSummary,
