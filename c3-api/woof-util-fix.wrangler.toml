@@ -42,7 +42,7 @@ DEBUG = ""
 ENVIRONMENT = "woof"
 MEMORY_CACHE_SEED = "woof"
 
-V3_API_HOST = "woof-c3-api.dmitriy-a19.workers.dev"
+V3_API_HOST = "woof-c3-api-utilization-fix.dmitriy-a19.workers.dev"
 
 NODE_PROXY_HOST = "woof-node-provider-proxy.internal"
 NODE_PROXY_KEY = ""
