@@ -63,3 +63,7 @@ binding = "node_provider_proxy"
 
 [triggers]
 crons = ["0 * * * *"]
+
+[limits]
+cpu_ms = 60000
+subrequests = 1000000
