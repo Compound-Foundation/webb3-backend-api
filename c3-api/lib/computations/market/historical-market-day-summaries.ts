@@ -30,7 +30,7 @@ const {
   pull1,
 } = Compute.Functor<HistoricalMarketDaySummaries>({});
 
-const historicalMarketDaySummaries = implement({
+const historicalMarketDaySummaries: Compute.Implementation<HistoricalMarketDaySummaries> = implement({
   version: 5,
   index: Index.Everything,
   /*
