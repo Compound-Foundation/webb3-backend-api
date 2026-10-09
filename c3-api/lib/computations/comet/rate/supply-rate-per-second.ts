@@ -14,7 +14,6 @@ import { Comet, StandaloneContract } from "../../../well-known/contracts/types";
 import type { Utilization } from '../utilization';
 
 import type { SupplyKink } from './supply-kink';
-
 import type { SupplyPerSecondInterestRateBase } from './supply-per-second-interest-rate-base';
 import type { SupplyPerSecondInterestRateSlopeLow } from './supply-per-second-interest-rate-slope-low';
 import type { SupplyPerSecondInterestRateSlopeHigh } from './supply-per-second-interest-rate-slope-high';
