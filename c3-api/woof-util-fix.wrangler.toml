@@ -13,7 +13,7 @@ id = "3e3be080a35346dcbbb8293a8022e68e"
 
 [[kv_namespaces]]
 binding = "kv_mainnet"
-id = "71dae1d217a44a2fb1f51849c356d590"
+id = "5c49bcf86b6c4c80b0a346006d364bd2"
 
 [[kv_namespaces]]
 binding = "kv_registry"
