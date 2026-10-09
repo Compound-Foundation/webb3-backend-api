@@ -8,8 +8,8 @@ import { TotalSupply          } from './comet/total-supply.js';
 import { TotalBorrow          } from './comet/total-borrow.js';
 import { Utilization          } from './comet/utilization.js';
 import { BorrowBalanceOf      } from './comet/borrow-balance-of.js';
-import { SupplyRatePerSecond  } from './comet/supply-rate-per-second.js';
-import { BorrowRatePerSecond  } from './comet/borrow-rate-per-second.js';
+import { SupplyRatePerSecond  } from './comet/rate/supply-rate-per-second.js';
+import { BorrowRatePerSecond  } from './comet/rate/borrow-rate-per-second.js';
 import { AssetTotalCollateral } from './comet/asset-total-collateral.js';
 import { BaseBorrowMin        } from './comet/base-borrow-min.js';
 import { BaseUsdPrice         } from './comet/base-usd-price.js';
@@ -51,12 +51,12 @@ export { Symbol,       symbol       } from './comet/symbol.js';
 export {
   SupplyRatePerSecond,
   supplyRatePerSecond,
-} from './comet/supply-rate-per-second.js';
+} from './comet/rate/supply-rate-per-second';
 
 export {
   BorrowRatePerSecond,
   borrowRatePerSecond,
-} from './comet/borrow-rate-per-second.js';
+} from './comet/rate/borrow-rate-per-second';
 
 export {
   AssetTotalCollateral,
