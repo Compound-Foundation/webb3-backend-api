@@ -43,11 +43,11 @@ const { implement, pipe } = Compute.Functor<SupplyRatePerSecond>({});
 const supplyRatePerSecond = implement({
   version: 1,
   index: Index.BlockIndexOnIntervalSeconds(60 * 5),
-  key(name, {block, ...context}) {
-    const {block: projected} = Fallible.must(this.index.project({block, ...context}));
-    return Key.toKey(name, {block: projected.number, ...context});
+  key(name, { block, ...context }) {
+    const { block: projected } = Fallible.must(this.index.project({ block, ...context }));
+    return Key.toKey(name, { block: projected.number, ...context });
   },
-  compute({block, ...context}) {
+  compute({ block, ...context }) {
     const abiFunctionCtx = {
       ...context,
       blockNumber: block.number,
@@ -68,23 +68,16 @@ const supplyRatePerSecond = implement({
          supplyPerSecondInterestRateSlopeLow: low,
          supplyPerSecondInterestRateSlopeHigh: high,
        }) => {
-        // BigFixnum.from({ decimals: 18, value: u256 })
         return BigFixnum.from({
           decimals: 18,
           value: ((): BigNumber => {
             const factorScale = 10n ** 18n;
 
-            if (utilization <= kink) {
+            if (utilization.lte(kink)) {
               return base.add(low.mul(utilization).div(factorScale));
             }
 
-            return base.add(
-              low.mul(kink).div(factorScale)
-            ).add(
-              high.mul(
-                utilization.sub(kink)
-              ).div(factorScale)
-            );
+            return base.add(low.mul(kink).div(factorScale)).add(high.mul(utilization.sub(kink)).div(factorScale));
           })(),
         })
       }
