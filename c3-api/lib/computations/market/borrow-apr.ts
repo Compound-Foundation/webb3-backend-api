@@ -13,10 +13,10 @@ type BorrowApr = Compute.Spec<{
 
 const { implement, pipe1 } = Compute.Functor<BorrowApr>({});
 const borrowApr = implement({
-  version: 0, // NOTE(jordan): 0 is "no version;" FIXME: migrate
-  compute({ apiHost, nodeHost, nodeKey, blockNumber, contract, network }) {
+  version: 1,
+  compute(ctx) {
     return pipe1([
-      { borrowRatePerSecond: { apiHost, nodeHost, nodeKey, blockNumber, contract, network } },
+      { borrowRatePerSecond: ctx },
       rate => rate.mul(Constant.secondsPerYear)
     ]);
   }

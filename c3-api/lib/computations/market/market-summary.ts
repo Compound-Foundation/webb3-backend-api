@@ -90,8 +90,8 @@ const marketSummary = implement({
      */
     return pipe([
       {
-        borrowApr: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
-        supplyApr: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
+        borrowApr: { apiHost, nodeHost, nodeKey, block, contract, network },
+        supplyApr: { apiHost, nodeHost, nodeKey, block, contract, network },
         basePrice: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
         baseUsdPrice: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
         totalBorrow: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },

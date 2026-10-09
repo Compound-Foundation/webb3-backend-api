@@ -34,7 +34,6 @@ type BorrowRatePerSecond = Compute.Spec<{
     block: Eth.Block;
     network: KnownNetwork.Name;
     contract: Eth.Contract<StandaloneContract<Comet>>;
-    account: Eth.Address;
   },
   returns: BigFixnum;
 }>;
