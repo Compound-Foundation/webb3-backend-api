@@ -1222,6 +1222,66 @@ const Comet_01iusdc = Comet(<const>{
 
 const market01iusdc = <const>[Comet_01iusdc];
 
+/*
+ * "Compound TEST USDC 1pct Util" (ctest1uUSDCv3).
+ *
+ * A test USDC market deployed WITHOUT the service patch (implementation
+ * 0xc1b2297001E1D086D017b57D239E415303815d6c, CometExt
+ * 0x88c4381187132391E5A36B28258EFEe0E3c937cD), used to compare the interest
+ * rate chart against a service-patched comet at zero utilization. It holds no
+ * liquidity on purpose: utilization must stay 0.
+ */
+const Comet_01test1uusdc = Comet(<const>{
+  displayName: "ctest1uUSDCv3",
+  aliases: ["01-test1uusdc", "ctest1uUSDCv3"],
+  base: {
+    asset: USDC,
+    priceFeed: USDC_USD_priceFeed,
+  },
+  rewards: {
+    asset: COMP,
+    contract: CometRewards,
+    priceFeed: COMP_USD_priceFeed,
+  },
+  network: "ethereum-mainnet",
+  address: "0xAfaCa8573a21231CdD38BF7FF2CeD8Cd47C26599",
+  block: {
+    number: 26126561,
+    timestamp: 1791208067,
+  },
+});
+
+const market01test1uusdc = <const>[Comet_01test1uusdc];
+
+/*
+ * "The service-patched counterpart of
+ * ctest1uUSDCv3 above. Originally declared as ctestUSDCv3 ("Compound TEST Svc
+ * Patch USDC"); the proxy has since been upgraded (implementation
+ * 0x296c51cf1e2973e8e6af29ea27c797d4e8b41f90) and it now holds liquidity, so
+ * unlike ctest1uUSDCv3 its utilization is not 0.
+ */
+const Comet_01testusdc = Comet(<const>{
+  displayName: "cinUSDC",
+  aliases: ["01-testusdc", "ctestUSDCv3", "cinUSDC"],
+  base: {
+    asset: USDC,
+    priceFeed: USDC_USD_priceFeed,
+  },
+  rewards: {
+    asset: COMP,
+    contract: CometRewards,
+    priceFeed: COMP_USD_priceFeed,
+  },
+  network: "ethereum-mainnet",
+  address: "0x20f48143FDF6c0B01FF05399f85E5Cad55aAd5F4",
+  block: {
+    number: 26095566,
+    timestamp: 1790834795,
+  },
+});
+
+const market01testusdc = <const>[Comet_01testusdc];
+
 // governance
 const Timelock = UntypedContract("Timelock", <const>{
   aliases: ["default"],
@@ -1531,7 +1591,7 @@ const Base0bps_Slope2000bps = UntypedContract("Base0bps_Slope2000bps", <const>{
 });
 const Base200bps_Slope1000bps = UntypedContract("Base200bps_Slope1000bps", <
   const
->{
+  >{
   // location
   network: "ethereum-mainnet",
   address: "0x0c3f8df27e1a00b47653fde878d68d35f00714c0",
@@ -1542,7 +1602,7 @@ const Base200bps_Slope1000bps = UntypedContract("Base200bps_Slope1000bps", <
 });
 const Base200bps_Slope3000bps = UntypedContract("Base200bps_Slope3000bps", <
   const
->{
+  >{
   // location
   network: "ethereum-mainnet",
   address: "0xbae04cbf96391086dc643e842b517734e214d698",
@@ -1577,7 +1637,7 @@ const Base200bps_Slope2000bps_Jump20000bps_Kink90 = UntypedContract(
 );
 const Base500bps_Slope1200bps = UntypedContract("Base500bps_Slope1200bps", <
   const
->{
+  >{
   // location
   network: "ethereum-mainnet",
   address: "0xa1046abfc2598f48c44fb320d281d3f3c0733c9a",
@@ -1588,7 +1648,7 @@ const Base500bps_Slope1200bps = UntypedContract("Base500bps_Slope1200bps", <
 });
 const Base500bps_Slope1500bps = UntypedContract("Base500bps_Slope1500bps", <
   const
->{
+  >{
   // location
   network: "ethereum-mainnet",
   address: "0xd928c8ead620bb316d2cefe3caf81dc2dec6ff63",
@@ -2000,6 +2060,8 @@ const contractData = [
   ...market01usds,
   ...market01wbtc,
   ...market01iusdc,
+  ...market01test1uusdc,
+  ...market01testusdc,
   // everything else...
   ...misc,
 ] as const;

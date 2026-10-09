@@ -1,0 +1,69 @@
+main = "./entrypoint"
+
+name = "woof-c3-api-utilization-fix"
+
+compatibility_date = "2026-06-25"
+compatibility_flags = ["nodejs_compat"]
+
+workers_dev = true
+
+[[kv_namespaces]]
+binding = "kv_testnet"
+id = "3e3be080a35346dcbbb8293a8022e68e"
+
+[[kv_namespaces]]
+binding = "kv_mainnet"
+id = "5c49bcf86b6c4c80b0a346006d364bd2"
+
+[[kv_namespaces]]
+binding = "kv_registry"
+id = "e0d6cbcf3ced4dcaac65c6103b041751"
+
+[[d1_databases]]
+binding = "APP_DB"
+database_id = "5164b55f-1a05-464e-97ae-db93f217bfb0"
+database_name = "compound-db"
+migrations_dir = "migrations"
+
+[[ratelimits]]
+name = "REGISTRY_ADMIN_RATE_LIMITER"
+namespace_id = "4001"
+
+[ratelimits.simple]
+limit = 30
+period = 60
+
+[[services]]
+binding = "node_provider_proxy"
+service = "woof-node-provider-proxy"
+
+[vars]
+DEBUG = ""
+ENVIRONMENT = "woof"
+MEMORY_CACHE_SEED = "woof"
+
+V3_API_HOST = "woof-c3-api-utilization-fix.dmitriy-a19.workers.dev"
+
+NODE_PROXY_HOST = "woof-node-provider-proxy.internal"
+NODE_PROXY_KEY = ""
+
+FLAGS_ETH_COMPUTATION_INDEX_BIAS = "default"
+
+COMET_SOURCE_REPOSITORY = "Compound-Foundation/comet"
+COMET_SOURCE_REF = "main"
+COMET_UPSTREAM_CHECK_INTERVAL_S = "86400"
+COMET_SYNC_MARKETS_PER_INVOCATION = "2"
+COMET_SYNC_LEASE_SECONDS = "900"
+REGISTRY_SNAPSHOT_CACHE_TTL_S = "300"
+REGISTRY_STALE_FALLBACK_MAX_S = "3600"
+
+[[vars.URL_SERVICE_BINDING_OVERRIDES]]
+host = "woof-node-provider-proxy.internal"
+binding = "node_provider_proxy"
+
+[triggers]
+crons = ["0 * * * *"]
+
+[limits]
+cpu_ms = 60000
+subrequests = 1000000
