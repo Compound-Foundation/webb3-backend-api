@@ -1170,132 +1170,99 @@ const Comet_01wbtc = Comet(<const>{
 const market01wbtc = <const>[BTC_USD_priceFeed, Comet_01wbtc];
 
 /*
- * "Compound Institutional USDC" (ciUSDCv3).
+ * Test-only deployment: "Compound TEST Svc Patch USDC" (ctestUSDCv3).
  *
- * A separately-operated USDC market: WETH, wstETH, cbBTC and WBTC collateral,
- * priced by production feeds ("ETH / USD", "wstETH / USD CAPO SVR",
- * "CBBTC / USD", "Custom price feed for WBTC / USD").
+ * This market is governed by an EOA (0x4c894222653870C5e5a346E2c293a75DAC8d77a8),
+ * not the mainnet Timelock, holds no liquidity, and prices its collateral with
+ * feeds whose description() is "PriceFeedLiveTest (TEST ONLY)".
  *
- * Two things about it differ from the other ethereum-mainnet markets, neither
- * of which the API needs to special-case, but both of which are worth knowing
- * when its numbers look surprising:
+ * !! WARNING: NOTHING IN THE CODE HIDES THIS MARKET. !!
  *
- *   - governor() is a Gnosis Safe (0x4f05F11ca5DE8946958d58AD765F16755F23b113)
- *     and the proxy admin is 0x362739f84FFE4e5f06395301617a90f62Ee1f4cf, not
- *     the mainnet Timelock / CometProxyAdmin. Its parameters and price feeds
- *     can therefore change without a governance proposal; the summary endpoint
- *     reports whatever it is currently set to.
+ * getCometContractsForNetwork() returns every Comet declared for a network, so
+ * this market appears in every `all-contracts` aggregate response -- including
+ * the market list the v3 frontend reads. Isolation is entirely a matter of
+ * deployment: this declaration is expected to live on a branch deployed only to
+ * stage. Merging it to main and deploying to production WILL surface a market
+ * named "Compound TEST Svc Patch USDC" with $0 TVL in the production app.
  *
- *   - it has no rewards configured: rewardConfig(ciUSDCv3) on the canonical
- *     CometRewards returns rewardToken == 0x0, so /account/{address}/rewards
- *     skips it via the NullAddress guard in src/account-handlers/rewards.ts.
- *     It is declared against the canonical CometRewards anyway, which keeps the
- *     one-CometRewards-per-network assumption in get-reward-configs-sleuth.ts
- *     true and means RewardClaimed events are already covered by the existing
- *     per-network rewardsContractAddress in the transaction-history handler.
- *     If rewards are ever configured on a *different* CometRewards, both of
- *     those assumptions need revisiting.
+ * NOTE: this deployment has its OWN CometRewards, unlike every other
+ * ethereum-mainnet market, and it MUST NOT claim the 'default' CometRewards
+ * alias -- StaticWellKnownContracts merges aliases into one map per canonical
+ * name, so 'default' would overwrite the production CometRewards.
  *
- * Transaction history additionally requires an entry in GetAllStreamEvents()
- * in src/transaction-history-handler/transaction-history-items-handler.ts --
- * declaring a Comet here is not sufficient for that endpoint.
+ * Because this market IS aggregated, it also enters the batch in
+ * get-reward-configs-sleuth.ts, which queries every comet on a network against
+ * cometMarkets[0].rewards.contract and so assumes one CometRewards per network.
+ * market01testusdc MUST therefore stay last among the comet groups in
+ * contractData, so that cometMarkets[0] remains a production market using the
+ * canonical CometRewards. If this market ever sorted first, every production
+ * market's reward config would be read from the test rewards contract and
+ * silently return zero.
+ *
+ * This market is also listed in GetAllStreamEvents() in
+ * src/transaction-history-handler/transaction-history-items-handler.ts, which
+ * is what makes its transaction history reachable at all -- declaring a Comet
+ * here is not sufficient for that endpoint.
  */
-const Comet_01iusdc = Comet(<const>{
-  displayName: "ciUSDCv3",
-  aliases: ["01-iusdc", "ciUSDCv3"],
-  base: {
-    asset: USDC,
-    priceFeed: USDC_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: CometRewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
+const CometRewards_testSvcPatch = UntypedContract("CometRewards", <const>{
+  aliases: ["test-svc-patch"],
+  displayName: "CometRewardsTestSvcPatch",
   network: "ethereum-mainnet",
-  address: "0x207158a267CBD2598BB3d611D8CBdEE2709F2F8C",
+  address: "0x3c2b39375f8b3813842b6c59CA8afD0fe3b4b0d7",
   block: {
-    number: 25881203,
-    timestamp: 1788250907,
+    number: 25602754,
+    timestamp: 1784897963,
   },
 });
 
-const market01iusdc = <const>[Comet_01iusdc];
-
-/*
- * Two empty test USDC markets for exercising reverting price feeds. Both are
- * governed by the same EOA as ctest1uUSDCv3 (0x480905619075F892304C470057C0De9BEe38F899),
- * have no reward config on the canonical CometRewards, and have USDT + WETH
- * collateral. The reverting feeds are "Mock Chainlink price aggregator"
- * contracts whose latestRoundData() reverts (selector 0x4a5033eb), so
- * Comet.getPrice() reverts for them too.
- *
- * "Compound TEST USDT Feed Revert" (ctestrcUSDCv3): the USDT collateral feed
- * (0xbd91102fd0291ae3a0163b25aa8347dd95da9943) reverts; the base feed is the
- * production USDC / USD one. Collateral feeds are read from getAssetInfo() on
- * chain, so the reverting one needs no declaration here.
- */
-const Comet_01testrcusdc = Comet(<const>{
-  displayName: "ctestrcUSDCv3",
-  aliases: ["01-testrcusdc", "ctestrcUSDCv3"],
-  base: {
-    asset: USDC,
-    priceFeed: USDC_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: CometRewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: "ethereum-mainnet",
-  address: "0xA179594246F3640AA2b44Dfbd482f9a20975eB2D",
-  block: {
-    number: 26146957,
-    timestamp: 1791453779,
-  },
-});
-
-const market01testrcusdc = <const>[Comet_01testrcusdc];
-
-/*
- * "Compound TEST Base Feed Revert" (ctestrbUSDCv3): the base USDC feed reverts.
- * It is declared as base.priceFeed on purpose -- baseUsdPrice prices the base
- * through Comet.getPrice(base.priceFeed), so declaring the production
- * USDC / USD feed instead would hide exactly the failure this market exists
- * to test.
- */
-const USDC_reverting_priceFeed = PriceFeed(<const>{
-  aliases: ["USDC-USD-reverting"],
+const WETH_LiveTest_priceFeed = PriceFeed(<const>{
+  aliases: ["WETH-USD-livetest"],
   decimals: 8,
   network: "ethereum-mainnet",
-  address: "0x388400dd3E17F9CAe00FB84Ac381FaBe6166F667",
+  address: "0x36012dD3aD298aA3e657057De5682A40b7e9DF0C",
   block: {
-    number: 26147035,
-    timestamp: 1791454715,
+    number: 25644931,
+    timestamp: 1785405575,
   },
 });
 
-const Comet_01testrbusdc = Comet(<const>{
-  displayName: "ctestrbUSDCv3",
-  aliases: ["01-testrbusdc", "ctestrbUSDCv3"],
+const wstETH_LiveTest_priceFeed = PriceFeed(<const>{
+  aliases: ["wstETH-USD-livetest"],
+  decimals: 8,
+  network: "ethereum-mainnet",
+  address: "0x0584722682d0915E7ff75D0B2ecFF4333bd750F4",
+  block: {
+    number: 25644933,
+    timestamp: 1785405599,
+  },
+});
+
+const Comet_01testusdc = Comet(<const>{
+  displayName: "ctestUSDCv3",
+  aliases: ["01-testusdc", "ctestUSDCv3"],
   base: {
     asset: USDC,
-    priceFeed: USDC_reverting_priceFeed,
+    priceFeed: USDC_USD_priceFeed,
   },
   rewards: {
     asset: COMP,
-    contract: CometRewards,
+    contract: CometRewards_testSvcPatch,
     priceFeed: COMP_USD_priceFeed,
   },
   network: "ethereum-mainnet",
-  address: "0xbc37A455F92cfc13ff70b811ce315030483AcCe8",
+  address: "0xf5a628D53c47fBA2C062cd6F5B6D255cb05645Eb",
   block: {
-    number: 26147065,
-    timestamp: 1791455075,
+    number: 25602729,
+    timestamp: 1784897663,
   },
 });
 
-const market01testrbusdc = <const>[USDC_reverting_priceFeed, Comet_01testrbusdc];
+const market01testusdc = <const>[
+  CometRewards_testSvcPatch,
+  WETH_LiveTest_priceFeed,
+  wstETH_LiveTest_priceFeed,
+  Comet_01testusdc,
+];
 
 // governance
 const Timelock = UntypedContract("Timelock", <const>{
@@ -1606,7 +1573,7 @@ const Base0bps_Slope2000bps = UntypedContract("Base0bps_Slope2000bps", <const>{
 });
 const Base200bps_Slope1000bps = UntypedContract("Base200bps_Slope1000bps", <
   const
->{
+  >{
   // location
   network: "ethereum-mainnet",
   address: "0x0c3f8df27e1a00b47653fde878d68d35f00714c0",
@@ -1617,7 +1584,7 @@ const Base200bps_Slope1000bps = UntypedContract("Base200bps_Slope1000bps", <
 });
 const Base200bps_Slope3000bps = UntypedContract("Base200bps_Slope3000bps", <
   const
->{
+  >{
   // location
   network: "ethereum-mainnet",
   address: "0xbae04cbf96391086dc643e842b517734e214d698",
@@ -1652,7 +1619,7 @@ const Base200bps_Slope2000bps_Jump20000bps_Kink90 = UntypedContract(
 );
 const Base500bps_Slope1200bps = UntypedContract("Base500bps_Slope1200bps", <
   const
->{
+  >{
   // location
   network: "ethereum-mainnet",
   address: "0xa1046abfc2598f48c44fb320d281d3f3c0733c9a",
@@ -1663,7 +1630,7 @@ const Base500bps_Slope1200bps = UntypedContract("Base500bps_Slope1200bps", <
 });
 const Base500bps_Slope1500bps = UntypedContract("Base500bps_Slope1500bps", <
   const
->{
+  >{
   // location
   network: "ethereum-mainnet",
   address: "0xd928c8ead620bb316d2cefe3caf81dc2dec6ff63",
@@ -2074,9 +2041,8 @@ const contractData = [
   ...market01wstETH,
   ...market01usds,
   ...market01wbtc,
-  ...market01iusdc,
-  ...market01testrbusdc,
-  ...market01testrcusdc,
+  // MUST remain last among the comet groups: see market01testusdc's note above
+  ...market01testusdc,
   // everything else...
   ...misc,
 ] as const;
