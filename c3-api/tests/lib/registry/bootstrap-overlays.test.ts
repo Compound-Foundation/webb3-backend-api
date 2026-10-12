@@ -4,7 +4,8 @@ import * as Eth from '../../../lib/eth-constants.js';
 
 import type { Generated, Note } from '../../../src/registry/bootstrap.js';
 import { bundleOf, marketOverlay, networkOverlay, reviewDocument } from '../../../src/registry/bootstrap.js';
-import { parseNetworkOverlay } from '../../../src/registry/overlay.js';
+import { parseMarketOverlay, parseNetworkOverlay } from '../../../src/registry/overlay.js';
+import { staticComets } from '../../../src/registry/shadow.js';
 
 /*
  * What the bootstrap script proposes for the first version of a registry.
@@ -303,6 +304,26 @@ t.test('every network proposal is one the admin route accepts', async t => {
     const overlay = networkOverlay(network);
     t.ok(overlay.assetDisplayOverrides.length > 0, `${network} has display overrides`);
     t.doesNotThrow(() => parseNetworkOverlay(overlay), 'which parse: addresses are well formed and none repeats');
+  }
+});
+
+/*
+ * A proposal has the overlay's types, so the compiler holds its keys, but not
+ * the values the route refuses, and one document refused refuses the whole
+ * directory. A deployment the frontend does not list is named by the
+ * constants alone, which is where a Comet described without a name for its
+ * base asset would surface.
+ */
+t.test('every market proposal is one the admin route accepts', async t => {
+  for (const network of Object.keys(Eth.wellKnownContractsByNetwork).filter(name => name.endsWith('-mainnet'))) {
+    const comets = staticComets(network as never);
+    t.ok(comets.size > 0, `${network} has Comets`);
+    for (const candidate of comets.values()) {
+      t.doesNotThrow(
+        () => parseMarketOverlay(marketOverlay(network as never, 'not-in-the-frontend', candidate, [])),
+        `${network} ${candidate.displayName} parses, named by the constants alone`,
+      );
+    }
   }
 });
 

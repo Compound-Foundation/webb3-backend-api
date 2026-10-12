@@ -24,10 +24,8 @@ import { defaultAbiCoder } from '@ethersproject/abi';
 import { rewardGroups } from '../../../src/account-handlers/rewards.js';
 import type { MarketRouteData } from '../../../src/router.js';
 import {
-  CursorPayload,
   streamEventsOf,
   streamKeyOf,
-  upgradeLegacyCursor,
 } from '../../../src/transaction-history-handler/transaction-history-items-handler.js';
 
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
@@ -114,57 +112,6 @@ t.test('transaction history streams are the markets the version serves history f
   }))));
   t.equal(separate.length, 2, 'markets with different rewards contracts are read as separate streams');
   t.equal(new Set(separate.map(streamKeyOf)).size, 2, 'and are keyed apart');
-});
-
-/*
- * A cursor belongs to one version. One issued before the registry carries no
- * version and is keyed by network: every stream whose network it knew resumes
- * where it stood, and a stream on a network it never saw starts from the head
- * rather than being dropped from the session.
- */
-t.test('a cursor issued before the registry is upgraded, not refused', async t => {
-  const streams = streamEventsOf(catalog);
-  const legacy  = {
-    profilesByAddress: {},
-    filter:  { markets: [], actions: [], initiatedBy: [], contractAddresses: [], networks: [] },
-    streamEvents: [],
-    cursors: {
-      [MAINNET]: {
-        network:                 MAINNET,
-        marketContractAddresses: [ USDC ] as `0x${string}`[],
-        rewardsContractAddress:  '0x1b0e765f6224c21223aea2af16c1c46e38885a40' as `0x${string}`,
-        transactionHash:         '0xabc' as `0x${string}`,
-        blockNumber:             19_000_000,
-      },
-    },
-  } satisfies CursorPayload;
-
-  const upgraded = upgradeLegacyCursor(legacy, streams, catalog.versionId);
-  t.equal(upgraded.registryVersionId, catalog.versionId, 'the upgraded cursor carries the version from now on');
-  t.equal(upgraded.upgraded, true, 'and says it was upgraded, so it keeps its networks across later versions');
-  const resumed = upgraded.cursors[streamKeyOf(streams[0]!)]!;
-  t.equal(resumed.blockNumber, 19_000_000, 'resuming where the old cursor stood');
-  t.equal(resumed.transactionHash, '0xabc');
-  t.same(resumed.marketContractAddresses, streams[0]!.marketContractAddresses,
-    'against the markets of the current version');
-
-  /*
-   * The registry serves networks the hand-written stream list never had, so
-   * this is the ordinary case at the cutover. The old cursor holds no time for
-   * such a stream to start from, and starting it anywhere would emit items
-   * newer than pages already served; the session keeps the networks it had.
-   */
-  const scrollStream = {
-    network:                 SCROLL,
-    marketContractAddresses: [ '0xb2f97c1bd3bf02f5e74d13f02e3e26f93d77ce44' ] as `0x${string}`[],
-    rewardsContractAddress:  '0x70167d30964cbfdc315ecae02441af747be0c5ee' as `0x${string}`,
-  };
-  const wider = upgradeLegacyCursor(legacy, [ ...streams, scrollStream ], catalog.versionId);
-  t.equal(wider.cursors[streamKeyOf(scrollStream)], undefined, 'a stream the old cursor never saw is not joined mid-session');
-  t.notOk(wider.streamEvents.some(stream => stream.network === SCROLL), 'and is not read');
-  t.equal(wider.cursors[streamKeyOf(streams[0]!)]!.blockNumber, 19_000_000, 'while the others keep their positions');
-  t.notOk(wider.filter.networks.includes(SCROLL), 'the default filter is rewritten to the streams the session keeps');
-  t.ok(wider.filter.networks.includes(MAINNET));
 });
 
 /*

@@ -1,5 +1,7 @@
-import type { MarketV1, NetworkV1 } from '../../lib/model/comet-registry.js';
+import type { Address, MarketStatus, MarketV1, NetworkV1 } from '../../lib/model/comet-registry.js';
 import { marketKey } from '../../lib/model/comet-registry.js';
+
+import { isServed } from './catalog.js';
 
 /*
  * What a version changes against the one that is on.
@@ -33,9 +35,15 @@ type VersionChanges = {
     changed: FieldChange[],
   },
   markets: {
-    added:   Array<{ scope: string, reviewed: boolean, market: Omit<MarketV1, 'id'> }>,
-    removed: string[],
-    changed: FieldChange[],
+    added:    Array<{ scope: string, reviewed: boolean, market: Omit<MarketV1, 'id'> }>,
+    removed:  string[],
+    changed:  FieldChange[],
+    /*
+     * Every Comet the version on serves and this one does not, by the scope
+     * the version on serves it under, with where this one holds it: under a
+     * scope that does not serve it, or nowhere (null).
+     */
+    unserved: Array<{ scope: string, comet: Address | null, now: { scope: string, status: MarketStatus } | null }>,
   },
 };
 
@@ -88,6 +96,30 @@ function inScopeOrder(markets: Map<string, Scoped>, scopes: string[]): string[] 
   return [ ...scopes ].sort((left, right) => order(markets.get(left)!, markets.get(right)!));
 }
 
+// a market as whoever uses it knows it, whatever its key: its Comet on its chain
+function cometOf({ chainId, market }: Scoped): string {
+  return `${chainId}/${market.contracts.comet}`;
+}
+
+/*
+ * What users of the version on stop reaching once this one is on. That is a
+ * Comet, not a key: a market the source dropped, one it renamed to a key
+ * nobody has reviewed yet, one whose key it gave another Comet, and one a
+ * review switched off all stop being served, while `removed` lists only the
+ * keys this version no longer has.
+ */
+function unservedBy(before: Map<string, Scoped>, after: Map<string, Scoped>): VersionChanges['markets']['unserved'] {
+  const served = new Set([ ...after.values() ].filter(entry => isServed(entry.market)).map(cometOf));
+  const held   = new Map([ ...after ].map(([ scope, entry ]) => [ cometOf(entry), { scope, status: entry.market.status } ] as const));
+  const lost   = [ ...before ]
+    .filter(([ , entry ]) => isServed(entry.market) && !served.has(cometOf(entry)))
+    .map(([ scope ]) => scope);
+  return inScopeOrder(before, lost).map(scope => {
+    const entry = before.get(scope)!;
+    return { scope, comet: entry.market.contracts.comet, now: held.get(cometOf(entry)) ?? null };
+  });
+}
+
 /*
  * `before` is the version that is on, or null when none is: then everything
  * the version holds is new. `unreviewed` names the markets of `after` nobody
@@ -129,6 +161,7 @@ function compareVersions(
           withoutId(beforeMarkets.get(scope)!.market),
           withoutId(afterMarkets.get(scope)!.market),
         )),
+      unserved: unservedBy(beforeMarkets, afterMarkets),
     },
   };
 }

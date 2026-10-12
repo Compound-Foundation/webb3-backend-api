@@ -25,12 +25,11 @@ const USDC       = '0xc3d688b66703497daa19211eedff47f25384cdc3';
 const SEPOLIA    = [ '11155111_0x2943ac1216979aD8dB76D9147F64E61adc126e96', '11155111_0xAec1F48e02Cfb822Be958B68C7957156EB3F0b6e' ];
 const SEPOLIA_RW = '0x8bf5b658bdf0388e8b482ed51b14aef58f90abfd';
 
-type Envelope = { error: { code: string, message: string, requestId: string } };
+type Envelope = { error: { code: string, message: string, requestId: string, details?: Record<string, unknown> } };
 
 /*
- * Cursors as the history issued them before the registry, keyed by network:
- * one a request for the Sepolia markets started, and one a request for every
- * market did.
+ * A cursor as the history issued it before the registry, keyed by network and
+ * with no version: one a request for the Sepolia markets started.
  */
 function legacyCursor(network: string, markets: string[], comets: string[], rewards: string) {
   const stream = { network, marketContractAddresses: comets, rewardsContractAddress: rewards };
@@ -48,9 +47,11 @@ function legacyCursor(network: string, markets: string[], comets: string[], rewa
   };
 }
 
+// under an id of the form every cursor has, the hex SHA-256 of what it holds
+const SEPOLIA_CURSOR = '5e90'.repeat(16);
+
 const CURSORS = {
-  'legacy-sepolia': legacyCursor('ethereum-sepolia', SEPOLIA, SEPOLIA.map(market => market.split('_')[1]!), SEPOLIA_RW),
-  'legacy-mainnet': legacyCursor('ethereum-mainnet', [], [ USDC ], '0x1b0e765f6224c21223aea2af16c1c46e38885a40'),
+  [SEPOLIA_CURSOR]: legacyCursor('ethereum-sepolia', SEPOLIA, SEPOLIA.map(market => market.split('_')[1]!), SEPOLIA_RW),
 };
 
 /*
@@ -155,29 +156,48 @@ t.test('a route over every network that asks for testnets is refused', async t =
   }
 });
 
-t.test('a transaction history that names a testnet market, or a cursor that reads one, is refused', async t => {
+t.test('a transaction history that names a testnet market is refused', async t => {
   const { get, asked } = await harness(t);
   const history = `/account/${ACCOUNT}/transaction_history`;
 
   await refuses(t, await get(`${history}?markets[]=${SEPOLIA.join(',')}`), 'ethereum-sepolia', 'a Sepolia market');
   await refuses(t, await get(`${history}?markets[]=1_${USDC},${SEPOLIA[0]}`), 'ethereum-sepolia', 'a Sepolia market beside a mainnet one');
-  await refuses(t, await get(`${history}?cursor=legacy-sepolia&markets[]=${SEPOLIA.join(',')}`), 'ethereum-sepolia',
-    'a Sepolia cursor sent with its filter');
-  await refuses(t, await get(`${history}?cursor=legacy-sepolia`), 'ethereum-sepolia', 'and sent without it');
   t.equal(asked(), 0, 'before the chain is asked anything');
 
   /*
-   * The same requests for mainnet markets go on to the checks that came after
-   * this one, and are answered as they were; reading a history from a node
+   * The same request for a mainnet market goes on to the checks that came
+   * after this one, and is answered as it was; reading a history from a node
    * that does not answer is the network tests' to show.
    */
   const unknown = `0x${'9'.repeat(40)}`;
   const market  = await get(`${history}?markets[]=1_${unknown}`);
   t.same([ market.status, await market.text() ], [ 400, `Invalid market address ${unknown}` ],
     'a mainnet market the registry does not serve is refused for that, as before');
-  const cursor = await get(`${history}?cursor=legacy-mainnet&markets[]=1_${USDC}`);
-  t.same([ cursor.status, await cursor.text() ], [ 400, 'Cursor is having different markets filter' ],
-    'and a mainnet cursor sent with another filter for that');
+});
+
+/*
+ * A cursor names no network: what it reads is what the history kept under
+ * it. One issued before the registry may read a testnet; it is ended as every
+ * cursor issued before the registry is, with the 409 that tells the client to
+ * start over, and not refused as a testnet.
+ */
+t.test('a cursor issued before the registry that reads a testnet is ended, not refused', async t => {
+  const { get, asked } = await harness(t);
+  const history = `/account/${ACCOUNT}/transaction_history`;
+
+  const ended   = await get(`${history}?cursor=${SEPOLIA_CURSOR}`);
+  const version = ended.headers.get('x-registry-version');
+  t.equal(ended.status, 409, 'the cursor is ended');
+  t.ok(version, 'by the version that is active');
+  const { error } = await ended.json() as Envelope;
+  t.same([ error.code, error.details ], [
+    'REGISTRY_VERSION_CHANGED',
+    { cursorRegistryVersionId: null, registryVersionId: version },
+  ], 'as every cursor that names no version is');
+
+  await refuses(t, await get(`${history}?cursor=${SEPOLIA_CURSOR}&markets[]=${SEPOLIA.join(',')}`), 'ethereum-sepolia',
+    'while sent with its filter, it is refused for the testnet the filter names, as that filter alone is');
+  t.equal(asked(), 0, 'before the chain is asked anything');
 });
 
 /*
@@ -198,7 +218,6 @@ t.test('a testnet is refused while no version is on, and while the database does
       [ '/market/all-networks/all-contracts/summary?testnets=include', 'testnets=include' ],
       [ `/account/${ACCOUNT}/rewards?testnets=include`, 'testnets=include' ],
       [ `${history}?markets[]=${SEPOLIA[0]}`, 'ethereum-sepolia' ],
-      [ `${history}?cursor=legacy-sepolia`, 'ethereum-sepolia' ],
     ] as const) {
       await refuses(t, await get(path), named, `${path} while ${state}`);
     }

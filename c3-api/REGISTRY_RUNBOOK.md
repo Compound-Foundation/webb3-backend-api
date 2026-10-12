@@ -63,7 +63,9 @@ then the headers, then the body. To use them:
 > **An environment that already serves users.** The market, account and
 > history routes read their markets from the registry and answer `503` while
 > no version is active. Do not let the release that reads from the registry go
-> live in such an environment before a version is active there.
+> live in such an environment before a version is active there. Once it is
+> live, a client that pages transaction history with a cursor it was given
+> before is told to start over, once (`409 REGISTRY_VERSION_CHANGED`).
 
 ### The admin token
 
@@ -197,6 +199,9 @@ on the Workers Paid plan holds the whole source, which takes about 230 of its
 GitHub or the node provider no longer answering, or not in time — leaves the
 markets it did not reach to the next one, without holding that against them,
 and repeating the request is the whole procedure; there is nothing to tune.
+The database restarted under a market, or overloaded, is held against that
+market, though: the market fails as `the database did not answer`, which
+spends one of its five attempts, and the next request tries it again.
 
 A request that finds GitHub or the node provider not answering before it has
 imported anything is different: every market it tries fails, and spends one
@@ -330,6 +335,12 @@ read it — another release was deployed, or another draft is being read. Read
 the review again. Applying the same digest twice is safe: it answers
 `"changed": false`.
 
+A `422` with `details.code` `OVERLAY_CREATION_BLOCK_WRONG` names a market
+whose creation block, as the release proposes it, is not the block its Comet
+was deployed in, and says how it is wrong; nothing is written. A developer
+corrects it in the Comet's constants (`lib/well-known/contracts`), and the
+release that carries the correction proposes it.
+
 ### 4. Let the registry check the draft
 
 ```sh
@@ -451,6 +462,8 @@ users notice. It is recorded with your reason, and can be undone — see
 ```sh
 curl -s "$API/registry/v1/active" | jq '[.networks[].markets | length] | add'
 curl -si "$API/market/ethereum-mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3/summary" | grep -i x-registry-version
+curl -s -o /dev/null -w '%{http_code}\n' "$API/market/all-networks/all-contracts/summary"
+curl -s -o /dev/null -w '%{http_code}\n' "$API/market/all-networks/all-contracts/historical/summary"
 ```
 
 Postman:
@@ -459,14 +472,30 @@ Postman:
 GET {{API}}/registry/v1/active
 
 GET {{API}}/market/ethereum-mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3/summary
+
+GET {{API}}/market/all-networks/all-contracts/summary
+
+GET {{API}}/market/all-networks/all-contracts/historical/summary
 ```
 
-Neither needs the token. In the first answer, count the markets under
+None needs the token. In the first answer, count the markets under
 `networks[].markets`; in the second, the `X-Registry-Version` response header
-is on the **Headers** tab.
+is on the **Headers** tab. The last two read every market the version
+serves, on every network: its summary at the latest block, and its past
+days.
 
-**You should see** the number of markets you reviewed, and a
-`X-Registry-Version` header equal to `$V`.
+**You should see** the number of markets you reviewed, a
+`X-Registry-Version` header equal to `$V`, and `200` from both routes over
+every network.
+
+**If not.** One market those routes cannot read fails them for every market.
+The worker's log line `route failed` with the answer's `requestId` has the
+error, and the same two routes of each market —
+`/market/<network>/<comet>/summary` and `…/historical/summary` — say which
+market it is. Show both to a developer, and switch back to the version before
+([Switching back](#switching-back)). On a first bring-up there is none: the
+market at fault is switched off in a new attempt instead (step 1 of
+[Describing a new market](#describing-a-new-market)).
 
 ## When the source changes
 
@@ -550,6 +579,7 @@ it answers with that commit's draft, importing it first if there is none.
 ```sh
 curl -s "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" \
   | jq '{status, comparedWith, added: [.markets.added[] | {scope, reviewed}], removed: .markets.removed,
+         unserved: .markets.unserved,
          changed: [.markets.changed[] | "\(.scope) \(.field): \(.before) -> \(.after)"], networks}'
 ```
 
@@ -561,20 +591,39 @@ Authorization: Bearer {{TOKEN}}
 ```
 
 Look at `markets.added` (each with `scope` and `reviewed`), `markets.removed`,
-and `markets.changed` — each change names its `scope`, `field`, `before` and
-`after`. `networks` has the same three lists for networks.
+`markets.unserved` (each with `scope`, `comet` and `now`) and `markets.changed`
+— each change names its `scope`, `field`, `before` and `after`. `networks` has
+`added`, `removed` and `changed` for networks.
 
 **Why.** This compares the draft with the version that is on — not with the
 API's code — so it shows everything the new commit changes.
 
-**You should see** the markets the commit adds and drops, and every field that
-differs on the others.
+**You should see** the markets the commit adds and drops, the ones users would
+lose, and every field that differs on the others.
 
 - A market under `added` with `"reviewed": false` is one the source has added.
   It is switched off, and the draft can be switched on without it; to offer it,
   see [Describing a new market](#describing-a-new-market).
-- A market under `removed` stops being served once the draft is on. That is
-  worth a developer's confirmation.
+- `removed` lists the keys the draft no longer has, and `unserved` the markets
+  users lose once it is on: each Comet the version on serves that the draft
+  serves under no key, by the key it is served under now. Its `now` says where
+  the draft holds it: nowhere (`null`) for a deployment the source dropped; the
+  new key, switched off, for one it renamed, which nobody has reviewed under
+  that key yet; and its own key, switched off, for one a review switched off.
+  A key the source gave another Comet shows the old Comet here, and the key's
+  new Comet under `changed` as `contracts.comet`: that one comes in as a market
+  nobody has reviewed, switched off, with none of the old one's decisions.
+  While a validated version would drop any, the status raises
+  `candidate-drops-markets`.
+- The registry follows the source. A deployment the source drops stops being
+  served once a version without it is on, and nothing keeps it served —
+  `deprecated` is for a market the version still holds. Nothing holds such a
+  draft back either: switching it on is the decision, so confirm every market
+  under `unserved` with a developer first. One the source renamed is served
+  again once it is described under its new key
+  ([Describing a new market](#describing-a-new-market)), starting from the
+  overlay its old key has in the version that is on:
+  `…/versions/<comparedWith>/markets/<chainId>/<old key>/overlay`.
 - A changed feed, contract, token or collateral on a market that stays is the
   commit changing that market. If nobody expected it, show it to a developer
   before switching on.
@@ -672,7 +721,8 @@ Authorization: Bearer {{TOKEN}}
 ```
 
 Copy the `overlay` object from the answer: it is what step 5 sends, once the
-fields below are decided.
+fields below are decided. Its `creationBlock` is the other market's, which is
+never this one's: replace it as step 4 says, or the write is refused.
 
 ### 4. Decide every field
 
@@ -685,19 +735,20 @@ fields below are decided.
 | `contractName` | The Comet's name, shown in governance action titles | The Comet contract's `symbol()`, for example `cUSDTv3` |
 | `status` | Whether the market is served | `enabled`; `disabled` keeps it off |
 | `isDefault` | The market the website opens first | `false` — exactly one market in the whole registry is the default |
-| `creationBlock` | Where the market's history and indexes start | The block the Comet proxy was deployed in (the explorer's "Contract Creation"). Must be above `0` for a market that is served |
+| `creationBlock` | Where the market's history and indexes start | The block the Comet proxy was deployed in (the explorer's "Contract Creation"). Must be above `0` for a market that is served. The write holds it against the chain — the Comet has code at that block and none at the block before it — and refuses one the chain contradicts with `422` `OVERLAY_CREATION_BLOCK_WRONG`, saying whether it is before the deployment, after it, or past the latest block |
 | `collateralValueQuote` | The unit the market's own price feeds answer in | Call `description()` on the base token's price feed from step 2. `X / USD` → `usd`. `Constant price feed` (WETH, wstETH) or `WBTC / BTC` → `base` |
 | `baseAsset.usdPriceFeedAddress` | The feed that turns the base asset into USD | `null` when the quote is `usd`. When it is `base`, the base asset's USD feed on that chain — for a WETH market, ETH / USD |
 | `baseAsset.isWrappedNative` | The base token wraps the chain's own token | `true` for WETH on Ethereum and its L2s, WPOL, WMNT, WRON |
-| `capabilities.rewards`, `capabilities.accountRewards`, `rewardPriceFeed` | Rewards | If step 2 shows no reward token, the market has no rewards: both `false`, `rewardPriceFeed` `null`. Otherwise a COMP price feed of that chain, quoted in the unit its `description()` names: `COMP / USD` gives `"quote": "usd"`; `COMP / ETH` — the reward feed of mainnet's and Linea's WETH markets — gives `"quote": "base"`, which needs `collateralValueQuote` `base` and a `usdPriceFeedAddress`. Never pair a COMP / ETH address with `usd`: validation does not catch it, and the rewards routes would serve COMP priced in ETH as if in USD |
+| `capabilities.rewards`, `capabilities.accountRewards`, `rewardPriceFeed` | Rewards | If step 2 shows no rewards contract or no reward token, the market has no rewards: both `false`, `rewardPriceFeed` `null`. Otherwise a COMP price feed of that chain, quoted in the unit its `description()` names: `COMP / USD` gives `"quote": "usd"`; `COMP / ETH` — the reward feed of mainnet's and Linea's WETH markets — gives `"quote": "base"`, which needs `collateralValueQuote` `base` and a `usdPriceFeedAddress`. Never pair a COMP / ETH address with `usd`: validation does not catch it, and the rewards routes would serve COMP priced in ETH as if in USD |
 | `capabilities.transactionHistory` | Whether the market appears in users' transaction history | `true` if it should. The market needs a rewards contract, and a right `creationBlock` |
 
 The document is complete or it is refused: a missing field is a decision
 nobody made, not a default. The checks in step 4 of the first bring-up refuse
 the combinations that cannot work — a `base` quote without a USD feed,
-rewards without a feed, a shared label without a slug, a served market
-without a creation block — and a reward feed on a market with no reward
-token is refused as soon as it is sent.
+rewards without a feed or a rewards contract, a shared label without a slug,
+a served market without a creation block — and a reward feed on a market
+with no reward token, or a creation block the chain contradicts, is refused
+as soon as it is sent.
 
 ### 5. Send it, then check and switch on
 
@@ -775,7 +826,11 @@ price feed reverted: 0xe3a409ed15cd53afdefdd191ad945cec528a2496 read by 0x3Afdc9
 
 The market's `collateralAssets` in
 `GET /registry/v1/networks/<chainId>/markets/<comet>` say which asset reads
-it.
+it. A feed none of them names can be the replacement of a remap among the
+network's `priceExceptions` in `GET /registry/v1/active`: then neither it nor
+the feed it replaces answered at that block. A replacement that reverts
+while the feed it replaces answers — at a block before it was deployed — is
+not logged.
 
 A price exception covers collateral feeds only. When the feed is the market's
 base feed, the Comet itself cannot price its base asset and only its
@@ -792,7 +847,7 @@ refused instead of undoing theirs.
 
 | Kind | Use it when | What it needs |
 |---|---|---|
-| `deprecated_price_remap` | Another feed answers the same pair | `replacementPriceFeedAddress`; the registry reads its decimals on chain |
+| `deprecated_price_remap` | Another feed answers the same pair | `replacementPriceFeedAddress`; the registry reads its decimals on chain. Where the replacement does not answer — a day of history before it was deployed — the feed the Comet named that day is read instead |
 | `fixed_price` | The asset keeps a value but no feed answers any more | `price.value`, the feed's last answer as an integer string, and `price.decimals`, the feed's scale |
 | `zero_price` | The asset is being wound down and should count for nothing | Nothing more |
 
@@ -859,7 +914,9 @@ only an expiry you write or change has to be still to come.
 
 Steps 4, 6 and 7 of the first bring-up. The market reports `success` from
 the first request after the switch: the exception changes what its summaries
-are cached under.
+are cached under. So do the days of its history, a remapped collateral's
+included: a day before its replacement was deployed is read from the feed
+the Comet named that day, and only a day neither answers stays `partially`.
 
 `GET /registry/v1/admin/status` does not report a market whose feed reverts:
 alert on the `price feed reverted:` log line instead.
@@ -1045,11 +1102,12 @@ When `alerts` is not empty, each name says what to do:
 | `no-active-version` | Nothing is switched on, so every market route answers `503` | Bring a version up — [Bringing an environment up for the first time](#bringing-an-environment-up-for-the-first-time) |
 | `candidate-awaiting-review` | A draft is held for review and no import is running | Review it, then validate it (step 4 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)) |
 | `candidate-awaiting-activation` | A new commit was imported and validated, and is waiting to be switched on; `candidates.validated` names it | [When the source changes](#when-the-source-changes). The alert holds until a version at least that new is switched on: one you decide not to switch on keeps it raised until a newer commit's version is |
+| `candidate-drops-markets` | A version waiting to be switched on would stop serving markets the version on serves; its `unserved` in `candidates.validated` names them, by their keys in the version on. Nothing holds it back | Step 2 of [When the source changes](#when-the-source-changes): `markets.unserved` says where each Comet went. Confirm every one with a developer before switching it on, and describe a renamed one under its new key first. The alert holds until a version at least that new is switched on |
 | `commit-rejected` | The newest commit imported completely but did not validate, and the scheduled job will not import it again by itself; `sync.rejectedCommit` names it | Read why it failed (`GET /registry/v1/admin/versions/<versionId>`). If a decision was wrong, hold a new attempt (step 1 of [Describing a new market](#describing-a-new-market)), correct it there and validate; otherwise the alert clears when the source moves on |
 | `chain-drift` | The version on stores a price feed or a collateral asset its market's Comet no longer answers with: governance changed the market on chain after the import, and the source did not move. `chainCheck.drifts` names each, with what the version stores and what the chain answers | [A market that changed on chain](#a-market-that-changed-on-chain): import the commit again with `forceNewAttempt`, check what it changes and switch it on. The alert clears once the next hourly invocation has checked the version on and found it agrees with the chain, within the hour of the switch |
 | `last-sync-failed` | The last import ended `failed`. `sync.lastRun.lastError` says how: `validation failed` is a draft that failed a check, and `cancelled by <actor>: <reason>` a run somebody cancelled. A root that fails does not fail the run, and neither do the checks of a run held for review — the first import of an environment, or one with `holdForReview`: it completes, its draft left open | After `validation failed`, read the draft's checks: `GET /registry/v1/admin/versions/<sync.lastRun.registryVersionId>` lists them under `validation.checks`, failed first, with their `details`. If `all-roots-imported` is among them, the run gave roots up: `GET /registry/v1/admin/sync-runs/<sync.lastRun.id>` lists them with `status` `failed`, and why in each `lastError`. Fix that — most often the node provider proxy — and the scheduled job tries the commit again, or force a new attempt. Otherwise `commit-rejected` is raised as well: follow it. After a cancel, import again as `sync-stalled` says |
-| `sync-failing` | The import that is running keeps failing: the last root it tried failed, or an invocation has failed since before trying one, and the roots left failed have spent two attempts or more between them — two roots once, or one root twice. A single failure does not raise it. `sync.lastRun.lastError` says why, once an invocation has recorded it | Read its run: `GET /registry/v1/admin/sync-runs/<id>` lists each root with why it failed and the `attempts` it has spent. `SOURCE_REQUEST_FAILED` and `CHAIN_REQUEST_FAILED` are GitHub or the node provider proxy not answering: fix the proxy, or wait for GitHub, and the next hourly invocation carries on. Until then an invocation that imports nothing spends an attempt of each root it tries, and a root is given up after five, whatever failed it. `the invocation importing this root did not finish` is an invocation stopped in the middle of that root — a deploy, or a Worker past its time or CPU: the next one tries it again, and if one market keeps stopping it, the worker's logs say what did. Until the next one records it, such a root is still `processing`, under a `leaseExpiresAt` already past, and the run's `lastError` is still that of the attempt before it — `null` if that one succeeded. Anything else is the root itself. A `lastError` that no root of the run carries — `OVERLAY_INVALID` naming a `version …`, or `an unexpected error interrupted the import` — is an invocation that failed before it tried a root: see `sync-stalled`, which the status raises as well once nothing has moved for two hours |
-| `sync-stalled` | A run says it is running, but nobody is continuing it: the hourly trigger is not firing, or every invocation fails before it imports a market | Read why in `sync.lastRun.lastError`; where it is `null`, the worker's log line `registry sync failed` names the service that did not answer — GitHub, the node provider proxy or the database — and once it answers, the hourly import resumes the run by itself. A `lastError` that comes back the same every hour does not pass: cancel the run — `POST /registry/v1/admin/sync-runs/<sync.lastRun.id>/cancel` with `{"reason": "…"}` — fix what it names, then import again with `{"forceNewAttempt": true, "reason": "…"}` (step 1 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)). Cancelling does not help with two of them, which a new attempt meets the same way. `an unexpected error interrupted the import` is a fault, which the log has whole as `registry sync failed unexpectedly`: see `INTERNAL` in [When something goes wrong](#when-something-goes-wrong). `OVERLAY_INVALID` naming a `version …` is a decision that version stores, the one on or an earlier attempt of the commit, which this release no longer takes: a developer's to fix, in a release. Once either is fixed, the hourly import resumes the run by itself |
+| `sync-failing` | The import that is running keeps failing: the last root it tried failed, or an invocation has failed since before trying one, and the roots left failed have spent two attempts or more between them — two roots once, or one root twice. A single failure does not raise it. `sync.lastRun.lastError` says why, once an invocation has recorded it | Read its run: `GET /registry/v1/admin/sync-runs/<id>` lists each root with why it failed and the `attempts` it has spent. `SOURCE_REQUEST_FAILED` and `CHAIN_REQUEST_FAILED` are GitHub or the node provider proxy not answering: fix the proxy, or wait for GitHub, and the next hourly invocation carries on. Until then an invocation that imports nothing spends an attempt of each root it tries, and a root is given up after five, whatever failed it. `the invocation importing this root did not finish` is an invocation stopped in the middle of that root — a deploy, or a Worker past its time or CPU: the next one tries it again, and if one market keeps stopping it, the worker's logs say what did. Until the next one records it, such a root is still `processing`, under a `leaseExpiresAt` already past, and the run's `lastError` is still that of the attempt before it — `null` if that one succeeded. `the database did not answer` is D1 failing under that root — restarted, overloaded or cut off. A restart or an overload spends the attempt all the same, and the next invocation tries the root again; if it keeps coming back, check the database's health. The worker's log line `registry root failed` has what D1 said, as it has the whole of a fault, which a root records as `an unexpected error interrupted the import`. Anything else is the root itself. A `lastError` that no root of the run carries — `OVERLAY_INVALID` naming a `version …`, or `an unexpected error interrupted the import` — is an invocation that failed before it tried a root: see `sync-stalled`, which the status raises as well once nothing has moved for two hours |
+| `sync-stalled` | A run says it is running, but nobody is continuing it: the hourly trigger is not firing, or every invocation fails before it imports a market | Read why in `sync.lastRun.lastError`; where it is `null`, the worker's log line `registry sync failed` names the service that did not answer — GitHub, the node provider proxy or the database — and once it answers, the hourly import resumes the run by itself. A `lastError` that comes back the same every hour does not pass: cancel the run — `POST /registry/v1/admin/sync-runs/<sync.lastRun.id>/cancel` with `{"reason": "…"}` — fix what it names, then import again with `{"forceNewAttempt": true, "reason": "…"}` (step 1 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)). That attempt is of the commit the tracked ref names now: if the source has moved on since the run started — the cancel's answer names the run's `sourceCommitSha` — it imports the newer commit and leaves the run's draft open. To keep what was reviewed on that draft, send the run's `sourceCommitSha` with `forceNewAttempt` instead; otherwise close the draft as the row on a draft of an older commit in [When something goes wrong](#when-something-goes-wrong) says. Cancelling does not help with two of them, which a new attempt meets the same way. `an unexpected error interrupted the import` is a fault, which the log has whole as `registry sync failed unexpectedly`: see `INTERNAL` in [When something goes wrong](#when-something-goes-wrong). `OVERLAY_INVALID` naming a `version …` is a decision that version stores, the one on or an earlier attempt of the commit, which this release no longer takes: a developer's to fix, in a release. Once either is fixed, the hourly import resumes the run by itself |
 | `sync-overdue` | The source has not been checked for more than two days | The hourly trigger is not firing, or every invocation fails before it records a check: a failed one is a failed Cron in the dashboard's Cron events, and the worker's log line `registry sync failed` says why |
 | `snapshot-not-cached` | The active version is not in the cache | Harmless by itself — the next request refills it. If it persists, the KV namespace is misconfigured for this environment |
 | `cache-unreadable` | The KV namespace itself did not answer | Check the `kv_registry` binding of this environment: until it answers there is no cache, and no older version to fall back on if the database fails |
@@ -1122,11 +1180,12 @@ whose reasons are in the draft it names.
 | `422`, `details.code` `SOURCE_CONFIGURATION_INVALID`, from the import | A setting the import reads is not what it takes, and the message names it; `/admin/status` raises `configuration-invalid` | Correct the value in `wrangler.toml` and deploy |
 | `422`, `details.code` `SOURCE_TREE_TRUNCATED`, `SOURCE_CONTENT_TOO_LARGE` or `SOURCE_RESPONSE_INVALID` | GitHub answered, but with something the import cannot use, and would answer the same way again | Report it to a developer with the message; importing again does not help |
 | `422`, "validation failed", from the import, with `details.syncRunId` and `details.registryVersionId` | The import finished and its draft failed a check: the draft is `invalid`, and can no longer change. `/admin/status` raises `last-sync-failed`, and `commit-rejected` as well when every root imported | Read the draft's checks: `GET /registry/v1/admin/versions/<registryVersionId>`, under `validation`. If `all-roots-imported` failed, `GET /registry/v1/admin/sync-runs/<syncRunId>` names the roots the run gave up, and why. Otherwise correct the decisions in a held attempt (step 1 of [Describing a new market](#describing-a-new-market)) and validate it, or wait for a new commit |
-| `400`, `details.code` `OVERLAY_INVALID`, from the import, with a message that begins `version <id> market` or `version <id> network` | A decision a version stores — the one on, or an earlier attempt of the commit — that this release no longer takes. Every import fails on it before it imports a market, and spends nothing; `/admin/status` has it as `sync.lastRun.lastError`, and raises `sync-stalled` once nothing has moved for two hours | Report it to a developer with the message: a release that reads the decision again fixes it, and the import then carries on by itself. Cancelling the run does not help before that, since a new attempt reads the same decision |
+| `400`, `details.code` `OVERLAY_INVALID`, from the import or an overlay route, with a message that begins `version <id> market` or `version <id> network` — or, from `GET …/markets/<chainId>/<deploymentKey>/overlay`, with the market's key, such as `1/weth.displayName` | A decision a version stores that this release no longer takes. From the import, the version is the one on or an earlier attempt of the commit: every import fails on it before it imports a market, and spends nothing; `/admin/status` has it as `sync.lastRun.lastError`, and raises `sync-stalled` once nothing has moved for two hours. From an overlay route, it is the draft's own: every overlay write to the draft — `PUT …/overlay`, `PUT …/overlays`, applying the proposal — reads all of its decisions first and is refused, the one that would replace that decision too, and so is the `GET` of the network or market that holds it | Report it to a developer with the message: a release that reads the decision again fixes it. The import then carries on by itself; cancelling the run does not help before that, since a new attempt reads the same decision. A draft the overlay routes refuse cannot be reviewed until then: leave it open, and do not validate it or switch it on — validation does not read the decisions again, and a version on that holds such a decision stops every import |
 | Linea WETH's reward price is about `0.009` (`reward_asset.price` in the rewards routes) | The environment was brought up before its proposal quoted the COMP / ETH reward feed in the base asset, and every later version inherited `"quote": "usd"` | Hold a draft (`{"forceNewAttempt": true, "holdForReview": true, "reason": "quote Linea WETH's reward feed in its base asset"}`), read `…/versions/$V/markets/59144/weth/overlay`, send it back with `rewardPriceFeed.quote` `"base"`, then validate and switch it on (steps 4, 6 and 7 of the first bring-up) |
 | `CHAIN_REQUEST_FAILED` in the import | The worker cannot reach the node provider proxy, or the proxy did not serve the calls, or did not answer them within 30 seconds. The worker's log line `registry root failed` has the status the proxy answered and its URL without the key: `HTTP 503` is no provider answering the proxy, `HTTP 401` the proxy refusing `NODE_PROXY_KEY` | Fix the proxy, its binding or its key; importing again continues where it stopped |
 | A network under `chainCheck.unreadable` in `/admin/status` | The check of the chain could not read that network, for the reason it names — most often `CHAIN_REQUEST_FAILED`, as in the row above. Nothing new is known about its markets: it raises no `chain-drift` of its own and clears none, since a drift found there before stays, with the `seenAt` of the last read that found it. The warning `registry chain not read` in the worker's log has the cause | Fix the proxy for that network. The check reads it again at the next hourly invocation, until it has read every network |
 | `chain-drift` in `/admin/status` | The chain answers a market's feed or collateral otherwise than the version on stores it | [A market that changed on chain](#a-market-that-changed-on-chain) |
+| `422`, `details.code` `OVERLAY_CREATION_BLOCK_WRONG`, writing an overlay or applying the proposal | A `creationBlock` the document changes is not the block the market's Comet was deployed in; the message says whether it is before the deployment, after it, or past the latest block. Nothing was written | Send the block the chain's explorer gives as the Comet's "Contract Creation" (step 4 of [Describing a new market](#describing-a-new-market)). From the proposal, the release's own constant is wrong: see step 3 of [the first bring-up](#bringing-an-environment-up-for-the-first-time) |
 | `401` | The token is wrong, or is the hash | Use the admin token itself |
 | `413` | The request body is larger than the route takes | Send less: a directory of overlays in several requests |
 | `429`, "too many administrative requests from this address" | More than 60 administrative requests in a minute from your address — over IPv6, from your /64 — whatever they were: every request under `/registry/v1/admin/` is counted by address before its token is checked, a wrong token or a path no route takes included, and the right token is refused too once the address has spent its budget | Wait the seconds its `Retry-After` names — a minute at most. A script in a loop, or a monitor sharing your address, is what spends it |
@@ -1153,3 +1212,6 @@ whose reasons are in the draft it names.
 | Answers carry `X-Registry-Stale: <seconds>`, and the log has the error `registry database unreachable; answering from the version it last named` | The database could not be reached, so the API is answering from the version it last saw, and saying how old it is. Each isolate logs the error once a minute while this lasts | Check the database's health; the API recovers by itself once D1 answers, and starts returning `503` if the outage outlasts the configured window |
 | `503 UPSTREAM_UNAVAILABLE` from the market and registry routes, or from `/admin/status` | The database could not be reached, and there is no version within the window to answer from. Or, from a route that reads the chain — the market and account routes, transaction history, governance — the node provider proxy did not serve the request: no provider answered it, the worker could not reach the proxy or lost its answer, or the proxy answered a call with an error that is not a revert. Such an answer says `a node provider did not answer`, with the proxy's `Retry-After` when it sent one; the worker's log line `route failed` with the answer's `requestId` has the error — `HTTP 401` in it is the proxy refusing `NODE_PROXY_KEY` — and the proxy's own log has `upstream error` or `json-rpc error` | Check the database's health; nothing in the registry needs changing. For a node provider, fix the proxy, its binding or its key: the routes answer again as soon as it serves them |
 | `500 INTERNAL` from the market and registry routes | The database answered with a fault — most often a release deployed before its migrations — or a bug, such as a call the contract reverted where the route needed its value. A node provider that did not answer is a `503`, not this. The worker's log line `route failed` or `registry route failed` with the answer's `requestId` has the error | Apply the migrations if they are missing; otherwise report the log line |
+| The worker's log has the warning `computation cache unreadable` or `computation cache unwritable`, with what KV answered | KV refused a call to the namespace computed values are cached in, `kv_mainnet` or `kv_testnet`: `429` is a value written twice in a second, `503` KV not answering. The request was answered without the cache — a value it could not read was computed again from the chain, and one it could not write was not kept — so it was slower, and asked the node provider more. Each isolate says each once a minute while it lasts | Nothing for a `429` now and then. A `503` that keeps coming back is KV not answering: every request reads the chain while it lasts, and transaction history fails (the next row), so check Cloudflare's status and the node provider proxy |
+| `500 INTERNAL` from transaction history, and the log line `route failed` has `KV GET failed` or `KV PUT failed` | KV refused a history cursor. Cursors are kept in `kv_mainnet` with the computed values, but nothing computes one again: a page whose cursor KV cannot read fails, and so does a page whose cursor it cannot keep, rather than hand out a cursor no later page could read. A first page fails so only after it has been read in full from the chain, since its cursor is written last. While KV does not answer, every page of history fails, though the other routes answer | Check Cloudflare's status; nothing in the registry needs changing. The client may ask again, and history answers as soon as KV does |
+| The worker's log has the warning `history cursor written twice in a second`, with KV's `429` | Two pages asked within a second kept the same cursor — the same page asked twice, or the first pages of two accounts without history at one block: a cursor's id is the digest of what it holds, and names no account. KV takes one write a second to a key, so it refused the second write of a cursor it had just taken, and the page was answered with it | Nothing |

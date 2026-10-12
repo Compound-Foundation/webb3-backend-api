@@ -4,7 +4,7 @@ import * as Compute  from '../../symbolic/computation.js';
 import type { Address, PriceExceptionV1, RegistryAnnotation, RegistryComet } from '../../model/comet-registry.js';
 
 import type { AssetInfo } from './asset-info.js';
-import type { GetPrice, PriceRead } from './get-price.js';
+import { reportRevert, type GetPrice, type PriceRead } from './get-price.js';
 
 /*
  * The price of a collateral asset, or why it could not be read: one
@@ -57,32 +57,46 @@ function decimalsOf(annotation: RegistryAnnotation, priceFeed: Address): number 
 
 const { implement, pipe1, pull1 } = Compute.Functor<AssetPrice>({});
 const assetPrice = implement({
-  // 1: a price that reverts is answered, not thrown
-  version: 1,
+  // 2: a remap reads the Comet's own feed where its replacement reverts
+  version: 2,
   compute: ({ apiHost, nodeHost, nodeKey, assetNumber, blockNumber, contract, network }) => pipe1([
     { assetInfo: { apiHost, nodeHost, nodeKey, assetNumber, blockNumber, contract, network } },
     ({ priceFeed }) => {
       const annotation = contract.registry;
       const exception  = exceptionFor(annotation, priceFeed);
+      const own        = { address: priceFeed, decimals: decimalsOf(annotation, priceFeed) };
 
       if (exception !== null) {
         switch (exception.kind) {
           case 'zero_price':
-            return { status: 'success', price: BigFixnum.from({ decimals: decimalsOf(annotation, priceFeed), value: 0 }) };
+            return { status: 'success', price: BigFixnum.from({ decimals: own.decimals, value: 0 }) };
           case 'fixed_price':
             return { status: 'success', price: BigFixnum.from({ decimals: exception.price.decimals, value: exception.price.value }) };
-          case 'deprecated_price_remap':
-            return pull1({
-              getPrice: {
-                apiHost,
-                nodeHost,
-                nodeKey,
-                network,
-                contract,
-                blockNumber,
-                priceFeed: exception.replacementPriceFeed,
-              },
-            });
+          case 'deprecated_price_remap': {
+            /*
+             * A remap reads its replacement. At a block before the replacement
+             * was deployed — a day of history older than it — the replacement
+             * reverts, and the feed the Comet named at that block is read
+             * instead. A revert there is expected, so the replacement is
+             * reported only when neither answers. At the latest block the
+             * replacement answers, and nothing more is read.
+             */
+            const read        = { apiHost, nodeHost, nodeKey, network, contract, blockNumber, unreported: true } as const;
+            const replacement = exception.replacementPriceFeed;
+            return pipe1([
+              { getPrice: { ...read, priceFeed: replacement } },
+              replaced => replaced.status === 'success' ? replaced : pipe1([
+                { getPrice: { ...read, priceFeed: own } },
+                (fallback): PriceRead => {
+                  if (fallback.status === 'success') {
+                    return fallback;
+                  }
+                  reportRevert(replaced.message, replacement.address, contract.address, network, blockNumber);
+                  return replaced;
+                },
+              ]),
+            ]);
+          }
         }
       }
 
@@ -94,10 +108,7 @@ const assetPrice = implement({
           network,
           contract,
           blockNumber,
-          priceFeed: {
-            address:  priceFeed,
-            decimals: decimalsOf(annotation, priceFeed),
-          },
+          priceFeed: own,
         },
       });
     },

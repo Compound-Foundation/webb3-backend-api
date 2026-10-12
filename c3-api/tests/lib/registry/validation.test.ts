@@ -83,7 +83,7 @@ t.test('history is served only by a market that names its rewards contract', asy
     failingChecks(networks => {
       const market = mainnetMarket(networks, 'usdc');
       market.contracts    = { ...market.contracts, rewards: null };
-      market.capabilities = { ...market.capabilities, accountRewards: false };
+      market.capabilities = { ...market.capabilities, rewards: false, accountRewards: false };
     }),
     [ 'transaction-history-requires-rewards-contract' ],
     'transaction history without the rewards contract it is read with',
@@ -92,10 +92,28 @@ t.test('history is served only by a market that names its rewards contract', asy
     failingChecks(networks => {
       const market = mainnetMarket(networks, 'usdc');
       market.contracts    = { ...market.contracts, rewards: null };
-      market.capabilities = { ...market.capabilities, transactionHistory: false, accountRewards: false };
+      market.capabilities = { rewards: false, transactionHistory: false, accountRewards: false };
     }),
     [],
-    'while a market that serves no history needs no rewards contract',
+    'while a market that serves no history, and no rewards, needs no rewards contract',
+  );
+});
+
+/*
+ * The token a market pays is read through its rewards contract, which is the
+ * only place the catalog finds it, so a market whose rewards are served names
+ * that contract even where it serves nothing else of them. No import writes
+ * one that does not; the check is that no version is served so.
+ */
+t.test('rewards are served only by a market that names its rewards contract', async t => {
+  t.same(
+    failingChecks(networks => {
+      const market = mainnetMarket(networks, 'usdc');
+      market.contracts    = { ...market.contracts, rewards: null };
+      market.capabilities = { rewards: true, transactionHistory: false, accountRewards: false };
+    }),
+    [ 'rewards-capability-has-contract' ],
+    'rewards without the contract the token they pay is read through',
   );
 });
 
@@ -119,7 +137,7 @@ t.test('account rewards are served only by a market that pays a token, through i
     failingChecks(networks => {
       const market = mainnetMarket(networks, 'usdc');
       market.contracts    = { ...market.contracts, rewards: null };
-      market.capabilities = { ...market.capabilities, transactionHistory: false };
+      market.capabilities = { ...market.capabilities, rewards: false, transactionHistory: false };
     }),
     [ 'account-rewards-have-token' ],
     'or of one without a rewards contract at all',
@@ -248,30 +266,12 @@ t.test('registry-wide invariants are enforced', async t => {
     'and a disabled market is not listed, so it takes no key',
   );
   t.same(
-    failingChecks(networks => { networks.reverse(); }),
-    [ 'networks-ordered' ],
-    'networks out of chain id order',
-  );
-  t.same(
-    failingChecks(networks => { networks[0]!.markets.reverse(); }),
-    [ 'markets-ordered' ],
-    'markets out of creation block order',
-  );
-  t.same(
     failingChecks(networks => {
       const mainnet = networks.find(network => network.chainId === 1)!;
       mainnet.markets[1]!.contracts.comet = mainnet.markets[0]!.contracts.comet;
     }),
     [ 'comet-addresses-unique' ],
     'one Comet address serving two markets',
-  );
-  t.same(
-    failingChecks(networks => {
-      const mainnet = networks.find(network => network.chainId === 1)!;
-      mainnet.markets[1]!.deploymentKey = mainnet.markets[0]!.deploymentKey;
-    }),
-    [ 'deployment-keys-unique' ],
-    'one deployment key used twice',
   );
   t.same(
     failingChecks(networks => {
@@ -292,12 +292,9 @@ t.test('registry-wide invariants are enforced', async t => {
    */
   t.same(
     failingChecks(networks => {
-      const mainnet = networks.find(network => network.chainId === 1)!;
-      const weth    = mainnetMarket(networks, 'weth');
+      const weth = mainnetMarket(networks, 'weth');
       weth.creationBlock = 0;
       weth.status        = 'disabled';
-      // stored markets are read back in creation-block order, so it comes first
-      mainnet.markets = [ weth, ...mainnet.markets.filter(market => market !== weth) ];
     }),
     [],
     'while a disabled market may leave it unknown',

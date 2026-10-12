@@ -5,13 +5,12 @@ import type {
   Address,
   AssetDisplayOverrideV1,
   NetworkV1,
-  UnwrappedCollateralAssetV1,
 } from '../../lib/model/comet-registry.js';
 import { marketKey } from '../../lib/model/comet-registry.js';
 import { canonicalJson } from '../../lib/canonical-json.js';
 import { sha256Hex } from '../../lib/hash.js';
 
-import type { OverlayPriceException } from './overlay.js';
+import type { MarketOverlay, NetworkOverlay, OverlayPriceException } from './overlay.js';
 import { staticComets } from './shadow.js';
 import type { CometContract } from './shadow.js';
 
@@ -49,40 +48,22 @@ type Note = {
   open:    boolean,
 };
 
-type PriceQuote = 'usd' | 'base';
-
-// the documents the admin routes accept, in the shape this script proposes them
-type MarketProposal = {
-  displayName:          string,
-  slug:                 string | null,
-  contractName:         string | null,
-  isDefault:            boolean,
-  isInstitutional:      boolean,
-  status:               'enabled',
-  creationBlock:        number,
-  collateralValueQuote: PriceQuote,
-  capabilities: {
-    rewards:            boolean,
-    accountRewards:     boolean,
-    transactionHistory: boolean,
-  },
-  baseAsset: {
-    displayName:         string | null,
-    isWrappedNative:     boolean,
-    usdPriceFeedAddress: Address | null,
-  },
-  rewardPriceFeed: { address: Address, quote: PriceQuote } | null,
+/*
+ * The documents the admin routes accept, in the shape this script proposes
+ * them. The routes read a document as unknown, so a shape of its own here
+ * would let a decision added to the overlay be left out of the proposal
+ * until applying it is refused; these are the overlay's types instead. A
+ * proposed market is one served today, and a base asset no source names is
+ * proposed without a name, which the review lists as open.
+ */
+type MarketProposal = Omit<MarketOverlay, 'status' | 'baseAsset'> & {
+  status:    'enabled',
+  baseAsset: Omit<MarketOverlay['baseAsset'], 'displayName'> & { displayName: string | null },
 };
 
-type Presentation = {
-  assetDisplayOverrides:     AssetDisplayOverrideV1[],
-  unwrappedCollateralAssets: UnwrappedCollateralAssetV1[],
-};
+type Presentation = Pick<NetworkOverlay, 'assetDisplayOverrides' | 'unwrappedCollateralAssets'>;
 
-type NetworkProposal = Presentation & {
-  displayName:     string,
-  priceExceptions: OverlayPriceException[],
-};
+type NetworkProposal = NetworkOverlay;
 
 /*
  * The markets whose transaction history this API served before the registry,

@@ -30,12 +30,13 @@ import {
   readVersions,
 } from './repository.js';
 import { compareVersions } from './changes.js';
+import { isServed, servedNetworks } from './catalog.js';
 import { bundleOf, digestOf, proposalFor, reviewDocument } from './bootstrap.js';
 import type { Generated } from './bootstrap.js';
 import { orderNetworks, overlayDigest, overlayOfMarket, parseMarketOverlay } from './overlay.js';
 import { compareWithStatic } from './shadow.js';
 import { replaceOverlays, validateStoredVersion } from './admin.js';
-import type { FeedReader } from './admin.js';
+import type { CreationReader, FeedReader } from './admin.js';
 import { cancelRun } from './sync.js';
 
 /*
@@ -178,9 +179,7 @@ async function snapshotResponse(
 function selectable(snapshot: RegistrySnapshotV1): RegistrySnapshotV1 {
   return {
     ...snapshot,
-    networks: snapshot.networks
-      .map(network => ({ ...network, markets: network.markets.filter(market => market.status !== 'disabled') }))
-      .filter(network => network.markets.length > 0),
+    networks: servedNetworks(snapshot).map(({ network, markets }) => ({ ...network, markets })),
   };
 }
 
@@ -247,7 +246,7 @@ function marketOf(network: NetworkV1, address: string): MarketV1 {
   }
   const comet  = normalizeAddress(address);
   const market = network.markets.find(candidate => candidate.contracts.comet === comet);
-  if (market === undefined || market.status === 'disabled') {
+  if (market === undefined || !isServed(market)) {
     throw new ApiError('NOT_FOUND', `no selectable market at ${comet} on chain ${network.chainId}`);
   }
   return market;
@@ -710,6 +709,7 @@ async function applyProposal(
   versionId: string,
   request: { digest: string, reason: string },
   readFeeds: FeedReader,
+  readCreations: CreationReader,
 ): Promise<Response> {
   const { generated, digest } = await proposalOf(context, versionId);
   if (digest !== request.digest) {
@@ -725,7 +725,7 @@ async function applyProposal(
     reason:   request.reason,
     networks: generated.networks.map(({ chainId, overlay }) => ({ chainId, overlay })),
     markets:  generated.markets.map(({ chainId, deploymentKey, overlay }) => ({ chainId, deploymentKey, overlay })),
-  }, readFeeds);
+  }, readFeeds, readCreations);
   return jsonResponse({ digest, ...result });
 }
 
@@ -758,9 +758,11 @@ async function postActivation(
   const result = await activateVersion(context.db, { versionId, action, actor: context.actor, reason, ...expectation });
   /*
    * A rollback names a version that was validated long ago, and whose bytes
-   * may have expired out of the cache, so the warm-up happens here too: the
-   * pointer has already moved, and the first request must not be the one that
-   * rebuilds it.
+   * the hourly prune may have removed from KV: it keeps only the active
+   * version, the one the pointer record names and the validated ones newer
+   * than the active one (pruneSnapshots). So the warm-up happens here too:
+   * the pointer has already moved, and the first request must not be the one
+   * that rebuilds it.
    */
   await context.warm(result.registryVersion.id);
   return jsonResponse(result, { headers: registryHeaders(result.registryVersion) });

@@ -59,11 +59,11 @@ function answerWith(answer: { result: string } | { error: jsonRpc.Error }, feed:
   ]);
 }
 
-function read(feed: Feed = priceFeed) {
+function read(feed: Feed = priceFeed, options: { unreported?: true } = {}) {
   const cache = new MemoryCache({}, [ BigNumber.JsonReviver, BigFixnum.JsonReviver ]);
   const { pull1, evaluate } = Evaluator.instantiate<comet.GetPrice>({ ...evm, ...comet }, { cache, debug, flags });
   return evaluate(pull1({
-    getPrice: { apiHost: '', nodeHost, nodeKey, network, contract, blockNumber: block, priceFeed: feed },
+    getPrice: { apiHost: '', nodeHost, nodeKey, network, contract, blockNumber: block, priceFeed: feed, ...options },
   }));
 }
 
@@ -115,6 +115,22 @@ t.test('a feed that keeps reverting is named once a minute, not on every read', 
   t.equal((await read(feed)).status, 'error');
   t.equal((await read(feed)).status, 'error', 'every read answers the revert');
   t.equal(logged.filter(line => line.includes(feed.address)).length, 1, 'and the feed is named once');
+  fetch.satisfy(t);
+});
+
+/*
+ * A read whose caller answers the revert another way reports nothing itself:
+ * a remap reads its replacement so, which at a block before it was deployed
+ * is no contract yet. A Comet's read of such an address reverts with no data,
+ * which the node answers -32000.
+ */
+t.test('a read whose caller answers its revert reports nothing', async t => {
+  const logged = captureWarnings(t);
+  const feed   = { address: '0x00000000000000000000000000000000000000f3' as const, decimals: 8 };
+
+  answerWith({ error: { code: -32000, message: 'execution reverted' } }, feed);
+  t.strictSame(await read(feed, { unreported: true }), { status: 'error', message: 'execution reverted' });
+  t.strictSame(logged, [], 'and logs nothing');
   fetch.satisfy(t);
 });
 

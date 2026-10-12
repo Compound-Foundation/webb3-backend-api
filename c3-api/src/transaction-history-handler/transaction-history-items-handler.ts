@@ -95,17 +95,9 @@ type CursorPayload = {
   /*
    * The registry version this page was read against. A cursor is meaningful
    * for as long as the version that answers reads the same streams, which
-   * are what the version's markets define. It is optional because cursors
-   * issued before the registry carry none, and those are accepted once and
-   * upgraded.
+   * are what the version's markets define.
    */
-  registryVersionId?: string;
-  /*
-   * Whether the cursor was issued before the registry and upgraded. Such a
-   * session reads the streams on the networks the old cursor had and no
-   * others, so a later version is compared with it on those networks alone.
-   */
-  upgraded?: boolean;
+  registryVersionId: string;
   profilesByAddress: { [key: Eth.Address]: governanceModel.Profile };
   filter: {
     markets: string[];
@@ -120,6 +112,21 @@ type CursorPayload = {
   // keyed by stream, not by network: one network can have several streams
   cursors: { [key: string]: Cursor };
 };
+
+/*
+ * A cursor as KV holds it. KV keeps cursors without an expiry, and a client
+ * may keep one across visits, so a cursor issued before the registry, which
+ * carries no version, can still be sent.
+ */
+type StoredCursor = Omit<CursorPayload, 'registryVersionId'> & { registryVersionId?: string };
+
+/*
+ * What a cursor is named by: the hex SHA-256 of what it holds, the only form
+ * the history has handed out. A value of any other form names no cursor and
+ * is not looked up, since KV refuses some keys outright, such as '', '.' and
+ * '..', and the request would fail with that.
+ */
+const CURSOR_ID = /^[0-9a-f]{64}$/;
 
 interface Context {
   env: Env;
@@ -149,7 +156,7 @@ function Api({ env, debug, flags = {} }: Context) {
     cache: new WorkersKvCache(env[`kv_mainnet`], [
       BigNumber.JsonReviver,
       BigFixnum.JsonReviver,
-    ]),
+    ], debug),
   });
 }
 
@@ -226,82 +233,11 @@ function getDefiSaverProxyRegistryContract(): { [key: string]: Eth.Contract }{
 }
 
 /*
- * A cursor issued before the registry, read against the version that is
- * active now.
- *
- * Such a cursor keyed its per-stream state by network, because every network
- * had exactly one stream, so each of this version's streams resumes from the
- * position its network had reached.
- *
- * A stream on a network the old cursor never saw has no position to resume
- * from, and none can be derived: the cursor holds block numbers of other
- * chains, not the time the pages it served reached back to. Starting such a
- * stream anywhere would emit items newer than pages already served, and
- * history paged newest-first would jump forward in the middle. So the session
- * the old cursor belongs to continues with the networks it had; restarting
- * pagination without a cursor brings in every stream this version serves.
- * Only a client paging at the cutover ever holds such a cursor.
- *
- * A cursor that carried no explicit `markets[]` filter had the old stream list
- * baked into its networks and contract addresses; the filter is rewritten to
- * the streams the session keeps, which may hold markets the old list did not.
- *
- * The upgraded cursor says so, and the session keeps its networks across
- * later activations as it kept them at the cutover (readsSameStreams).
- */
-function upgradeLegacyCursor(
-  payload: CursorPayload,
-  streamEvents: StreamEvent[],
-  registryVersionId: string,
-): CursorPayload {
-  const kept    = streamEvents.filter(stream => payload.cursors[stream.network] !== undefined);
-  const cursors: { [key: string]: Cursor } = {};
-
-  for (const stream of kept) {
-    const previous = payload.cursors[stream.network]!;
-    cursors[streamKeyOf(stream)] = {
-      network:                 stream.network,
-      marketContractAddresses: stream.marketContractAddresses,
-      rewardsContractAddress:  stream.rewardsContractAddress,
-      blockNumber:             previous.blockNumber,
-      transactionHash:         previous.transactionHash,
-    };
-  }
-
-  // an empty markets[] filter meant "everything the session reads"
-  const filter = payload.filter.markets.length > 0 ? payload.filter : {
-    ...payload.filter,
-    networks:          [ ...new Set(kept.map(stream => stream.network as string)) ],
-    contractAddresses: kept.flatMap(stream => [
-      ...stream.marketContractAddresses,
-      stream.rewardsContractAddress,
-    ] as string[]),
-  };
-
-  return { ...payload, registryVersionId, upgraded: true, filter, streamEvents: kept, cursors };
-}
-
-/*
  * Whether a cursor's positions still mean what they meant against the
- * streams a version reads: the version reads the same streams. A cursor
- * upgraded from before the registry reads only those on the networks it had,
- * so only those are compared: a stream the version serves on another network
- * is one that session never joins, and it leaves the session going.
+ * streams a version reads: the version reads the same streams.
  */
-function readsSameStreams(payload: CursorPayload, streams: StreamEvent[]): boolean {
-  const networks = new Set<string>(payload.streamEvents.map(stream => stream.network));
-  const read     = payload.upgraded === true
-    ? streams.filter(stream => networks.has(stream.network))
-    : streams;
-  return streamsOf(payload.streamEvents) === streamsOf(read);
-}
-
-function cursorNetworksOf(payload: CursorPayload): KnownNetwork.Name[] {
-  return [ ...new Set([
-    ...payload.streamEvents.map(stream => stream.network),
-    ...Object.values(payload.cursors).map(cursor => cursor.network),
-    ...payload.filter.networks as KnownNetwork.Name[],
-  ]) ];
+function readsSameStreams(payload: StoredCursor, streams: StreamEvent[]): boolean {
+  return streamsOf(payload.streamEvents) === streamsOf(streams);
 }
 
 // Filter to apply before history items get enriched, if filter it before we can save some API calls in enrichment
@@ -374,7 +310,36 @@ async function getTransactionHistory(
   context: Context,
 ): Promise<Response> {
   // ****************** HELPER FUNCTIONS ******************
-  const { evaluate, pull1, cache } = Api(context);
+  const { evaluate, pull1 } = Api(context);
+  /*
+   * Cursors are kept in the namespace history is cached in, but they are not
+   * a cache: a value KV cannot read or keep is computed again, and a cursor
+   * cannot be. So a cursor KV cannot read or keep fails the request, as it
+   * always has, rather than being answered as invalid, or handed out without
+   * being kept.
+   */
+  const cursorStore = new WorkersKvCache(context.env[`kv_mainnet`], [
+    BigNumber.JsonReviver,
+    BigFixnum.JsonReviver,
+  ], context.debug);
+
+  /*
+   * A cursor's id is the digest of what it holds, which names no account: the
+   * same page asked twice, or the first pages of two accounts without history
+   * at one block, keep one cursor under one id. KV refuses the second write of
+   * a key within a second with 429: what it refuses then is the same cursor,
+   * written a moment before, and the page is answered with it.
+   */
+  async function keepCursor(id: string, payload: CursorPayload): Promise<void> {
+    try {
+      await cursorStore.write(id, payload);
+    } catch (error) {
+      if (!(error instanceof Error && /^KV PUT failed: 429\b/.test(error.message))) {
+        throw error;
+      }
+      context.debug.warn(`history cursor written twice in a second: ${error.message}: ${id}`);
+    }
+  }
 
   async function getRawTransactionHistoryItems(
     accountAddress: Eth.Address,
@@ -699,7 +664,7 @@ async function getTransactionHistory(
 
     // Upsert cursor info before return
     const cursorHash = await sha256(JSON.stringify(cursorPayload));
-    Fallible.must(await cache.put(cursorHash, cursorPayload));
+    await keepCursor(cursorHash, cursorPayload);
 
     let transactionHistoryResponse: TransactionHistoryResponse = {
       done,
@@ -798,16 +763,9 @@ async function getTransactionHistory(
     }
     namedMarkets.push({ network: networkAlias, address });
   }
-
-  /*
-   * A cursor issued before the registry may read a testnet, as a request that
-   * named a testnet market was answered then. Testnets are not served, so the
-   * cursor is refused as such a request is, whatever filter it is sent with,
-   * and before the registry is read.
-   */
-  const storedPayload = cursor === null ? null : Fallible.must(await cache.get<CursorPayload>(cursor));
-  for (const network of storedPayload === null ? [] : cursorNetworksOf(storedPayload)) {
-    refuseTestnet(network);
+  // a cursor of another form than the history hands out names none (CURSOR_ID), and is refused the same way
+  if (cursor !== null && !CURSOR_ID.test(cursor)) {
+    return new Response('Cursor is invalid', { status: 400 });
   }
 
   // the one registry version this request resolves its markets against
@@ -912,7 +870,7 @@ async function getTransactionHistory(
       )
     ), { status: 200 });
   } else {
-    // Cursor provided, read above
+    const storedPayload = await cursorStore.read<StoredCursor>(cursor);
     if (storedPayload === null) {
       return new Response('Cursor is invalid', { status: 400 });
     } else {
@@ -926,16 +884,14 @@ async function getTransactionHistory(
        * that reads other streams leaves the positions meaning nothing, and
        * the client is told to start over.
        *
-       * A cursor issued before the registry carries no version. It is
-       * accepted once against the current version and upgraded, so pagination
-       * in progress at the cutover continues rather than breaking; from then
-       * on it reads, and is compared on, the networks it had.
+       * A cursor issued before the registry names no version, and keeps its
+       * positions by network rather than by stream. It is ended as one of
+       * another version is, whatever it reads, and the client starts over.
        */
-      const cursorPayload = storedPayload.registryVersionId === undefined
-        ? upgradeLegacyCursor(storedPayload, streamEvents, catalog.versionId)
-        : storedPayload.registryVersionId === catalog.versionId || readsSameStreams(storedPayload, streamEvents)
-          ? { ...storedPayload, registryVersionId: catalog.versionId }
-          : null;
+      const cursorPayload: CursorPayload | null = typeof storedPayload.registryVersionId === 'string'
+        && (storedPayload.registryVersionId === catalog.versionId || readsSameStreams(storedPayload, streamEvents))
+        ? { ...storedPayload, registryVersionId: catalog.versionId }
+        : null;
 
       if (cursorPayload === null) {
         throw new ApiError(
@@ -1013,5 +969,4 @@ export {
   getTransactionHistory,
   streamEventsOf,
   streamKeyOf,
-  upgradeLegacyCursor,
 };

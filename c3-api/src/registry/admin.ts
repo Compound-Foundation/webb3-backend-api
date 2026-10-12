@@ -11,6 +11,8 @@ import { ApiError } from '../http/errors.js';
 import { RegistryError, isRegistryError } from './errors.js';
 import type { RegistryErrorCode } from './errors.js';
 import {
+  feedOf,
+  networkDecisions,
   networkOverlayFeedAddresses,
   overlayDigest,
   overlayFeedAddresses,
@@ -22,6 +24,7 @@ import {
   Condition,
   changedRows,
   conditioned,
+  exceptionStatements,
   insertStatement,
   readOverlays,
   readRevision,
@@ -135,6 +138,16 @@ export { validateStoredVersion };
  * introduces are read from the chain here, exactly as the importer does.
  */
 type FeedReader = (network: string, addresses: Address[]) => Promise<Map<Address, PriceFeedV1>>;
+
+/*
+ * The creation blocks an overlay states for markets of one network, held
+ * against the chain (readCreationBlocks): what is wrong with them, each named
+ * as the document names its market, or nothing when every one is right.
+ */
+type CreationReader = (
+  network: string,
+  markets: Array<{ scope: string, comet: Address, block: number }>,
+) => Promise<string[]>;
 
 /*
  * What a document is decided against: the digest of the reviewed overlay its
@@ -280,36 +293,38 @@ function anchoredBy(eventId: string): Condition {
   };
 }
 
-type NetworkRow = { id: string, canonical_name: string };
+// what a document's scope resolves to: the rows it is written onto (networkRows, marketRows)
+type NetworkTarget = { id: string, canonical_name: string };
 
-type MarketRow = {
+type MarketTarget = {
   market_id:      string,
   network_id:     string,
   canonical_name: string,
   reward_id:      number | null,
+  comet:          Address,
+  creation_block: number,
 };
 
 /*
  * The statements that write one reviewed network overlay onto the rows the
- * import wrote. They are built apart from running them so that one document
- * and a whole directory are written by the same code.
+ * import wrote, as the import writes them (networkDecisions,
+ * exceptionStatements). They are built apart from running them so that one
+ * document and a whole directory are written by the same code.
  */
 function networkStatements(
   db: D1Database,
   versionId: string,
-  row: NetworkRow,
+  row: NetworkTarget,
   overlay: NetworkOverlay,
   feeds: Map<Address, PriceFeedV1>,
   condition: Condition,
 ): D1PreparedStatement[] {
+  const network = networkDecisions(overlay, feeds, row.canonical_name);
   return [
     // reviewing a network is what makes its row a decision someone made
     conditioned(db, `UPDATE registry_networks SET display_name = ?1, metadata = ?2, reviewed = 1 WHERE id = ?3`, [
-      overlay.displayName,
-      JSON.stringify({
-        assetDisplayOverrides:     overlay.assetDisplayOverrides,
-        unwrappedCollateralAssets: overlay.unwrappedCollateralAssets,
-      }),
+      network.displayName,
+      JSON.stringify(network.presentation),
       row.id,
     ], condition),
     conditioned(
@@ -318,27 +333,14 @@ function networkStatements(
       [ versionId, row.id ],
       condition,
     ),
-    ...overlay.priceExceptions.map(exception => insertStatement(db, 'network_price_exceptions', {
-      registry_version_id:             versionId,
-      network_id:                      row.id,
-      price_feed_address:              exception.priceFeedAddress,
-      kind:                            exception.kind,
-      fixed_price_value:               exception.kind === 'fixed_price' ? exception.price.value : null,
-      fixed_price_decimals:            exception.kind === 'fixed_price' ? exception.price.decimals : null,
-      replacement_price_feed_address:  exception.kind === 'deprecated_price_remap' ? exception.replacementPriceFeedAddress : null,
-      replacement_price_feed_decimals: exception.kind === 'deprecated_price_remap'
-        ? feedDecimals(feeds, exception.replacementPriceFeedAddress, row.canonical_name)
-        : null,
-      provenance:                      exception.provenance,
-      expires_at:                      exception.expiresAt,
-    }, condition)),
+    ...exceptionStatements(db, { registry_version_id: versionId, network_id: row.id }, network, condition),
   ];
 }
 
 // the same for one market overlay
 function marketStatements(
   db: D1Database,
-  row: MarketRow,
+  row: MarketTarget,
   overlay: MarketOverlay,
   feeds: Map<Address, PriceFeedV1>,
   condition: Condition,
@@ -378,7 +380,7 @@ function marketStatements(
         overlay.baseAsset.usdPriceFeedAddress,
         overlay.baseAsset.usdPriceFeedAddress === null
           ? null
-          : feedDecimals(feeds, overlay.baseAsset.usdPriceFeedAddress, row.canonical_name),
+          : feedOf(feeds, overlay.baseAsset.usdPriceFeedAddress, row.canonical_name).decimals,
         row.market_id,
       ],
       condition,
@@ -395,7 +397,7 @@ function marketStatements(
         overlay.rewardPriceFeed?.address ?? null,
         overlay.rewardPriceFeed === null
           ? null
-          : feedDecimals(feeds, overlay.rewardPriceFeed.address, row.canonical_name),
+          : feedOf(feeds, overlay.rewardPriceFeed.address, row.canonical_name).decimals,
         overlay.rewardPriceFeed?.quote ?? null,
         row.market_id,
       ],
@@ -405,7 +407,7 @@ function marketStatements(
   return statements;
 }
 
-function refuseRewardFeedWithoutReward(key: string, row: MarketRow, overlay: MarketOverlay): void {
+function refuseRewardFeedWithoutReward(key: string, row: MarketTarget, overlay: MarketOverlay): void {
   if (overlay.rewardPriceFeed !== null && row.reward_id === null) {
     throw new ApiError(
       'CONFLICT',
@@ -465,41 +467,37 @@ async function writeReview(db: D1Database, statements: D1PreparedStatement[]): P
 }
 
 /*
- * Every network, and every market with its reward asset, that the import has
- * written into a version. The routes address them by chain id and deployment
- * key; these are the rows those names resolve to.
+ * Every network, and every market with its Comet and its reward asset, that
+ * the import has written into a version. The routes address them by chain id
+ * and deployment key; these are the rows those names resolve to.
  */
-async function networkRows(db: D1Database, versionId: string): Promise<Map<number, NetworkRow>> {
+async function networkRows(db: D1Database, versionId: string): Promise<Map<number, NetworkTarget>> {
   const { results } = await db.prepare(
     `SELECT id, chain_id, canonical_name FROM registry_networks WHERE registry_version_id = ?1`
-  ).bind(versionId).all<NetworkRow & { chain_id: number }>();
+  ).bind(versionId).all<NetworkTarget & { chain_id: number }>();
   return new Map((results ?? []).map(row => [ row.chain_id, { id: row.id, canonical_name: row.canonical_name } ]));
 }
 
-async function marketRows(db: D1Database, versionId: string): Promise<Map<string, MarketRow>> {
+async function marketRows(db: D1Database, versionId: string): Promise<Map<string, MarketTarget>> {
   const { results } = await db.prepare(
     `SELECT market.id AS market_id, market.network_id, network.canonical_name,
-            network.chain_id, market.deployment_key,
+            network.chain_id, market.deployment_key, market.creation_block,
             (SELECT asset.id FROM market_assets AS asset
-             WHERE asset.market_id = market.id AND asset.role = 'reward') AS reward_id
+             WHERE asset.market_id = market.id AND asset.role = 'reward') AS reward_id,
+            (SELECT contract.address FROM market_contracts AS contract
+             WHERE contract.market_id = market.id AND contract.role = 'comet') AS comet
      FROM markets AS market
      JOIN registry_networks AS network ON network.id = market.network_id
      WHERE market.registry_version_id = ?1`
-  ).bind(versionId).all<MarketRow & { chain_id: number, deployment_key: string }>();
+  ).bind(versionId).all<MarketTarget & { chain_id: number, deployment_key: string }>();
   return new Map((results ?? []).map(row => [ marketKey(row.chain_id, row.deployment_key), {
     market_id:      row.market_id,
     network_id:     row.network_id,
     canonical_name: row.canonical_name,
     reward_id:      row.reward_id ?? null,
+    comet:          row.comet,
+    creation_block: row.creation_block,
   } ]));
-}
-
-function feedDecimals(feeds: Map<Address, PriceFeedV1>, address: Address, scope: string): number {
-  const feed = feeds.get(address);
-  if (feed === undefined) {
-    throw new ApiError('UNPROCESSABLE', `the decimals of ${address} could not be read on ${scope}`);
-  }
-  return feed.decimals;
 }
 
 /*
@@ -559,6 +557,7 @@ async function writeOverlays(
   db: D1Database,
   input: OverlayDocuments,
   readFeeds: FeedReader,
+  readCreations: CreationReader,
   naming: Naming,
 ): Promise<Omit<OverlaysResult, 'unreviewed'>> {
   const version = await importingVersion(db, input.versionId);
@@ -639,6 +638,32 @@ async function writeOverlays(
   }
   for (const { key, row, overlay } of changedMarkets) {
     refuseRewardFeedWithoutReward(key, row, overlay);
+  }
+
+  /*
+   * The creation block is where every index of a market starts, and one the
+   * chain contradicts fails the routes that read the market, those over every
+   * network among them. A document that changes it has it checked against the
+   * chain, with one read per network, whether or not it serves the market: a
+   * later document that switches the market on and keeps the block then
+   * serves one that was checked. A document that keeps the block reads
+   * nothing for it, as one that keeps its feeds does, and a block of 0 states
+   * none.
+   */
+  const creations = new Map<string, Parameters<CreationReader>[1]>();
+  for (const { key, row, overlay } of changedMarkets) {
+    if (overlay.creationBlock > 0 && overlay.creationBlock !== row.creation_block) {
+      creations.set(row.canonical_name, [
+        ...(creations.get(row.canonical_name) ?? []),
+        { scope: naming.market(key), comet: row.comet, block: overlay.creationBlock },
+      ]);
+    }
+  }
+  const wrong = (await Promise.all(
+    [ ...creations ].map(([ network, markets ]) => readCreations(network, markets)),
+  )).flat();
+  if (wrong.length > 0) {
+    throw new RegistryError('OVERLAY_CREATION_BLOCK_WRONG', wrong.join('; '));
   }
 
   /*
@@ -755,24 +780,26 @@ async function replaceNetworkOverlay(
   readFeeds: FeedReader,
 ): Promise<OverlayResult> {
   const { chainId, overlay, expectedDigest, ...scope } = input;
+  // a network overlay states no creation block, so none is read
   return oneDocument(await writeOverlays(db, {
     ...scope,
     networks: [ { chainId, overlay, ...(expectedDigest === undefined ? {} : { expectedDigest }) } ],
     markets:  [],
-  }, readFeeds, ONE_DOCUMENT));
+  }, readFeeds, async () => [], ONE_DOCUMENT));
 }
 
 async function replaceMarketOverlay(
   db: D1Database,
   input: OverlayScope & { chainId: number, deploymentKey: string, overlay: unknown } & Expectation,
   readFeeds: FeedReader,
+  readCreations: CreationReader,
 ): Promise<OverlayResult> {
   const { chainId, deploymentKey, overlay, expectedDigest, ...scope } = input;
   return oneDocument(await writeOverlays(db, {
     ...scope,
     networks: [],
     markets:  [ { chainId, deploymentKey, overlay, ...(expectedDigest === undefined ? {} : { expectedDigest }) } ],
-  }, readFeeds, ONE_DOCUMENT));
+  }, readFeeds, readCreations, ONE_DOCUMENT));
 }
 
 /*
@@ -784,10 +811,11 @@ async function replaceOverlays(
   db: D1Database,
   input: OverlayDocuments,
   readFeeds: FeedReader,
+  readCreations: CreationReader,
 ): Promise<OverlaysResult> {
-  const written = await writeOverlays(db, input, readFeeds, DIRECTORY);
+  const written = await writeOverlays(db, input, readFeeds, readCreations, DIRECTORY);
   return { ...written, unreviewed: await readUnreviewed(db, input.versionId) };
 }
 
-export type { Expectation, FeedReader, OverlayDocuments, OverlayResult, OverlaysResult };
+export type { CreationReader, Expectation, FeedReader, OverlayDocuments, OverlayResult, OverlaysResult };
 export { replaceMarketOverlay, replaceNetworkOverlay, replaceOverlays };

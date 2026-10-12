@@ -4,8 +4,6 @@ import { isUnreachable } from './cache.js';
 import { RpcTransport, enrichMarket } from './enrichment.js';
 import { RegistryError, isRegistryError, isTransportFailure } from './errors.js';
 import {
-  MarketOverlay,
-  NetworkOverlay,
   applyMarketOverlay,
   applyNetworkOverlay,
   networkOverlayFeedAddresses,
@@ -14,6 +12,7 @@ import {
   provisionalNetworkOverlay,
 } from './overlay.js';
 import {
+  ClonedOverlays,
   ImportedMarket,
   candidateRow,
   changedRows,
@@ -177,7 +176,18 @@ function now(clock: Clock | undefined): Date {
 
 // diagnostics are sanitized: an upstream body or a token never reaches D1
 function diagnosticOf(error: unknown): string {
-  return isRegistryError(error) ? `${error.code}: ${error.message}` : 'an unexpected error interrupted the import';
+  if (isRegistryError(error)) {
+    return `${error.code}: ${error.message}`;
+  }
+  /*
+   * The source and the chain fail as registry errors, so a carrier that
+   * failed without one is the database: restarted, overloaded or cut off.
+   * Recorded as a fault, it would send an operator looking for a bug; what
+   * D1 said is in the log.
+   */
+  return isTransportFailure(error) || isUnreachable(error)
+    ? 'the database did not answer'
+    : 'an unexpected error interrupted the import';
 }
 
 /*
@@ -401,17 +411,29 @@ async function startImport(
  * rows are what an operator reviews in place, and until then it changes
  * nothing the API serves. Refusing it instead would fail the whole commit
  * over one deployment nobody has looked at yet.
+ *
+ * The decisions under a deployment key were made for the Comet the key named
+ * then. A key the source has since given another Comet does not hand it
+ * them — its label, its creation block, whether it is served: that Comet is
+ * a market nobody has reviewed, and comes in as one.
  */
 async function importMarket(
   deps: ImporterDeps,
   rootPath: { rootPath: string, upstreamNetworkKey: string, deploymentKey: string, sourceBlobSha: string },
   commitSha: string,
-  overlays: { networks: Map<number, NetworkOverlay>, markets: Map<string, MarketOverlay> },
+  overlays: ClonedOverlays,
 ): Promise<ImportedMarket> {
   const root            = await readRoot(deps.source, commitSha, rootPath);
   const key             = marketKey(root.chainId, root.deploymentKey);
-  const reviewedMarket  = overlays.markets.get(key);
+  const inherited       = overlays.markets.get(key);
+  const reviewedFor     = overlays.comets.get(key);
+  const reviewedMarket  = reviewedFor === root.contracts.comet ? inherited : undefined;
   const reviewedNetwork = overlays.networks.get(root.chainId);
+  if (inherited !== undefined && reviewedMarket === undefined) {
+    deps.debug?.warn(`registry overlay not inherited: the deployment key names another Comet`, {
+      market: key, reviewedFor, comet: root.contracts.comet,
+    });
+  }
 
   /*
    * The overlay names feeds without stating their scale, so their decimals

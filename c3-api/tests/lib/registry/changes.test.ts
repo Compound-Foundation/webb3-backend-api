@@ -28,7 +28,7 @@ t.test('a version identical to the one that is on changes nothing', async t => {
 
   t.same(compareVersions(snapshot.networks, renumbered, new Set()), {
     networks: { added: [], removed: [], changed: [] },
-    markets:  { added: [], removed: [], changed: [] },
+    markets:  { added: [], removed: [], changed: [], unserved: [] },
   });
 });
 
@@ -45,6 +45,7 @@ t.test('without a version that is on, everything is added', async t => {
     'saying which of them nobody has reviewed',
   );
   t.notOk('id' in changes.markets.added[0]!.market, 'a market is reported without its row id');
+  t.same(changes.markets.unserved, [], 'and nothing is served yet, so nothing stops being');
 });
 
 t.test('a new commit is reported as what it adds, drops and changes', async t => {
@@ -92,4 +93,67 @@ t.test('a new commit is reported as what it adds, drops and changes', async t =>
   t.ok(changes.networks.changed.some(change => change.scope === '1' && change.field === 'priceExceptions.length'),
     'a network change is reported for the network');
   t.same(changes.networks.added, [], 'no network was added');
+});
+
+/*
+ * What users of the version on lose is a Comet, whatever key it is under: the
+ * source dropping its deployment, renaming it to a key nobody has reviewed,
+ * or giving its key to another Comet, and a review switching it off, all
+ * stop it being served, while `removed` lists only the keys that are gone.
+ */
+t.test('every Comet the version on serves and this one does not is named, with where it is now', async t => {
+  const after   = copy();
+  const network = mainnet(after);
+  const comet   = (key: string) => mainnet(snapshot.networks).markets.find(market => market.deploymentKey === key)!.contracts.comet;
+  const market  = (key: string) => network.markets.find(entry => entry.deploymentKey === key)!;
+
+  network.markets = network.markets.filter(entry => entry.deploymentKey !== 'wbtc');
+  Object.assign(market('weth'), { deploymentKey: 'weth-renamed', status: 'disabled', isDefault: false });
+  market('usdt').status = 'disabled';
+  market('usdc').contracts = { ...market('usdc').contracts, comet: '0x1111111111111111111111111111111111111111' };
+  Object.assign(market('usdc'), { status: 'disabled', isDefault: false });
+
+  /*
+   * A Comet renamed and reviewed under its new key, and one deprecated, are
+   * still served; a market at wbtc's address on Base is another Comet.
+   */
+  const scroll = after.find(entry => entry.chainId === 534352)!.markets[0]!;
+  scroll.deploymentKey = 'usdc-renamed';
+  const base = after.find(entry => entry.chainId === 8453)!;
+  base.markets[0]!.status = 'deprecated';
+  base.markets.push({
+    ...structuredClone(base.markets[0]!),
+    id:            '00000000-0000-4000-8000-00000000cafe',
+    deploymentKey: 'wbtc-twin',
+    status:        'enabled',
+    contracts:     { ...base.markets[0]!.contracts, comet: comet('wbtc') },
+  });
+
+  const changes = compareVersions(snapshot.networks, after, new Set([ '1/usdc', '1/weth-renamed' ]));
+  t.same(changes.markets.unserved, [
+    { scope: '1/usdc', comet: comet('usdc'), now: null },
+    { scope: '1/usdt', comet: comet('usdt'), now: { scope: '1/usdt', status: 'disabled' } },
+    { scope: '1/wbtc', comet: comet('wbtc'), now: null },
+    { scope: '1/weth', comet: comet('weth'), now: { scope: '1/weth-renamed', status: 'disabled' } },
+  ], 'each by the key the version on serves it under, with the key and the status this one holds it under, if any');
+  t.same(changes.markets.removed, [ '1/wbtc', '1/weth', '534352/usdc' ],
+    'while only the keys the version no longer has are removed, a Comet served under another key among them');
+
+  const more = copy();
+  mainnet(more).markets.push({
+    ...structuredClone(mainnet(more).markets[0]!),
+    id:            '00000000-0000-4000-8000-00000000beef',
+    deploymentKey: 'usde',
+    isDefault:     false,
+    contracts:     { ...mainnet(more).markets[0]!.contracts, comet: '0x2222222222222222222222222222222222222222' },
+  });
+  t.same(compareVersions(snapshot.networks, more, new Set()).markets.unserved, [],
+    'a version that serves every Comet the one on does, and more, stops serving none');
+
+  const switchedOff = (networks: NetworkV1[]) => {
+    networks.find(entry => entry.chainId === 534352)!.markets[0]!.status = 'disabled';
+    return networks;
+  };
+  t.same(compareVersions(switchedOff(copy()), switchedOff(copy()), new Set()).markets.unserved, [],
+    'and a market the version on does not serve is nothing to lose');
 });

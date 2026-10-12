@@ -4,11 +4,14 @@ import type { Address, PriceFeedV1 } from '../../../lib/model/comet-registry.js'
 
 import {
   applyNetworkOverlay,
+  networkDecisions,
   overlayDigest,
+  overlayOfException,
   parseMarketOverlay,
   parseNetworkOverlay,
 } from '../../../src/registry/overlay.js';
 import { isRegistryError } from '../../../src/registry/errors.js';
+import { priceExceptionOfRow } from '../../../src/registry/repository.js';
 
 /*
  * Overlay documents are complete replacements with exact key sets: a missing
@@ -220,6 +223,118 @@ t.test('a network overlay is normalized and duplicate-free', async t => {
     () => parseNetworkOverlay({ ...networkOverlay, unwrappedCollateralAssets: {} }),
     /must be an array/,
     'a non-array pair list',
+  );
+});
+
+/*
+ * A price exception is one decision held in three shapes: the document an
+ * overlay states it in, the wire shape a network serves it in — where a remap
+ * carries the decimals read for the feed it reads instead — and the row a
+ * version stores. An import and an overlay write both turn the document into
+ * the wire shape through networkDecisions, every reader of a row reads the
+ * wire shape back through priceExceptionOfRow, and the decision that shape
+ * states is the document again.
+ */
+t.test('a price exception is one decision in every shape it is held in', async t => {
+  const replacement = USD_FEED.toLowerCase() as Address;
+  const feeds       = new Map<Address, PriceFeedV1>([ [ replacement, { address: replacement, decimals: 8 } ] ]);
+  const overlay     = parseNetworkOverlay({
+    ...networkOverlay,
+    priceExceptions: [
+      ...networkOverlay.priceExceptions,
+      { kind: 'deprecated_price_remap', priceFeedAddress: OTHER, replacementPriceFeedAddress: USD_FEED, provenance: 'governance replaced it', expiresAt: null },
+    ],
+  });
+
+  const served = [
+    { kind: 'zero_price', priceFeedAddress: FEED.toLowerCase(), provenance: 'feed reverts', expiresAt: null },
+    {
+      kind:                 'deprecated_price_remap',
+      priceFeedAddress:     OTHER,
+      replacementPriceFeed: { address: replacement, decimals: 8 },
+      provenance:           'governance replaced it',
+      expiresAt:            null,
+    },
+    {
+      kind:             'fixed_price',
+      priceFeedAddress: ADDRESS.toLowerCase(),
+      price:            { value: '102447384', decimals: 8 },
+      provenance:       'last answer of a retired aggregator',
+      expiresAt:        '2027-01-01T00:00:00.000Z',
+    },
+  ];
+  const decisions = networkDecisions(overlay, feeds, 'ethereum-mainnet');
+  t.same(decisions, {
+    displayName:  'Ethereum',
+    presentation: { assetDisplayOverrides: overlay.assetDisplayOverrides, unwrappedCollateralAssets: overlay.unwrappedCollateralAssets },
+    priceExceptions: served,
+  }, 'a remap carries the decimals read for its replacement, and every other decision is served as it is stated');
+  t.throws(
+    () => networkDecisions(overlay, new Map(), 'ethereum-mainnet'),
+    { code: 'OVERLAY_FEED_UNREADABLE' },
+    'and a remap whose replacement was not read is not decided at all',
+  );
+
+  const identity = { chainId: 1, key: 'ethereum-mainnet', upstreamKey: 'mainnet', testnet: false };
+  t.equal(
+    JSON.stringify(applyNetworkOverlay(identity, overlay, [], feeds)),
+    JSON.stringify({
+      chainId:         1,
+      key:             'ethereum-mainnet',
+      upstreamKey:     'mainnet',
+      displayName:     decisions.displayName,
+      testnet:         false,
+      presentation:    decisions.presentation,
+      priceExceptions: decisions.priceExceptions,
+      markets:         [],
+    }),
+    'a network an import builds is those decisions, keyed in the order the wire contract writes them',
+  );
+  t.same(decisions.priceExceptions.map(overlayOfException), overlay.priceExceptions, 'and each states the decision it was built from');
+
+  // the rows a version stores for them, as every reader selects them
+  type ExceptionRow = Parameters<typeof priceExceptionOfRow>[0];
+  const row = (columns: Partial<ExceptionRow>): ExceptionRow => ({
+    id:                              1,
+    registry_version_id:             'version',
+    network_id:                      'network',
+    price_feed_address:              FEED.toLowerCase() as Address,
+    kind:                            'zero_price',
+    fixed_price_value:               null,
+    fixed_price_decimals:            null,
+    replacement_price_feed_address:  null,
+    replacement_price_feed_decimals: null,
+    provenance:                      'feed reverts',
+    expires_at:                      null,
+    ...columns,
+  });
+  const rows = [
+    row({}),
+    row({
+      price_feed_address:              OTHER as Address,
+      kind:                            'deprecated_price_remap',
+      replacement_price_feed_address:  replacement,
+      replacement_price_feed_decimals: 8,
+      provenance:                      'governance replaced it',
+    }),
+    row({
+      price_feed_address:   ADDRESS.toLowerCase() as Address,
+      kind:                 'fixed_price',
+      fixed_price_value:    '102447384',
+      fixed_price_decimals: 8,
+      provenance:           'last answer of a retired aggregator',
+      expires_at:           '2027-01-01T00:00:00.000Z',
+    }),
+  ];
+  t.same(
+    rows.map(priceExceptionOfRow).map(exception => JSON.stringify(exception)),
+    served.map(exception => JSON.stringify(exception)),
+    'a stored row reads back as the exception the network serves, keyed in the order the wire contract writes it',
+  );
+  t.same(
+    parseNetworkOverlay({ ...overlay, priceExceptions: rows.map(priceExceptionOfRow).map(overlayOfException) }),
+    overlay,
+    'which states the decision the row was written from',
   );
 });
 

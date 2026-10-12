@@ -189,7 +189,7 @@ t.test('the active overlay is what an import inherits', async t => {
 
   t.same(
     await readActiveOverlays(db),
-    { networks: new Map(), markets: new Map() },
+    { networks: new Map(), markets: new Map(), comets: new Map() },
     'before the first activation there is nothing to inherit',
   );
 
@@ -199,6 +199,8 @@ t.test('the active overlay is what an import inherits', async t => {
   const active = await readActiveOverlays(db);
   t.equal(active.networks.size, snapshot.networks.length, 'the active version supplies network overlays');
   t.equal(active.markets.get('1/usdc')?.displayName, 'USDC', 'and market overlays');
+  t.equal(active.comets.get('1/usdc'), snapshot.networks[0]!.markets.find(market => market.deploymentKey === 'usdc')!.contracts.comet,
+    'each with the Comet it was made for');
 });
 
 /*
@@ -280,6 +282,34 @@ t.test('an attempt hands down what was reviewed for it, not its copies of a vers
   t.equal(inherited.networks.get(1)?.displayName, 'Ethereum, hotfixed', 'and so does a network');
   t.equal(inherited.markets.get('1/weth')?.displayName, 'WETH, reviewed for the attempt',
     'while what was reviewed for the attempt is handed down over it');
+});
+
+/*
+ * A market overlay comes with the Comet it was made for, from the same row
+ * as the overlay that wins: a key the commit gives another Comet, reviewed
+ * for an earlier attempt, hands that review down for the Comet it reviewed,
+ * not for the one the version on holds under the key.
+ */
+t.test('a market overlay is handed down with the Comet it was made for', async t => {
+  const db = await freshDatabase();
+  const on = await seedCandidate(db, snapshot, { versionId: randomUUID(), commitSha: 'b'.repeat(40) });
+  await activateSeeded(db, on.versionId);
+
+  const comet = '0x1111111111111111111111111111111111111111';
+  const first = await seedCandidate(db, snapshot, { versionId: randomUUID(), attempt: 1 });
+  await db.prepare(
+    `UPDATE market_contracts SET address = ?2 WHERE role = 'comet' AND market_id = (
+       SELECT id FROM markets WHERE registry_version_id = ?1 AND deployment_key = 'weth'
+     )`
+  ).bind(first.versionId, comet).run();
+  await reviewedIn(db, first.versionId, [ [ 'market', '1/weth' ] ]);
+
+  const second    = await seedCandidate(db, snapshot, { versionId: randomUUID(), attempt: 2 });
+  const inherited = await readImportOverlays(db, second.versionId);
+  const mainnet   = snapshot.networks.find(network => network.chainId === 1)!;
+  t.equal(inherited.comets.get('1/weth'), comet, 'the review an earlier attempt made is handed down with the Comet it reviewed');
+  t.equal(inherited.comets.get('1/usdc'), mainnet.markets.find(market => market.deploymentKey === 'usdc')!.contracts.comet,
+    'and what the version on decided, with the Comet it decided it for');
 });
 
 // renames a mainnet market of a version in place, as a review of it does

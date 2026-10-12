@@ -6,7 +6,7 @@ import { exceptionFor } from '../../../lib/computations/comet/asset-price.js';
 import { Comet, ERC20 } from '../../../lib/well-known/contracts/types.js';
 
 import type { Catalog } from '../../../src/registry/catalog.js';
-import { catalogOf } from '../../../src/registry/catalog.js';
+import { catalogOf, isServed, servedNetworks } from '../../../src/registry/catalog.js';
 
 import { loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
 
@@ -277,4 +277,34 @@ t.test('a network with no market the API serves is not one the catalog offers', 
   const deprecated = catalogOf(status('deprecated'));
   t.ok(deprecated.networks().some(network => network.key === SCROLL), 'a network of deprecated markets is');
   t.equal(deprecated.marketsOn(SCROLL).length, 1);
+});
+
+/*
+ * What is served is one rule, which the catalog, the public reads, the drift
+ * check and the comparison of two versions all ask: a market that is not
+ * disabled and names its Comet, on a network that has one.
+ */
+t.test('a market is served unless it is disabled, and a network while it serves one', async t => {
+  const usdc = marketsOf(snapshot.networks).find(market => market.contracts.comet === USDC)!;
+  t.ok(isServed(usdc), 'an enabled market is served');
+  t.ok(isServed({ ...usdc, status: 'deprecated' }), 'and so is a deprecated one');
+  t.notOk(isServed({ ...usdc, status: 'disabled' }), 'a disabled one is not');
+  t.notOk(isServed({ ...usdc, contracts: { ...usdc.contracts, comet: null } }), 'nor one that names no Comet');
+
+  const listed = (version: RegistrySnapshotV1) => servedNetworks(version)
+    .map(({ network, markets }) => `${network.key}: ${markets.map(market => market.deploymentKey).join(', ')}`);
+  t.same(listed(snapshot), [ `${MAINNET}: usdc, weth, usdt, wbtc`, 'base-mainnet: aero', `${SCROLL}: usdc` ],
+    'every network of the fixture serves every market it has');
+
+  const disabled: RegistrySnapshotV1 = {
+    ...snapshot,
+    networks: snapshot.networks.map(network => ({
+      ...network,
+      markets: network.markets.map(market => (
+        market.deploymentKey === 'weth' || network.key === SCROLL ? { ...market, status: 'disabled' as const } : market
+      )),
+    })),
+  };
+  t.same(listed(disabled), [ `${MAINNET}: usdc, usdt, wbtc`, 'base-mainnet: aero' ],
+    'a disabled market is left out of its network, and a network of disabled markets altogether');
 });

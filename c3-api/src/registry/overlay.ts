@@ -82,6 +82,16 @@ type NetworkOverlay = {
   priceExceptions:           OverlayPriceException[],
 };
 
+/*
+ * What a decision is held to. A stored decision is parsed again whenever it
+ * is read back: every import parses the ones it inherits, every overlay write
+ * to a draft parses every reviewed one the draft holds, whichever scopes it
+ * names, and reading a scope's overlay parses that scope's. One the parser
+ * refuses stops every import that inherits it and every review of the draft
+ * that holds it, so a release that makes a rule here stricter also takes what
+ * versions stored under the looser one, normalized as it is read, as
+ * storedExpiry does with an expiry.
+ */
 const MAX_TEXT      = 200;
 const MAX_PROVENANCE = 1000;
 const MAX_OVERRIDES  = 200;
@@ -380,6 +390,22 @@ function overlayOfMarket(market: MarketV1): MarketOverlay {
 }
 
 /*
+ * The decision a served price exception states. A remap names the feed it
+ * reads instead; the decimals beside it were read from that feed, not decided.
+ */
+function overlayOfException(exception: PriceExceptionV1): OverlayPriceException {
+  return exception.kind === 'deprecated_price_remap'
+    ? {
+        kind:                        exception.kind,
+        priceFeedAddress:            exception.priceFeedAddress,
+        replacementPriceFeedAddress: exception.replacementPriceFeed.address,
+        provenance:                  exception.provenance,
+        expiresAt:                   exception.expiresAt,
+      }
+    : exception;
+}
+
+/*
  * The digest an overlay audit event records, over the normalized overlay. It
  * identifies what was applied without storing the request body. Written as
  * canonical JSON, it names what the overlay says rather than the order its
@@ -467,22 +493,18 @@ function applyMarketOverlay(
 }
 
 /*
- * Builds one network of the snapshot. Markets are ordered by creation block
- * and then deployment key, as the wire contract fixes.
+ * What a network overlay decides, as the wire shape carries it: a remap with
+ * the decimals read for the feed it reads instead. An import builds its
+ * network from these, and an overlay write writes them onto the network's
+ * rows, so a decision is stored the same way whichever wrote it.
  */
-function applyNetworkOverlay(
-  identity: { chainId: number, key: string, upstreamKey: string, testnet: boolean },
+function networkDecisions(
   overlay: NetworkOverlay,
-  markets: MarketV1[],
   feeds: Map<Address, PriceFeedV1>,
-): NetworkV1 {
-  const scope = identity.key;
+  scope: string,
+): Pick<NetworkV1, 'displayName' | 'presentation' | 'priceExceptions'> {
   return {
-    chainId:     identity.chainId,
-    key:         identity.key,
-    upstreamKey: identity.upstreamKey,
-    displayName: overlay.displayName,
-    testnet:     identity.testnet,
+    displayName:  overlay.displayName,
     presentation: {
       assetDisplayOverrides:     overlay.assetDisplayOverrides,
       unwrappedCollateralAssets: overlay.unwrappedCollateralAssets,
@@ -496,6 +518,28 @@ function applyNetworkOverlay(
           expiresAt:            exception.expiresAt,
         }
       : exception),
+  };
+}
+
+/*
+ * Builds one network of the snapshot. Markets are ordered by creation block
+ * and then deployment key, as the wire contract fixes.
+ */
+function applyNetworkOverlay(
+  identity: { chainId: number, key: string, upstreamKey: string, testnet: boolean },
+  overlay: NetworkOverlay,
+  markets: MarketV1[],
+  feeds: Map<Address, PriceFeedV1>,
+): NetworkV1 {
+  const { displayName, presentation, priceExceptions } = networkDecisions(overlay, feeds, identity.key);
+  return {
+    chainId:     identity.chainId,
+    key:         identity.key,
+    upstreamKey: identity.upstreamKey,
+    displayName,
+    testnet:     identity.testnet,
+    presentation,
+    priceExceptions,
     markets: [ ...markets ].sort((left, right) => (
       left.creationBlock - right.creationBlock
         || (left.deploymentKey < right.deploymentKey ? -1 : left.deploymentKey > right.deploymentKey ? 1 : 0)
@@ -563,10 +607,13 @@ export type { MarketOverlay, NetworkOverlay, OverlayPriceException };
 export {
   applyMarketOverlay,
   applyNetworkOverlay,
+  feedOf,
+  networkDecisions,
   networkOverlayFeedAddresses,
   orderNetworks,
   overlayDigest,
   overlayFeedAddresses,
+  overlayOfException,
   overlayOfMarket,
   parseMarketOverlay,
   parseNetworkOverlay,

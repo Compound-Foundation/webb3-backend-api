@@ -7,8 +7,14 @@ import { readFileSync } from 'node:fs';
  * The type in lib/model/comet-registry.ts gives its shape to the compiler, and
  * nothing checks the shape at run time, so this test is the executable
  * description of the wire contract, held against the committed fixture:
- * exact key sets, value formats, ordering, and cross-field rules. Each check
- * collects every violation so a failing run lists all of them at once.
+ * exact key sets, value formats, the order of a network's presentation and
+ * price exceptions, and the network keys and market ids the schema keeps
+ * unique. The rules between fields are validateCandidate's, and
+ * validation.test.ts holds this fixture to them ('the frozen fixture passes
+ * every check'); the order of networks and markets is readSnapshot's, which
+ * d1-schema.test.ts holds it to. A copy of either here would be a second
+ * statement of a rule, free to drift from the one the registry applies. Each
+ * check collects every violation so a failing run lists all of them at once.
  */
 const FIXTURE_PATH = './tests/fixtures/registry/registry-snapshot-v1.json';
 const raw = readFileSync(FIXTURE_PATH, 'utf8');
@@ -145,12 +151,12 @@ t.test('top level and registry version', async t => {
       checkPattern(problems, version.sourceCommitSha, SHA1, 'registryVersion.sourceCommitSha');
       checkPattern(problems, version.checksum, SHA256, 'registryVersion.checksum');
     }
-    if (networks.length === 0) problems.push('snapshot.networks: expected at least one network');
+    if (!Array.isArray(snapshot.networks)) problems.push('snapshot.networks: expected an array');
   }
   t.same(problems, []);
 });
 
-t.test('networks are typed, unique, and ordered by chainId', async t => {
+t.test('networks are typed, with unique keys and sorted lists', async t => {
   const problems: Problems = [];
   networks.forEach((network, n) => {
     const where = `networks[${n}]`;
@@ -160,7 +166,7 @@ t.test('networks are typed, unique, and ordered by chainId', async t => {
     checkPattern(problems, network.upstreamKey, SLUG, `${where}.upstreamKey`);
     checkText(problems, network.displayName, `${where}.displayName`);
     checkBoolean(problems, network.testnet, `${where}.testnet`);
-    if (!Array.isArray(network.markets) || network.markets.length === 0) problems.push(`${where}.markets: expected at least one market`);
+    if (!Array.isArray(network.markets)) problems.push(`${where}.markets: expected an array`);
 
     const presentation = network.presentation;
     if (exactKeys(problems, presentation, PRESENTATION_KEYS, `${where}.presentation`)) {
@@ -195,17 +201,12 @@ t.test('networks are typed, unique, and ordered by chainId', async t => {
     }
   });
 
-  for (const field of ['chainId', 'key']) {
-    const values = networks.map(network => network[field]);
-    if (new Set(values).size !== values.length) problems.push(`networks: ${field} must be unique`);
-  }
-  for (let i = 1; i < networks.length; i++) {
-    if (!(networks[i - 1].chainId < networks[i].chainId)) problems.push(`networks[${i}]: not ordered by chainId`);
-  }
+  const keys = networks.map(network => network.key);
+  if (new Set(keys).size !== keys.length) problems.push('networks: key must be unique');
   t.same(problems, []);
 });
 
-t.test('markets are typed, unique, ordered, and have exactly one enabled default', async t => {
+t.test('markets are typed, with ids unique across the snapshot', async t => {
   const problems: Problems = [];
   markets.forEach(({ market, where }) => {
     if (!exactKeys(problems, market, MARKET_KEYS, where)) return;
@@ -229,45 +230,14 @@ t.test('markets are typed, unique, ordered, and have exactly one enabled default
         if (market.contracts[key] !== null) checkPattern(problems, market.contracts[key], ADDRESS, `${where}.contracts.${key}`);
       }
     }
-
-    const { capabilities, contracts, rewardAsset } = market;
-    if (isObject(capabilities) && isObject(contracts)) {
-      if ((capabilities.rewards || capabilities.accountRewards) && (contracts.rewards === null || rewardAsset === null)) {
-        problems.push(`${where}: rewards capabilities require contracts.rewards and rewardAsset`);
-      }
-      if (capabilities.rewards && isObject(rewardAsset) && rewardAsset.priceFeed === null) {
-        problems.push(`${where}: capabilities.rewards requires rewardAsset.priceFeed`);
-      }
-    }
   });
 
   const ids = markets.map(({ market }) => market.id);
   if (new Set(ids).size !== ids.length) problems.push('markets: id must be unique across the snapshot');
-
-  networks.forEach((network, n) => {
-    const list: any[] = Array.isArray(network.markets) ? network.markets : [];
-    const deploymentKeys = list.map(market => market.deploymentKey);
-    if (new Set(deploymentKeys).size !== deploymentKeys.length) problems.push(`networks[${n}].markets: deploymentKey must be unique within the network`);
-    const comets = list.map(market => market.contracts?.comet);
-    if (new Set(comets).size !== comets.length) problems.push(`networks[${n}].markets: contracts.comet must be unique within the network`);
-    for (let i = 1; i < list.length; i++) {
-      const [a, b] = [list[i - 1], list[i]];
-      if (a.creationBlock > b.creationBlock || (a.creationBlock === b.creationBlock && a.deploymentKey >= b.deploymentKey)) {
-        problems.push(`networks[${n}].markets[${i}]: not ordered by creationBlock then deploymentKey`);
-      }
-    }
-  });
-
-  const defaults = markets.filter(({ market }) => market.isDefault === true);
-  if (defaults.length !== 1) {
-    problems.push(`markets: expected exactly one default, found ${defaults.length}`);
-  } else if (defaults[0].market.status !== 'enabled') {
-    problems.push(`${defaults[0].where}: the default market must be enabled`);
-  }
   t.same(problems, []);
 });
 
-t.test('base, reward, and collateral assets are typed and consistent', async t => {
+t.test('base, reward, and collateral assets are typed', async t => {
   const problems: Problems = [];
   markets.forEach(({ market, where }) => {
     const base = market.baseAsset;
@@ -276,43 +246,28 @@ t.test('base, reward, and collateral assets are typed and consistent', async t =
       checkText(problems, base.displayName, `${where}.baseAsset.displayName`);
       checkBoolean(problems, base.isWrappedNative, `${where}.baseAsset.isWrappedNative`);
       checkFeed(problems, base.priceFeed, `${where}.baseAsset.priceFeed`);
-      if (market.collateralValueQuote === 'base') {
-        if (base.usdPriceFeed === null) problems.push(`${where}.baseAsset.usdPriceFeed: required when collateralValueQuote is base`);
-        else checkFeed(problems, base.usdPriceFeed, `${where}.baseAsset.usdPriceFeed`);
-      } else if (base.usdPriceFeed !== null) {
-        problems.push(`${where}.baseAsset.usdPriceFeed: must be null when collateralValueQuote is usd`);
-      }
+      if (base.usdPriceFeed !== null) checkFeed(problems, base.usdPriceFeed, `${where}.baseAsset.usdPriceFeed`);
     }
 
     if (market.rewardAsset !== null) {
       const reward = market.rewardAsset;
       if (exactKeys(problems, reward, REWARD_ASSET_KEYS, `${where}.rewardAsset`)) {
         checkToken(problems, reward.token, `${where}.rewardAsset.token`);
-        if (reward.priceFeed === null) {
-          if (reward.priceFeedQuote !== null) problems.push(`${where}.rewardAsset.priceFeedQuote: must be null without a priceFeed`);
-        } else {
-          checkFeed(problems, reward.priceFeed, `${where}.rewardAsset.priceFeed`);
-          if (!QUOTES.includes(reward.priceFeedQuote)) problems.push(`${where}.rewardAsset.priceFeedQuote: not one of ${QUOTES}`);
-          if (reward.priceFeedQuote === 'base' && market.collateralValueQuote !== 'base') {
-            problems.push(`${where}.rewardAsset.priceFeedQuote: base requires a base-quoted market`);
-          }
+        if (reward.priceFeed !== null) checkFeed(problems, reward.priceFeed, `${where}.rewardAsset.priceFeed`);
+        if (reward.priceFeedQuote !== null && !QUOTES.includes(reward.priceFeedQuote)) {
+          problems.push(`${where}.rewardAsset.priceFeedQuote: not one of ${QUOTES}`);
         }
       }
     }
 
     const collaterals: any[] = Array.isArray(market.collateralAssets) ? market.collateralAssets : [];
     if (!Array.isArray(market.collateralAssets)) problems.push(`${where}.collateralAssets: expected an array`);
-    const tokenAddresses = new Set<string>();
     collaterals.forEach((collateral, i) => {
       const at = `${where}.collateralAssets[${i}]`;
       if (!exactKeys(problems, collateral, COLLATERAL_KEYS, at)) return;
-      if (collateral.assetIndex !== i) problems.push(`${at}.assetIndex: expected contiguous index ${i}`);
+      checkInteger(problems, collateral.assetIndex, 0, 255, `${at}.assetIndex`);
       checkToken(problems, collateral.token, `${at}.token`);
       checkFeed(problems, collateral.priceFeed, `${at}.priceFeed`);
-      const address = collateral.token?.address;
-      if (tokenAddresses.has(address)) problems.push(`${at}.token.address: duplicate collateral token`);
-      if (address === base?.token?.address) problems.push(`${at}.token.address: collateral cannot be the base token`);
-      tokenAddresses.add(address);
     });
   });
   t.same(problems, []);

@@ -577,6 +577,23 @@ t.test('an overlay is replaced completely, and only while importing', async t =>
 
   const current = overlayOfNetwork(snapshot.networks.find(network => network.chainId === 1)!);
 
+  // what the network's rows hold, but for the id an exception row is given each time it is written
+  const rows = async () => ({
+    network: await db.prepare(
+      `SELECT display_name, metadata, reviewed FROM registry_networks WHERE registry_version_id = ?1 AND chain_id = 1`
+    ).bind(versionId).first(),
+    exceptions: (await db.prepare(
+      `SELECT exception.network_id, exception.price_feed_address, exception.kind, exception.fixed_price_value,
+              exception.fixed_price_decimals, exception.replacement_price_feed_address,
+              exception.replacement_price_feed_decimals, exception.provenance, exception.expires_at
+       FROM network_price_exceptions AS exception
+       JOIN registry_networks AS network ON network.id = exception.network_id
+       WHERE exception.registry_version_id = ?1 AND network.chain_id = 1
+       ORDER BY exception.price_feed_address`
+    ).bind(versionId).all()).results,
+  });
+  const imported = await rows();
+
   const unchanged = await server.fetch(...put(
     `/registry/v1/admin/versions/${versionId}/networks/1/overlay`,
     { reason: 'no change', overlay: current },
@@ -608,6 +625,13 @@ t.test('an overlay is replaced completely, and only while importing', async t =>
   t.equal(event?.scope_key, '1');
   t.equal(event?.reason, 'rename the network', 'the event records why');
   t.not(event?.previous_digest, event?.new_digest, 'and which overlay replaced which');
+
+  const restored = await server.fetch(...put(
+    `/registry/v1/admin/versions/${versionId}/networks/1/overlay`,
+    { reason: 'name the network as it was', overlay: current },
+  ));
+  t.equal((await restored.json() as { changed: boolean }).changed, true);
+  t.same(await rows(), imported, 'a network written back with the decisions it was imported with holds the rows the import wrote');
 
   const dropped = await server.fetch(...put(
     `/registry/v1/admin/versions/${versionId}/networks/1/overlay`,
@@ -753,6 +777,10 @@ t.test('a network overlay reads back as the draft holds it, and says what a chan
   t.equal((await server.fetch(...put(path, {
     reason: 'remap a feed', overlay: { ...before.overlay, priceExceptions: [ ...before.overlay.priceExceptions, remap ] },
   }))).status, 200);
+  t.equal(await db.prepare(
+    `SELECT replacement_price_feed_decimals FROM network_price_exceptions WHERE registry_version_id = ?1 AND kind = 'deprecated_price_remap'`
+  ).bind(versionId).first<number>('replacement_price_feed_decimals'), mainnet.markets[0]!.collateralAssets[0]!.priceFeed.decimals,
+    'the remap is stored with the decimals the version holds for that feed on the chain');
   const [ expired ] = mainnet.priceExceptions;
   await db.prepare(
     `UPDATE network_price_exceptions SET expires_at = '2020-01-01T00:00:00.000Z'
@@ -1318,9 +1346,10 @@ t.test('what a candidate changes against the active version is served while it i
   const changes = await response.json() as {
     status: string, comparedWith: string,
     markets: {
-      added:   Array<{ scope: string, reviewed: boolean }>,
-      removed: string[],
-      changed: Array<{ scope: string, field: string, before: unknown, after: unknown }>,
+      added:    Array<{ scope: string, reviewed: boolean }>,
+      removed:  string[],
+      changed:  Array<{ scope: string, field: string, before: unknown, after: unknown }>,
+      unserved: Array<{ scope: string, comet: string, now: { scope: string, status: string } | null }>,
     },
   };
   t.equal(changes.status, 'importing', 'a candidate that still imports is comparable');
@@ -1338,6 +1367,11 @@ t.test('what a candidate changes against the active version is served while it i
   );
   t.ok(changes.markets.changed.some(change => change.scope === '1/usdt' && change.field === 'status'),
     'including a market written unreviewed, which the version no longer offers');
+  t.same(
+    changes.markets.unserved.map(({ scope, now }) => ({ scope, now })),
+    [ { scope: '1/usdt', now: { scope: '1/usdt', status: 'disabled' } }, { scope: '1/wbtc', now: null } ],
+    'so the markets users of the version on would lose are named, with where the candidate holds each',
+  );
 
   t.equal((await server.fetch(`/registry/v1/admin/versions/${randomUUID()}/changes`, auth)).status, 404,
     'a version that does not exist has nothing to compare');

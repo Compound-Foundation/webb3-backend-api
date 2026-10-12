@@ -12,9 +12,10 @@ import { BigFixnum } from '../../lib/bigfixnum.js';
 import * as Evaluator  from '../../lib/symbolic/evaluator.js';
 import { MemoryCache } from '../../lib/symbolic/cache.js';
 
-import * as evm    from '../../lib/computations/evm.js';
-import * as comet  from '../../lib/computations/comet.js';
-import * as market from '../../lib/computations/market.js';
+import * as evm     from '../../lib/computations/evm.js';
+import * as comet   from '../../lib/computations/comet.js';
+import * as market  from '../../lib/computations/market.js';
+import * as rewards from '../../lib/computations/rewards.js';
 
 import * as marketHandlers from '../../src/market.js';
 import {
@@ -29,15 +30,15 @@ import { fixtureCatalog, loadRegistrySnapshotFixture } from '../util/registry-fi
 import '../../shim/node-self.js';
 
 /*
- * The summary of every market, on the real evaluator against a fake node,
- * counting what reaches the node. Each request to the node provider proxy is
- * a subrequest, of which a Worker invocation has a budget (README, "Workers
- * Plan"), so what the summary of every market costs has to grow with the
- * networks, not with the markets.
+ * The summary and the rewards of every market, on the real evaluator against
+ * a fake node, counting what reaches the node. Each request to the node
+ * provider proxy is a subrequest, of which a Worker invocation has a budget
+ * (README, "Workers Plan"), so what the summary of every market costs has to
+ * grow with the networks, not with the markets.
  *
- * This is where the batching of that summary is counted, and only here: what
- * the route asks the node is the cost that matters, however the handler and
- * the evaluator share the work out between them.
+ * This is where their batching is counted, and only here: what the route asks
+ * the node is the cost that matters, however the handler and the evaluator
+ * share the work out between them.
  *
  * It is also where one market's read failing at the node meets the real
  * computations: a price feed that reverts is that market's answer, and a call
@@ -65,6 +66,13 @@ const COMET = new Interface([
   'function getBorrowRate(uint) returns (uint)',
   'function totalsCollateral(address) view returns (uint128)',
   'function symbol() view returns (string)',
+  // the rewards of a market
+  'function baseBorrowMin() view returns (uint)',
+  'function baseMinForRewards() view returns (uint256)',
+  'function baseTrackingSupplySpeed() view returns (uint256)',
+  'function baseTrackingBorrowSpeed() view returns (uint256)',
+  'function trackingIndexScale() view returns (uint256)',
+  'function totalsBasic() view returns (tuple(uint64 baseSupplyIndex, uint64 baseBorrowIndex, uint64 trackingSupplyIndex, uint64 trackingBorrowIndex, uint104 totalSupplyBase, uint104 totalBorrowBase, uint40 lastAccrualTime, uint8 pauseFlags))',
 ]);
 
 type Call = { id: number, method: string, params: any[] };
@@ -105,6 +113,10 @@ function fakeNode(fault: Fault = () => undefined) {
         }
         case 'baseTokenPriceFeed': return [ entry!.baseAsset.priceFeed.address ];
         case 'symbol':             return [ symbols.get(to.toLowerCase()) ?? 'TKN' ];
+        case 'totalsBasic': {
+          const [ index, base ] = [ EthersBigNumber.from(10).pow(15), EthersBigNumber.from(10).pow(12) ];
+          return [ [ index, index, 0, 0, base, base, LATEST.timestamp, 0 ] ];
+        }
         default:                   return [ EthersBigNumber.from(10).pow(8) ];
       }
     })();
@@ -146,7 +158,7 @@ function context(evaluations: Promise<unknown>[] = []): UninstantiatedContext {
     flags,
     instantiateEvaluator: (_: string, overrides: { flags?: Flags.SomeFlags } = {}) => {
       const evaluator = Evaluator.instantiate(
-        { ...evm, ...comet, ...market } as any,
+        { ...evm, ...comet, ...market, ...rewards } as any,
         { cache, debug, flags: { ...flags, ...overrides.flags } },
       );
       // a handler takes evaluate off the evaluator, so the evaluations are kept where it reads it
@@ -190,6 +202,43 @@ t.test('the summary of every market makes four node requests per network', async
     t.equal(requests.length, 4, `${network}: the latest block, then three rounds of reads, whatever its market count`);
   }
   t.equal(node.requests.length, 4 * networks.length);
+
+  for (const { network, calls } of node.requests) {
+    const distinct = new Set(calls.map(({ method, params }) => JSON.stringify([ method, params ])));
+    t.equal(distinct.size, calls.length, `${network}: no call is sent twice in one batch`);
+  }
+});
+
+/*
+ * The rewards of every market cost the same per network. A reward feed that
+ * quotes a market's base asset — mainnet's WETH market values COMP in ETH —
+ * is converted to USD with one more price, read beside the reward price, not
+ * in a round of its own once the rates are in: mainnet takes as many
+ * requests as Base, which has no such market.
+ */
+t.test('the rewards of every market convert a reward price to USD in no round of its own', async t => {
+  const node = fakeNode();
+  serving(t, node);
+
+  const response = await marketHandlers.rewardsDappData(everyMarket(), context());
+  const body = await response.json() as Array<{ status: string }>;
+
+  t.equal(response.status, 200);
+  t.equal(body.length, catalog.markets().filter(entry => entry.comet.registry.market.capabilities.rewards).length,
+    'every market with rewards is answered');
+  t.ok(body.every(entry => entry.status === 'success'));
+
+  const weth = catalog.marketsOn('ethereum-mainnet').find(entry => entry.deploymentKey === 'weth')!.comet.registry.market;
+  const priceRead = (feed: string) => JSON.stringify([ weth.contracts.comet, `0x41976e09${feed.slice(2).padStart(64, '0')}` ]);
+  const reads = (request: { calls: Call[] }) => request.calls
+    .filter(({ method }) => method === 'eth_call')
+    .map(({ params: [ { to, data } ] }) => JSON.stringify([ to.toLowerCase(), data ]));
+  const converted = node.requests.find(request => reads(request).includes(priceRead(weth.rewardAsset!.priceFeed!.address)));
+  t.ok(converted !== undefined && reads(converted).includes(priceRead(weth.baseAsset.usdPriceFeed!.address)),
+    'the USD price of WETH is read in the request that reads COMP in ETH');
+
+  const requestsOn = (network: string) => node.requests.filter(request => request.network === network).length;
+  t.equal(requestsOn('ethereum-mainnet'), requestsOn('base-mainnet'), 'and mainnet makes as many requests as Base');
 
   for (const { network, calls } of node.requests) {
     const distinct = new Set(calls.map(({ method, params }) => JSON.stringify([ method, params ])));

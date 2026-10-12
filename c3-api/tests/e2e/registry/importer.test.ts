@@ -16,6 +16,7 @@ import { cacheDepsOf } from '../../../src/registry/cache.js';
 import { proxyTransport } from '../../../src/registry/enrichment.js';
 import { runInvocation } from '../../../src/registry/importer.js';
 import {
+  CreationReader,
   FeedReader,
   replaceMarketOverlay,
   replaceNetworkOverlay,
@@ -86,6 +87,9 @@ const recording: { responses: Record<string, string> } =
 const REWARD_FEED = snapshot.networks
   .find(network => network.chainId === 1)!.markets
   .find(market => market.deploymentKey === 'usdc')!.rewardAsset!.priceFeed!;
+
+// a chain that confirms every creation block a review states, which overlay-feeds.test.ts holds against one that does not
+const blocksConfirmed: CreationReader = async () => [];
 
 function word(value: number): string {
   return `0x${value.toString(16).padStart(64, '0')}`;
@@ -219,6 +223,61 @@ t.test('an import reads the source, the chain, and the reviewed overlay', async 
   t.equal(run?.status, 'completed');
   t.equal(run?.completed_count, 1, 'every root is checkpointed as done');
   t.equal(run?.registry_version_id, result.versionId, 'and the run names the version it produced');
+});
+
+/*
+ * The decisions under a deployment key were made for the Comet it named. A
+ * key the source gives another Comet brings that Comet in as a market nobody
+ * has reviewed — switched off, with none of the other's decisions — and the
+ * log says why the review was not inherited.
+ */
+t.test('a deployment key the source gives another Comet does not hand it the review', async t => {
+  const db = await freshDatabase();
+  await activateFixture(db);
+
+  // a Comet the chain answers for as the recording answers for the mainnet usdc one, under weth's key
+  const comet  = '0x1111111111111111111111111111111111111111';
+  const usdc   = '0xc3d688b66703497daa19211eedff47f25384cdc3';
+  const copied = JSON.stringify({ ...JSON.parse(usdcContent), comet });
+  const answer = chainStub();
+  const warned: unknown[][] = [];
+  const result = await runInvocation({
+    ...deps(db, [
+      { path: USDC_ROOT, content: usdcContent, sha: await gitBlobSha(usdcContent) },
+      { path: WETH_ROOT, content: copied,      sha: await gitBlobSha(copied) },
+    ]),
+    transportFor: () => async (calls: jsonRpc.Call[]) => answer(calls.map(call => JSON.parse(
+      JSON.stringify(call).replaceAll(comet.slice(2), usdc.slice(2)),
+    ))),
+    debug: { error: () => {}, warn: (...parameters: unknown[]) => warned.push(parameters) },
+  });
+  t.equal(result.kind, 'imported', 'the commit imports, and validates');
+
+  const [ network ] = await readSnapshot(db, result.versionId!);
+  const weth = network!.markets.find(market => market.deploymentKey === 'weth')!;
+  t.same({ comet: weth.contracts.comet, status: weth.status, displayName: weth.displayName, creationBlock: weth.creationBlock }, {
+    comet, status: 'disabled', displayName: 'weth', creationBlock: 0,
+  }, 'the key now names the new Comet, switched off, with none of the old one\'s decisions');
+  t.same((await readUnreviewed(db, result.versionId!)).markets, [ '1/weth' ], 'as a market nobody has reviewed');
+  t.equal(network!.markets.find(market => market.deploymentKey === 'usdc')!.status, 'enabled',
+    'while a Comet still under its own key keeps its review');
+  t.same(warned.filter(([ message ]) => String(message).startsWith('registry overlay')), [ [
+    'registry overlay not inherited: the deployment key names another Comet',
+    { market: '1/weth', reviewedFor: '0xa17581a9e3356d9a858b789d68b4d866e593ae94', comet },
+  ] ], 'and the log says why');
+
+  /*
+   * The version validated by itself, and switching it on would stop serving
+   * the old weth Comet and every market the commit no longer has: the status
+   * says so before anybody does.
+   */
+  const env    = await server.getWorker<Env>().getEnv();
+  const status = await registryStatus(env, cacheDepsOf(env));
+  t.same(status.candidates.validated.map(({ versionId, unserved }) => ({ versionId, unserved })), [ {
+    versionId: result.versionId,
+    unserved:  [ '1/usdt', '1/wbtc', '1/weth', '8453/aero', '534352/usdc' ],
+  } ], 'the status names every market of the active version it would stop serving');
+  t.ok(status.alerts.includes('candidate-drops-markets'), 'and raises it');
 });
 
 t.test('an already imported commit is a no-change outcome', async t => {
@@ -451,7 +510,7 @@ t.test('the first import of a registry is held for review, then reviewed in plac
     actor:         'test-admin',
     reason:        'bootstrap: review the mainnet usdc market',
     overlay:       overlayOfMarket(usdc),
-  }, async () => new Map([ [ REWARD_FEED.address, REWARD_FEED ] ]));
+  }, async () => new Map([ [ REWARD_FEED.address, REWARD_FEED ] ]), blocksConfirmed);
   t.equal(reviewed.changed, true, 'the review is applied to the rows the import wrote');
   t.same(await readUnreviewed(db, versionId), { networks: [], markets: [] }, 'and nothing is left unreviewed');
 
@@ -656,6 +715,81 @@ t.test('a root whose content does not match the tree fails alone, and spends an 
   t.same([ usdc?.status, usdc?.attempts ], [ 'completed', 1 ], 'usdc is imported');
   t.same([ weth?.status, weth?.attempts ], [ 'failed', 1 ], 'weth fails, having spent its attempt');
   t.match(weth?.last_error, /^SOURCE_BLOB_MISMATCH: /, 'and says why');
+});
+
+// a database whose batch committing the second root fails with `error`, writing none of it, and answers the rest
+function failingSecondCommit(db: D1Database, error: Error): D1Database {
+  let commits = 0;
+  let failing = false;
+  return new Proxy(db, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (property === 'prepare') {
+        return (sql: string) => {
+          if (/completed_count = completed_count \+ 1/.test(sql)) {
+            commits += 1;
+            failing  = commits === 2;
+          }
+          return target.prepare(sql);
+        };
+      }
+      if (property === 'batch') {
+        return async (statements: D1PreparedStatement[]) => {
+          if (failing) {
+            failing = false;
+            throw error;
+          }
+          return target.batch(statements);
+        };
+      }
+      return typeof(value) === 'function' ? (value as () => unknown).bind(target) : value;
+    },
+  }) as D1Database;
+}
+
+/*
+ * The database can fail a root's commit with nothing wrong with the root:
+ * D1 restarts under it to update its code, say. The root then says that the
+ * database did not answer, not that a fault interrupted the import, and
+ * spends its attempt all the same, unless the connection to the database was
+ * lost after the invocation imported a market. A fault is still a fault, and
+ * spends its attempt, even one that names a timeout setting.
+ */
+t.test('a root the database failed says so, and spends its attempt unless only the connection was lost', async t => {
+  const sha   = await gitBlobSha(usdcContent);
+  // usdc's content again, which the chain answers for, imported after usdc as a market nobody has reviewed
+  const roots = [
+    { path: USDC_ROOT, content: usdcContent, sha },
+    { path: 'deployments/mainnet/usds/roots.json', content: usdcContent, sha },
+  ];
+
+  for (const [ error, attempts, lastError ] of [
+    [ new Error('D1_ERROR: D1 DB reset because its code was updated.'), 1, 'the database did not answer' ],
+    [ new Error('D1_ERROR: D1 DB is overloaded. Too many requests queued.'), 1, 'the database did not answer' ],
+    [ new Error('D1_ERROR: Network connection lost.'), 0, 'the database did not answer' ],
+    [ new Error(`D1_ERROR: Can't read from request stream because client disconnected.`), 1, 'the database did not answer' ],
+    [ new Error('D1_ERROR: UNIQUE constraint failed: markets.id: SQLITE_CONSTRAINT'), 1, 'an unexpected error interrupted the import' ],
+    [ new TypeError(`Cannot read properties of undefined (reading 'timeoutMs')`), 1, 'an unexpected error interrupted the import' ],
+  ] as const) {
+    const db = await freshDatabase();
+    await activateFixture(db);
+
+    const result = await runInvocation({ ...deps(db, roots), db: failingSecondCommit(db, error) });
+    t.same([ result.kind, result.processed ], [ 'running', 2 ], `${error.message}: the invocation goes on past the root`);
+
+    const items = await db.prepare(
+      `SELECT deployment_key, status, attempts, last_error FROM sync_run_items WHERE sync_run_id = ?1 ORDER BY root_path`
+    ).bind(result.runId).all();
+    t.same(items.results, [
+      { deployment_key: 'usdc', status: 'completed', attempts: 1, last_error: null },
+      { deployment_key: 'usds', status: 'failed', attempts, last_error: lastError },
+    ], `the root it failed records ${attempts === 0 ? 'no attempt' : 'its attempt'}, and why`);
+    t.equal(
+      await db.prepare(`SELECT last_error FROM sync_runs WHERE id = ?1`).bind(result.runId).first<string | null>('last_error'),
+      lastError,
+      'which the run reports',
+    );
+  }
 });
 
 /*
@@ -1693,7 +1827,7 @@ t.test('a market whose invocation lost the run is not written over a review', as
           await replaceMarketOverlay(db, {
             versionId, chainId: 1, deploymentKey: 'usdc', actor: 'test-admin', reason: 'review the market',
             overlay: usdcOverlay('Reviewed USDC'),
-          }, rewardFeeds);
+          }, rewardFeeds, blocksConfirmed);
         }
         return answer(calls);
       };
@@ -1726,7 +1860,7 @@ t.test('a candidate reviewed while its import checks it is checked again, not en
     await replaceMarketOverlay(db, {
       versionId: (await openRun(db))!.registry_version_id, chainId: 1, deploymentKey: 'usdc',
       actor: 'test-admin', reason: 'renamed while the import checks it', overlay: usdcOverlay('Renamed meanwhile'),
-    }, rewardFeeds);
+    }, rewardFeeds, blocksConfirmed);
   });
   const interrupted = await runInvocation({ ...deps(db, roots), db: racing });
   t.equal(interrupted.kind, 'running', 'the import does not finish');

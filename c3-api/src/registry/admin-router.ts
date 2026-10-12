@@ -8,9 +8,10 @@ import { ApiError, methodNotAllowed } from '../http/errors.js';
 import { MAX_BODY_BYTES, jsonResponse, readJsonObject } from '../http/json.js';
 
 import { cacheDepsOf } from './cache.js';
-import { readFeeds } from './enrichment.js';
+import { readCreationBlocks, readFeeds } from './enrichment.js';
 import { registryStatus } from './status.js';
 import {
+  CreationReader,
   FeedReader,
   OverlayDocuments,
   replaceMarketOverlay,
@@ -48,6 +49,12 @@ function feedReader(env: Env): FeedReader {
   return async (network, addresses) => addresses.length === 0
     ? new Map()
     : readFeeds(transport(network), addresses, network);
+}
+
+// holds the creation blocks an overlay states against the chain, the same way
+function creationReader(env: Env): CreationReader {
+  const transport = transportFor(env);
+  return (network, markets) => readCreationBlocks(transport(network), markets, network);
 }
 
 /*
@@ -496,7 +503,7 @@ async function routeAdmin(
       if (typeof(body.digest) !== 'string' || !/^[0-9a-f]{16}$/.test(body.digest)) {
         throw new ApiError('BAD_REQUEST', `digest must be the 16 hex characters the proposal's review names`);
       }
-      return await applyProposal(context, versionId!, { digest: body.digest, reason }, feedReader(env));
+      return await applyProposal(context, versionId!, { digest: body.digest, reason }, feedReader(env), creationReader(env));
     }
     case 'readNetworkOverlay':
       return await getNetworkOverlay(context, versionId!, chainIdOf(second!));
@@ -542,9 +549,9 @@ async function routeAdmin(
         actor:         context.actor,
         reason:        requireReason(body),
         ...expectedDigestOf(body),
-      }, feedReader(env)));
+      }, feedReader(env), creationReader(env)));
     case 'overlays':
-      return jsonResponse(await replaceOverlays(context.db, overlayDocuments(body, versionId!, context.actor), feedReader(env)));
+      return jsonResponse(await replaceOverlays(context.db, overlayDocuments(body, versionId!, context.actor), feedReader(env), creationReader(env)));
   }
 }
 

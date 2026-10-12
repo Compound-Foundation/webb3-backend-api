@@ -28,11 +28,14 @@ const debug = Debug.MakeLogger([]).configure(process.env);
 
 const network = 'ethereum-mainnet' as const;
 const usdt    = fixtureCatalog().marketsOn(network).find(entry => entry.deploymentKey === 'usdt')!.comet;
+const weth    = fixtureCatalog().marketsOn(network).find(entry => entry.deploymentKey === 'weth')!.comet;
 const block   = { number: 50_000_000, timestamp: 1_790_000_000 };
 const context = { apiHost: '', nodeHost: '', nodeKey: '', network, contract: usdt };
 
 // the COMP / USD feed the fixture's USDT market values its rewards in
 const REWARD_FEED = '0xdbd020caef83efd542f4de03e3cf0c28a4428bd5';
+// the COMP / ETH feed the fixture's WETH market values its rewards in, quoted in its base asset
+const BASE_QUOTED_REWARD_FEED = '0x1b39ee86ec5979ba5c322b826b3ecb8c79991699';
 
 const read     = (value: number) => ({ status: 'success' as const, price: BigFixnum.from({ value }) });
 const reverted = { status: 'error' as const, message: 'execution reverted' };
@@ -95,6 +98,55 @@ t.test('the rewards of a market whose reward feed reverts are its error', async 
     rewardAsset:    { price: '50' },
     earnRewardsApr: '0.01',
   });
+});
+
+/*
+ * A reward feed that quotes the market's base asset — COMP in ETH, beside the
+ * WETH market — is reported in USD: the reward price times the USD price of
+ * the base asset, which is read beside it. That USD price is the last of the
+ * prices the rewards are valued in to answer for them.
+ */
+t.test('a reward price quoted in the base asset is reported in USD', async t => {
+  const reads: string[] = [];
+  const rewardsOf = (contract: typeof weth, answers: { rewardPrice: unknown, baseUsdPrice: unknown, supplyRewardsApr?: unknown }) => {
+    const { evaluate, pull1 } = evaluator({
+      marketRewards:    market.marketRewards,
+      baseBorrowMin:    stub(() => BigFixnum.from({ value: 100 })),
+      supplyRewardsApr: stub(() => answers.supplyRewardsApr ?? apr(1)),
+      borrowRewardsApr: stub(() => apr(2)),
+      getPrice:         stub(({ priceFeed }) => { reads.push(priceFeed.address); return answers.rewardPrice; }),
+      baseUsdPrice:     stub(() => { reads.push('baseUsdPrice'); return answers.baseUsdPrice; }),
+    });
+    return evaluate(pull1({ marketRewards: { ...context, contract, block } }));
+  };
+  const compInEth = { status: 'success' as const, price: BigFixnum.from({ decimals: 2, value: 2 }) };
+  const ethInUsd  = read(2_500);
+  const failure   = (message: string) => ({ chainId: 1, comet: { address: weth.address }, status: 'error', message });
+
+  t.match(await rewardsOf(weth, { rewardPrice: compInEth, baseUsdPrice: ethInUsd }), {
+    status:      'success',
+    rewardAsset: { price: '50.0' },
+  }, 'the reward price times the USD price of the base asset');
+  t.strictSame(reads.sort(), [ BASE_QUOTED_REWARD_FEED, 'baseUsdPrice' ].sort(), 'each read once');
+
+  reads.length = 0;
+  t.match(await rewardsOf(usdt, { rewardPrice: read(50), baseUsdPrice: ethInUsd }), { rewardAsset: { price: '50' } },
+    'a reward price quoted in USD is reported as it reads');
+  t.strictSame(reads, [ REWARD_FEED ], 'with nothing read to convert it');
+
+  const usdReverts = { status: 'error', message: 'the USD feed reverted' };
+  t.strictSame(await rewardsOf(weth, { rewardPrice: compInEth, baseUsdPrice: usdReverts }), failure('the USD feed reverted'),
+    'a USD price that reverts is the market\'s error');
+  t.strictSame(
+    await rewardsOf(weth, { rewardPrice: { status: 'error', message: 'the reward feed reverted' }, baseUsdPrice: usdReverts }),
+    failure('the reward feed reverted'),
+    'after the reward price',
+  );
+  t.strictSame(
+    await rewardsOf(weth, { rewardPrice: compInEth, supplyRewardsApr: { status: 'error', message: 'a rate reverted' }, baseUsdPrice: usdReverts }),
+    failure('a rate reverted'),
+    'and the rates measured with it',
+  );
 });
 
 t.test('a rewards summary reports a rate it could not measure', async t => {

@@ -21,6 +21,8 @@ type GetPrice = abiFunction.Spec<{
       address: Eth.Address,
       decimals: number,
     },
+    // a read whose revert the caller reports, or answers another way (asset-price.ts)
+    unreported?: true,
   },
   returns: PriceRead,
 }>;
@@ -64,10 +66,12 @@ const getPrice = implement({
     status: 'success',
     price:  BigFixnum.from({ decimals, value: u256 }),
   }),
-  reverted: ({ message }, { priceFeed, contract, network, blockNumber }) => {
-    reportRevert(message, priceFeed.address, contract.address, network, blockNumber);
+  reverted: ({ message }, { priceFeed, contract, network, blockNumber, unreported }) => {
+    if (unreported !== true) {
+      reportRevert(message, priceFeed.address, contract.address, network, blockNumber);
+    }
     return { status: 'error', message };
   },
 });
 
-export { GetPrice, PriceError, PriceRead, getPrice };
+export { GetPrice, PriceError, PriceRead, getPrice, reportRevert };

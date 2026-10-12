@@ -41,7 +41,7 @@ async function freshCandidate(): Promise<{ db: D1Database, versionId: string }> 
   return { db, versionId };
 }
 
-// the market's reviewed decisions under another label; the feeds it names are ones the version already knows
+// the market's reviewed decisions under another label; its feeds and its creation block are ones the version already knows
 function rename(db: D1Database, versionId: string, displayName: string, expectation: { expectedDigest?: string | null } = {}) {
   return replaceMarketOverlay(db, {
     versionId,
@@ -51,7 +51,7 @@ function rename(db: D1Database, versionId: string, displayName: string, expectat
     reason:        `call it ${displayName}`,
     overlay:       { ...overlayOfMarket(usdc), displayName },
     ...expectation,
-  }, async () => new Map<Address, PriceFeedV1>());
+  }, async () => new Map<Address, PriceFeedV1>(), async () => []);
 }
 
 const labelOf = (db: D1Database, versionId: string) => db.prepare(

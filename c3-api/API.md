@@ -40,8 +40,7 @@ reached, too:
   `/market/sepolia/all/summary`;
 - `testnets=include` on a route over every network
   (`/market/all-networks/all-contracts/…`) or on `/account/{address}/rewards`;
-- a testnet market in the `markets[]` of the transaction history, or a cursor
-  of it that reads one.
+- a testnet market in the `markets[]` of the transaction history.
 
 ```json
 { "error": { "code": "TESTNET_NOT_SERVED", "message": "testnets are not served: ethereum-sepolia", "requestId": "4f6c1a2e-…" } }
@@ -252,11 +251,13 @@ $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3
 ]
 ```
 
-Every day reads the base asset's USD price, and the price of a collateral the
-registry version remaps to another feed (`deprecated_price_remap`), from the
-feed the active version names: a day before that feed was deployed — before
-governance moved the market to it, say — answers `error`, or `partially` for
-the collateral ([Market status](#market-status)).
+Every day reads the base asset's USD price from the feed the active version
+names: a day before that feed was deployed — before governance moved the
+market to it, say — answers `error` ([Market status](#market-status)). A
+collateral the version remaps to another feed (`deprecated_price_remap`) is
+read from that feed, and where it does not answer — on a day before it was
+deployed — from the feed its Comet named that day; the collateral is
+`error`, and the day `partially`, only when neither answers.
 
 ## `/market/{network}/{address}/rewards/summary`
 ### description:
@@ -674,17 +675,18 @@ Retrieves comet transaction history for a given account address.
 
 Query parameters:
 - `limit` (optional): number of max items to retrieve. Default and max is 15.
-- `markets[]` (optional): array of markets filter to be included in the response. Default is every market whose history the active version serves. A market of a testnet is refused with `TESTNET_NOT_SERVED`, and so is a cursor that reads one ([The market registry](#the-market-registry)). (e.g. filter only Ethereum cUSDCv3 market `markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3`)
+- `markets[]` (optional): array of markets filter to be included in the response. Default is every market whose history the active version serves. A market of a testnet is refused with `TESTNET_NOT_SERVED` ([The market registry](#the-market-registry)). (e.g. filter only Ethereum cUSDCv3 market `markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3`)
 - `actions[]` (optional): array of actions to filter transactions by. Default is all actions. (e.g. filter only borrow actions `actions[]=Borrow`)
 - `cursor` (optional): The first response (with no cursor parameter) will return with a cursor value, to pass that cursor value will allow request to get more transaction history further in the past.
 
 A cursor holds a position in the logs of each market it reads. It stays
 valid across registry versions that read the same markets — a rollback, a new
 import of the same source, a market given a new label — and each page names
-the version that answered it; a cursor issued before the registry reads the
-markets of the networks it had, and only those count for it. A version that
-reads other markets ends it: the request answers `409`, and the client
-restarts pagination without a cursor:
+the version that answered it. A version that reads other markets ends it, as
+every version ends a cursor issued before the registry, whatever that one
+reads: the request answers `409`, and the client restarts pagination without
+a cursor. `cursorRegistryVersionId` names the version the cursor was issued
+against, and is `null` for a cursor issued before the registry:
 
 ```json
 {
@@ -699,6 +701,9 @@ restarts pagination without a cursor:
   }
 }
 ```
+
+A value that is not a cursor this API handed out is a `400` with the text
+`Cursor is invalid`.
 
 ```sh
 $ curl 'localhost:8787/account/0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5/transaction_history?limit=30&actions[]=Borrow&markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3'
@@ -955,7 +960,13 @@ imports some markets and then loses the node provider, or runs out of what a
 Worker is given in one invocation, fails the rest without spending their
 attempts: that failure is about the invocation, not about them. An invocation
 that imports nothing at all does spend them, so a source or a chain that
-answers for nothing ends the run instead of holding it open forever. An
+answers for nothing ends the run instead of holding it open forever. A root
+the database fails under — restarted to update its code, say, or overloaded —
+records `the database did not answer`, and a later request attempts it again.
+It spends its attempt whether or not the request has imported a root, unless
+D1 says the connection to it was lost or a statement ran out of its time or
+CPU: such an attempt is given back once the request has imported a root, as
+for the node provider. An
 invocation stopped outright while it imports a root — by a deploy, or past
 the time or CPU a Worker is given — writes nothing more, and spends that
 root's attempt: the invocation that takes the run over records it as failed,
@@ -1068,6 +1079,10 @@ under that version's `versionId`, and its drifts stay raised. `chainCheck` is
 `null` until a version has been checked. Nothing is changed or switched on
 because of it.
 
+Each version under `candidates.validated` carries `unserved`: the markets of
+the active version whose Comet it serves under no key of the same chain, by
+their keys in the active version, or `[]`.
+
 `alerts` is that state reduced to the conditions worth acting on, so a monitor
 can check that it is empty without knowing the registry's rules:
 
@@ -1077,10 +1092,11 @@ can check that it is empty without knowing the registry's rules:
 | `no-active-version` | nothing is activated, so every market route answers `503` |
 | `candidate-awaiting-review` | a draft is held for review and no import is running: somebody has to review it and validate it, or discard it |
 | `candidate-awaiting-activation` | a version newer than any ever switched on validated, and is waiting to be — what the scheduled import produces for a new commit; `candidates.validated` lists it. It holds until a version at least that new is switched on |
+| `candidate-drops-markets` | a version `candidates.validated` lists would stop serving a market the active version serves: its `unserved` names each, by its key in the active version — a deployment the source dropped, renamed to a key nobody has reviewed, or whose key it gave to another Comet, or a market a review switched off. Nothing holds such a version back, and it can be switched on; `GET /registry/v1/admin/versions/{version_id}/changes` says where each Comet went (`markets.unserved`). It holds until a version at least that new is switched on |
 | `commit-rejected` | the newest version imported every root of its commit and is invalid, so discovery no longer imports that commit by itself; `sync.rejectedCommit` names it. It holds until a newer version exists — a forced attempt, or a new commit |
 | `chain-drift` | the version on stores a price feed or a collateral asset its market's Comet no longer answers with: governance changed the market on chain after the import, and the source did not move; `chainCheck.drifts` names each. It holds until a check of the version on finds it agrees with the chain — a version imported again with `forceNewAttempt`, which reads the chain anew, switched on, and checked at the next hourly invocation — or the chain changes back. A version switched on is taken to drift as the one before it did until it has been checked, and a network the check could not read keeps the drifts last found there |
 | `last-sync-failed` | the most recent import run ended `failed`, and `sync.lastRun.lastError` says how: `validation failed` is a draft that failed its checks, which `GET /registry/v1/admin/versions/{version_id}` lists for the version `sync.lastRun.registryVersionId` names, and `cancelled by <actor>: <reason>` a run somebody cancelled. A root that fails does not fail the run, and neither do the checks of a run held for review: it completes, its draft left open |
-| `sync-failing` | the import that is running keeps failing: the last root it attempted failed, or an invocation has failed since before attempting one, and the roots left failed have spent two attempts or more between them — two roots once, or one root twice. One failure raises nothing, and neither does an attempt given back because the invocation had imported a market before it lost GitHub or the node provider. An attempt whose invocation was stopped in the middle of it — a deploy, or a Worker past its time or CPU — has failed too, once that invocation's lease has run out. Each attempt moves the run, so attempts that fail never leave it stalled. It ends once no root is left to attempt, each imported or given up after five attempts, and one that gave roots up then ends `failed`, its draft unable to validate without them, unless it is held for review: then it completes, its draft left open. An invocation that fails before it attempts a root moves nothing: a run every invocation fails on that way is `sync-stalled` as well |
+| `sync-failing` | the import that is running keeps failing: the last root it attempted failed, or an invocation has failed since before attempting one, and the roots left failed have spent two attempts or more between them — two roots once, or one root twice. One failure raises nothing, and neither does an attempt given back because the invocation had imported a market before it lost GitHub, the node provider or its connection to the database. An attempt whose invocation was stopped in the middle of it — a deploy, or a Worker past its time or CPU — has failed too, once that invocation's lease has run out. Each attempt moves the run, so attempts that fail never leave it stalled. It ends once no root is left to attempt, each imported or given up after five attempts, and one that gave roots up then ends `failed`, its draft unable to validate without them, unless it is held for review: then it completes, its draft left open. An invocation that fails before it attempts a root moves nothing: a run every invocation fails on that way is `sync-stalled` as well |
 | `sync-stalled` | a run says it is running, no invocation holds its lease — given back by an invocation that left work behind or failed, or run out — and none of its roots has moved for two hours, by when two hourly invocations should have continued it |
 | `sync-overdue` | the source has not been checked for more than twice the configured interval |
 | `snapshot-not-cached` | the active version's bytes are not in the cache, so every cold isolate hydrates it from D1 again |
@@ -1190,10 +1206,18 @@ finish`; the others keep their status and attempts.
 The run's draft stays `importing`, so the status raises `last-sync-failed`
 and `candidate-awaiting-review`, and discovery leaves its commit alone as
 one held for review. Fix what failed the run, then send
-`POST /registry/v1/admin/sync` with `forceNewAttempt`: a new attempt, which
-closes the draft once it succeeds. Cancelling fixes nothing by itself — a
-decision the active version stores, which a release no longer takes, fails
-the new attempt the same way until a release reads it again.
+`POST /registry/v1/admin/sync` with `forceNewAttempt`: a new attempt of the
+commit the tracked ref names now. If that is still the run's commit —
+`sourceCommitSha` in the cancel's answer — the attempt closes the draft once
+it succeeds. If the ref has moved on since the run started, the attempt
+imports the newer commit and leaves the run's draft open, as every draft of
+an older commit is left, since reviews do not carry across commits: validate
+that draft — `registryVersionId` in the cancel's answer — to close it (one
+that is missing roots ends `invalid`), or, to keep what was reviewed on it,
+send that `sourceCommitSha` with `forceNewAttempt` instead. Cancelling fixes
+nothing by itself — a decision the active version stores, which a release no
+longer takes, fails the new attempt the same way until a release reads it
+again.
 
 ## `GET /registry/v1/admin/versions`
 ### description:
@@ -1412,6 +1436,19 @@ unreviewed. It takes the same body, with the market's document as
 as the network route does, and reads the feeds it introduces — the USD feed
 and the reward feed — the same way. A `rewardPriceFeed` on a market whose
 rewards contract names no reward token is refused with `409`.
+
+A `creationBlock` the document changes is held against the chain, unless it
+is `0`: it must be the block the market's Comet was deployed in — the Comet
+has code at that block and none at the block before it — and not past the
+chain's latest block. Every index of the market starts there, and a wrong one
+fails the routes that read the market, those over all networks among them. A
+block the chain contradicts is refused with `422` and `details.code`
+`OVERLAY_CREATION_BLOCK_WRONG`, whose message names the block and says
+whether it is before the deployment, after it, or past the latest block, and
+nothing is written; a node provider that did not answer is `503`, worth
+trying again. A document that keeps the block the version holds reads nothing
+of the chain for it, and a market switched off is held to the same rule, so
+switching it on later keeps a block that was checked.
 
 It also states how the frontend lists the market. `displayName` is its label,
 `slug` — lowercase letters, digits, dots and hyphens, or `null` — is what the
@@ -1636,6 +1673,19 @@ under `markets.added` whole, with everything its import read from the source
 and the chain, and `reviewed: false` until someone describes it. With no
 version on, `comparedWith` is `null` and everything is added.
 
+`markets.removed` lists the keys the version no longer has; `markets.unserved`
+says what users of the version on lose. It names every Comet the version on
+serves that this version serves under no key of the same chain: a deployment
+the source dropped, one it renamed to a key nobody has reviewed yet, one whose
+key it gave to another Comet, and one a review switched off. Each is named by
+the `scope` the version on serves it under, with its `comet` and `now`: the
+`scope` and `status` this version holds it under — always `disabled` — or
+`null` where it holds it nowhere. So a Comet renamed and reviewed under its new
+key is `removed` and `added` but not `unserved`, while a key given to another
+Comet is not `removed`: the old Comet is `unserved`, and the new one is that
+key's `contracts.comet` under `changed`, imported as a market nobody has
+reviewed, with none of the old Comet's decisions.
+
 A change is one field on a flattened path, with both answers. Lists are
 compared by position with their length beside them, so a collateral the
 source adds reads as a longer list and one more entry.
@@ -1650,7 +1700,7 @@ source adds reads as a longer list and one more entry.
     "added": [
       { "scope": "8453/usdt", "reviewed": false, "market": { "deploymentKey": "usdt", "status": "disabled", "...": "..." } }
     ],
-    "removed": [],
+    "removed": [ "1/wbtc" ],
     "changed": [
       {
         "scope": "42161/usdc",
@@ -1658,6 +1708,9 @@ source adds reads as a longer list and one more entry.
         "before": "0x50834f3163758fcc1df9973b6e91f0f0f0434ad3",
         "after": "0x880d36763bb470cd395b7d6c76b50446fa70ace5"
       }
+    ],
+    "unserved": [
+      { "scope": "1/wbtc", "comet": "0xe85dc543813b8c2cfeaac371517b925a166a9293", "now": null }
     ]
   }
 }
