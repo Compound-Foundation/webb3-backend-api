@@ -51,13 +51,16 @@ t.test('a path no route matches is a 404 in the envelope', async t => {
  * A path of four segments or more is taken by the pattern of the market and
  * governance routes, /{resource}/{network}/{contract}/{endpoint}, whatever
  * its first segment, and one they do not serve is answered as a malformed
- * parameter of theirs is, as it always has been (API.md, "Errors").
+ * parameter of theirs is, as it always has been (API.md, "Errors"). A market
+ * endpoint that does not exist is that before it is a testnet.
  */
 t.test('a path of four segments no route matches is a 400 in plain text', async t => {
   for (const [ path, message ] of [
     [ '/nothing/here/at/all', 'Error: Bad network here' ],
     [ '/nothing/mainnet/all/summary', 'Error: Not a valid resource API' ],
     [ '/market/mainnet/all/nothing', 'Error: Not a valid market API endpoint' ],
+    [ '/market/sepolia/all/nothing', 'Error: Not a valid market API endpoint' ],
+    [ '/market/all-networks/all-contracts/nothing?testnets=include', 'Error: Not a valid market API endpoint' ],
     [ `/account/${ADDRESS}/rewards/more`, `Error: Bad network ${ADDRESS}` ],
   ] as const) {
     const response = await get(path);

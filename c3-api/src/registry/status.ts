@@ -1,5 +1,7 @@
 import type { Env } from '../../entrypoint.js';
 
+import { marketKey } from '../../lib/model/comet-registry.js';
+
 import { cacheStatus } from './cache.js';
 import type { CacheDeps } from './cache.js';
 import { registryConfig } from './config.js';
@@ -23,6 +25,7 @@ type Alert =
   | 'no-active-version'
   | 'candidate-awaiting-review'
   | 'candidate-awaiting-activation'
+  | 'candidate-drops-markets'
   | 'commit-rejected'
   | 'chain-drift'
   | 'last-sync-failed'
@@ -91,6 +94,8 @@ type RegistryStatus = {
       attempt:     number,
       createdAt:   string,
       validatedAt: string | null,
+      // the markets of the active version whose Comet it does not serve, by their keys there
+      unserved:    string[],
     }>,
     invalid: number,
   },
@@ -135,6 +140,24 @@ type CountRow = { version_id: string, markets?: number, networks?: number };
 
 // at most this many open drafts are listed; there is never more than a handful in a healthy environment
 const MAX_CANDIDATES = 20;
+
+/*
+ * Once a version is on, the scheduled import validates a new commit by
+ * itself, and the result waits for somebody to switch it on. Only what is
+ * newer than every version ever switched on is news: a version rolled back
+ * from, or one skipped for a newer one, is not raised again when a rollback
+ * goes further back. These are the newest of them, as many as are listed.
+ */
+const AWAITING_ACTIVATION = `
+  SELECT version.id
+  FROM registry_versions AS version
+  WHERE version.status = 'validated'
+    AND version.created_at > COALESCE((
+      SELECT MAX(activated.created_at)
+      FROM registry_versions AS activated
+      WHERE EXISTS (SELECT 1 FROM registry_activations WHERE registry_version_id = activated.id)
+    ), '')
+  ORDER BY version.created_at DESC LIMIT ?1`;
 
 function countsBy(rows: CountRow[] | undefined, field: 'markets' | 'networks'): Map<string, number> {
   return new Map((rows ?? []).map(row => [ row.version_id, row[field] ?? 0 ]));
@@ -242,7 +265,9 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
   const now = deps.now?.() ?? new Date();
   const db  = deps.db;
 
-  const [ state, active, run, candidates, unreviewedMarkets, unreviewedNetworks, lastItem, invalid, validated, rejected ] = await db.batch([
+  const [
+    state, active, run, candidates, unreviewedMarkets, unreviewedNetworks, lastItem, invalid, validated, unserved, rejected,
+  ] = await db.batch([
     db.prepare(`SELECT active_version_id, last_upstream_checked_at FROM registry_state WHERE singleton_id = 1`),
     db.prepare(
       `SELECT version.id AS id, version.snapshot_checksum AS checksum,
@@ -309,23 +334,37 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
        WHERE item.sync_run_id = (SELECT id FROM sync_runs ORDER BY started_at DESC LIMIT 1)`
     ).bind(now.toISOString()),
     db.prepare(`SELECT COUNT(*) AS count FROM registry_versions WHERE status = 'invalid'`),
-    /*
-     * Once a version is on, the scheduled import validates a new commit by
-     * itself, and the result waits for somebody to switch it on. Only what is
-     * newer than every version ever switched on is news: a version rolled
-     * back from, or one skipped for a newer one, is not raised again when a
-     * rollback goes further back.
-     */
     db.prepare(
       `SELECT version.id, version.attempt, version.created_at, version.validated_at
        FROM registry_versions AS version
-       WHERE version.status = 'validated'
-         AND version.created_at > COALESCE((
-           SELECT MAX(activated.created_at)
-           FROM registry_versions AS activated
-           WHERE EXISTS (SELECT 1 FROM registry_activations WHERE registry_version_id = activated.id)
-         ), '')
-       ORDER BY version.created_at DESC LIMIT ?1`
+       WHERE version.id IN (${AWAITING_ACTIVATION})
+       ORDER BY version.created_at DESC`
+    ).bind(MAX_CANDIDATES),
+    /*
+     * What each of them would stop serving, switched on: every market the
+     * active version serves whose Comet it serves under no key of the same
+     * chain. A dropped deployment, a renamed one nobody has reviewed under
+     * its new key, and a key the source gave another Comet all read the same
+     * here, and every one of them is a market users lose.
+     */
+    db.prepare(
+      `SELECT candidate.id AS version_id, network.chain_id, market.deployment_key
+       FROM registry_versions AS candidate
+       JOIN registry_state AS state ON state.singleton_id = 1
+       JOIN markets AS market ON market.registry_version_id = state.active_version_id
+       JOIN registry_networks AS network ON network.id = market.network_id
+       JOIN market_contracts AS comet ON comet.market_id = market.id AND comet.role = 'comet'
+       WHERE candidate.id IN (${AWAITING_ACTIVATION})
+         AND market.status <> 'disabled'
+         AND NOT EXISTS (
+           SELECT 1
+           FROM markets AS kept
+           JOIN registry_networks AS kept_network ON kept_network.id = kept.network_id
+           JOIN market_contracts AS kept_comet ON kept_comet.market_id = kept.id AND kept_comet.role = 'comet'
+           WHERE kept.registry_version_id = candidate.id AND kept.status <> 'disabled'
+             AND kept_network.chain_id = network.chain_id AND kept_comet.address = comet.address
+         )
+       ORDER BY network.chain_id, market.deployment_key`
     ).bind(MAX_CANDIDATES),
     /*
      * A commit discovery has stopped importing: the newest version there is
@@ -354,8 +393,18 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
   const runRow       = (run.results?.[0] ?? null) as RunRow | null;
   const importing    = (candidates.results ?? []) as CandidateRow[];
   const invalidCount = ((invalid.results?.[0] ?? { count: 0 }) as { count: number }).count;
+  const dropped      = new Map<string, string[]>();
+  for (const row of (unserved.results ?? []) as Array<{ version_id: string, chain_id: number, deployment_key: string }>) {
+    dropped.set(row.version_id, [ ...(dropped.get(row.version_id) ?? []), marketKey(row.chain_id, row.deployment_key) ]);
+  }
   const awaiting     = ((validated.results ?? []) as Array<{ id: string, attempt: number, created_at: string, validated_at: string | null }>)
-    .map(version => ({ versionId: version.id, attempt: version.attempt, createdAt: version.created_at, validatedAt: version.validated_at }));
+    .map(version => ({
+      versionId:   version.id,
+      attempt:     version.attempt,
+      createdAt:   version.created_at,
+      validatedAt: version.validated_at,
+      unserved:    dropped.get(version.id) ?? [],
+    }));
   const rejectedRow  = (rejected.results?.[0] ?? null) as { id: string, source_commit_sha: string, attempt: number, created_at: string } | null;
   const items        = (lastItem.results?.[0] ?? null) as { last_item_at: string | null, failed_attempts: number, stopped: number } | null;
 
@@ -410,6 +459,15 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
   }
   if (awaiting.length > 0) {
     alerts.push('candidate-awaiting-activation');
+  }
+  if (awaiting.some(version => version.unserved.length > 0)) {
+    /*
+     * Nothing holds such a version back: the scheduled import validates it
+     * like any other, and switching it on is allowed. Upstream removing a
+     * deployment is upstream's decision; what this asks is that somebody
+     * sees which markets go before they do.
+     */
+    alerts.push('candidate-drops-markets');
   }
   if (rejectedRow !== null) {
     alerts.push('commit-rejected');

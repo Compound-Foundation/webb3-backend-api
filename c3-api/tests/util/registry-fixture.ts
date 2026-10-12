@@ -6,7 +6,7 @@ import type { Address, MarketV1, NetworkV1, RegistryComet, RegistrySnapshotV1 } 
 import type { Catalog } from '../../src/registry/catalog.js';
 import { catalogOf } from '../../src/registry/catalog.js';
 import type { NetworkOverlay } from '../../src/registry/overlay.js';
-import { orderNetworks } from '../../src/registry/overlay.js';
+import { orderNetworks, overlayOfException } from '../../src/registry/overlay.js';
 import {
   activateVersion,
   createCandidate,
@@ -199,20 +199,15 @@ async function activateSeeded(db: D1Database, versionId: string): Promise<void> 
 /*
  * The decisions a network of a snapshot states, as the network overlay route
  * takes them. Production reads a network's overlay from its rows rather than
- * from the wire shape, so this mapping is the tests' own.
+ * from the wire shape, so this mapping is the tests' own; an exception is
+ * mapped as production maps one it reads from a row (overlayOfException).
  */
 function overlayOfNetwork(network: NetworkV1): NetworkOverlay {
   return {
     displayName:               network.displayName,
     assetDisplayOverrides:     network.presentation.assetDisplayOverrides,
     unwrappedCollateralAssets: network.presentation.unwrappedCollateralAssets,
-    priceExceptions:           network.priceExceptions.map(exception => exception.kind !== 'deprecated_price_remap' ? exception : {
-      kind:                        exception.kind,
-      priceFeedAddress:            exception.priceFeedAddress,
-      replacementPriceFeedAddress: exception.replacementPriceFeed.address,
-      provenance:                  exception.provenance,
-      expiresAt:                   exception.expiresAt,
-    }),
+    priceExceptions:           network.priceExceptions.map(overlayOfException),
   };
 }
 

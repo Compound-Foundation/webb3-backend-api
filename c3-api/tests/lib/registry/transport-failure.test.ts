@@ -1,5 +1,6 @@
 import t from 'tap';
 
+import { isUnreachable } from '../../../src/registry/cache.js';
 import { RegistryError, RegistryErrorCode, isTransportFailure } from '../../../src/registry/errors.js';
 import { ERROR_STATUS } from '../../../src/registry/router.js';
 
@@ -45,6 +46,40 @@ t.test('what the source or the chain said about the root is the root', async t =
   t.equal(isTransportFailure(new Error('no such column: markets.slug')), false,
     'and so is a programming error, which must not look like a hiccup');
   t.equal(isTransportFailure('not an error at all'), false);
+});
+
+/*
+ * A timeout is told by a message that says something timed out. A fault
+ * that only names a timeout setting would otherwise give a root its attempt
+ * back, and be answered as a service that did not answer.
+ */
+t.test('a timeout is the carrier, and a fault that names one is not', async t => {
+  for (const message of [
+    'The request timed out',
+    'D1_ERROR: D1 DB storage operation exceeded timeout which caused object to be reset.',
+  ]) {
+    t.equal(isTransportFailure(new Error(message)), true, `"${message}" is the carrier`);
+    t.equal(isUnreachable(new Error(message)), true, 'and the database not answering');
+  }
+
+  const fault = new TypeError(`Cannot read properties of undefined (reading 'timeoutMs')`);
+  t.equal(isTransportFailure(fault), false, 'a fault that names a timeout setting is not the carrier');
+  t.equal(isUnreachable(fault), false, 'nor the database not answering');
+});
+
+// every failure D1's documentation says to retry, in its own words
+t.test('a failure D1 says to retry is the database not answering', async t => {
+  for (const message of [
+    'D1_ERROR: D1 DB reset because its code was updated.',
+    'D1_ERROR: Internal error while starting up D1 DB storage caused object to be reset.',
+    'D1_ERROR: Network connection lost.',
+    'D1_ERROR: Replica disconnected from primary.',
+    'D1_ERROR: Internal error in D1 DB storage caused object to be reset.',
+    'D1_ERROR: Cannot resolve D1 DB due to transient issue on remote node.',
+    `D1_ERROR: Can't read from request stream because client disconnected.`,
+  ]) {
+    t.equal(isUnreachable(new Error(message)), true, `"${message}" is the database not answering`);
+  }
 });
 
 /*

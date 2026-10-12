@@ -201,10 +201,9 @@ What that means for the endpoints:
 - transaction history cursors carry the version they were issued against,
   and the markets it reads. A cursor stays valid across versions that read
   the same markets; one from a version that read others is refused with
-  `409 REGISTRY_VERSION_CHANGED` and the client restarts pagination. A cursor
-  issued before the registry is accepted once and upgraded, and from then on
-  reads, and is compared on, the networks it had: a version that adds history
-  on another network does not end it;
+  `409 REGISTRY_VERSION_CHANGED` and the client restarts pagination. So is a
+  cursor issued before the registry, which carries no version, whatever it
+  reads;
 - routes that resolve no market — V2 and gas price — never read `APP_DB`,
   and governance reads it only to describe proposal actions. The proposal
   list describes the actions of the page it answers against the static
@@ -307,10 +306,11 @@ An import writes every market it finds. What the source and the chain state
 — addresses, tokens, decimals, feeds, collateral — it reads itself; what they
 cannot state — names, whether a market is served, its capabilities, the unit
 its base is quoted in, its reward feed, price exceptions — is a reviewed
-decision, inherited from the active version. A market no version has
-reviewed is written disabled, with every capability off, and marked
-unreviewed: its rows exist and can be reviewed in place, and until then it
-changes nothing the API serves.
+decision, inherited from the active version, a market's for the Comet they
+were made for. A market no version has reviewed — a deployment key the source
+has given another Comet among them — is written disabled, with every
+capability off, and marked unreviewed: its rows exist and can be reviewed in
+place, and until then it changes nothing the API serves.
 
 The first import of an environment has nothing to inherit, so every market
 arrives unreviewed. That run imports the whole source and then holds the
@@ -559,10 +559,10 @@ Unichain and Ronin (`src/registry/source/roots.ts`).
 
 Testnets are not served: the registry does not import them, so no market of
 one can be resolved. A request that names one — a testnet network of a
-market route, `testnets=include`, a testnet market in the transaction
-history, or a cursor of it that reads one — is answered `400` with the code
-`TESTNET_NOT_SERVED` ([API.md](./API.md#the-market-registry)). Which networks
-are testnets is what `lib/well-known/networks` defines.
+market route, `testnets=include`, or a testnet market in the transaction
+history — is answered `400` with the code `TESTNET_NOT_SERVED`
+([API.md](./API.md#the-market-registry)). Which networks are testnets is what
+`lib/well-known/networks` defines.
 
 ## Adding a New Network
 

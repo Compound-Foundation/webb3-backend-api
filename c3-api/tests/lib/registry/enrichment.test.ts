@@ -6,7 +6,7 @@ import * as Fallible from '../../../lib/fallible/fallible.js';
 
 import type * as jsonRpc from '../../../lib/json-rpc.js';
 
-import { ChainEndpoint, MAX_CALLS_PER_BATCH, enrichMarket, proxyTransport } from '../../../src/registry/enrichment.js';
+import { ChainEndpoint, MAX_CALLS_PER_BATCH, enrichMarket, proxyTransport, readCreationBlocks } from '../../../src/registry/enrichment.js';
 import { parseDeploymentPath, parseRoot } from '../../../src/registry/source/roots.js';
 import { isRegistryError } from '../../../src/registry/errors.js';
 
@@ -351,4 +351,59 @@ t.test('a node provider that does not answer is cut at its deadline', async t =>
   const cut = await enrichMarket(stalled, root).then(() => null, (error: unknown) => error);
   t.equal((cut as Error).message, 'the node provider did not answer within 0.05 seconds',
     'an answer whose body stalls is cut by the same deadline');
+});
+
+/*
+ * The block a Comet was deployed in is the one where it has code and had none
+ * the block before. A block past the latest one is no block yet, so the code
+ * is asked only at the blocks the chain has reached.
+ */
+t.test('a creation block is held against the code its Comet has there and the block before', async t => {
+  const comet    = '0xc3d688b66703497daa19211eedff47f25384cdc3';
+  const deployed = 15331586;
+  const head     = deployed + 1_000;
+  const batches: string[][] = [];
+  const transport = async (calls: jsonRpc.Call[]) => {
+    batches.push(calls.map(call => [ call.method, ...call.params as string[] ].join(' ')));
+    return calls.map(call => call.method === 'eth_blockNumber'
+      ? { result: `0x${head.toString(16)}` }
+      : { result: Number.parseInt(call.params[1] as string, 16) >= deployed ? '0x6080604052' : '0x' });
+  };
+  const market = (scope: string, block: number) => ({ scope, comet, block } as const);
+
+  t.same(await readCreationBlocks(transport, [ market('overlay', deployed) ], 'ethereum-mainnet'), [],
+    'the block it was deployed in is right');
+  t.same(batches, [
+    [ 'eth_blockNumber' ],
+    [ `eth_getCode ${comet} 0x${deployed.toString(16)}`, `eth_getCode ${comet} 0x${(deployed - 1).toString(16)}` ],
+  ], 'read in two round trips: the latest block, then the code at the block and at the one before it');
+
+  batches.length = 0;
+  t.same(await readCreationBlocks(transport, [
+    market('markets.1/early', deployed - 1),
+    market('markets.1/past', head + 1),
+    market('markets.1/right', deployed),
+    market('markets.1/late', deployed + 1),
+    market('markets.1/head', head),
+  ], 'ethereum-mainnet'), [
+    `markets.1/early.creationBlock ${deployed - 1} is before the Comet ${comet} was deployed: it has no code at that block`,
+    `markets.1/past.creationBlock ${head + 1} is past the latest block, ${head}`,
+    `markets.1/late.creationBlock ${deployed + 1} is after the Comet ${comet} was deployed: it has code at block ${deployed}`,
+    `markets.1/head.creationBlock ${head} is after the Comet ${comet} was deployed: it has code at block ${head - 1}`,
+  ], 'every block that is not it is named, in the order it was asked about');
+  t.same(batches.map(batch => batch.length), [ 1, 8 ], 'and a block past the latest one is not read at all');
+
+  batches.length = 0;
+  t.same(await readCreationBlocks(transport, [], 'ethereum-mainnet'), [], 'no market is nothing to read');
+  t.same(batches, [], 'and asks nothing');
+
+  // a provider that does not answer, one that does not serve the state of a past block, and one that answers no block
+  const down        = async () => { throw new TypeError('fetch failed'); };
+  const archiveless = async (calls: jsonRpc.Call[]) => calls.map(call => call.method === 'eth_blockNumber'
+    ? { result: `0x${head.toString(16)}` }
+    : { error: { code: -32000, message: 'missing trie node' } });
+  const blockless   = async (calls: jsonRpc.Call[]) => calls.map(() => ({ result: '0x' }));
+  await rejects(() => readCreationBlocks(down, [ market('overlay', deployed) ], 'ethereum-mainnet'), 'CHAIN_REQUEST_FAILED');
+  await rejects(() => readCreationBlocks(archiveless, [ market('overlay', deployed) ], 'ethereum-mainnet'), 'CHAIN_REQUEST_FAILED');
+  await rejects(() => readCreationBlocks(blockless, [ market('overlay', deployed) ], 'ethereum-mainnet'), 'CHAIN_RESPONSE_INVALID');
 });

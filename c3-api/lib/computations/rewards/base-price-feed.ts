@@ -21,4 +21,16 @@ function usdBasePriceFeedFor(contract: RegistryComet): PriceFeedV1 | null {
     : null;
 }
 
-export { usdBasePriceFeedFor };
+/*
+ * The reward price a market reports is in USD, whichever unit its feed
+ * answers in. A reward feed that quotes the market's base asset — COMP in ETH,
+ * beside a WETH market — is converted with the USD price of that base asset
+ * (BaseUsdPrice). Its APR is not: the rewards and the market are both valued
+ * in the base asset there, which is why usdBasePriceFeedFor answers null for
+ * such a market.
+ */
+function convertsRewardPriceToUsd(contract: RegistryComet): boolean {
+  return contract.registry.market.rewardAsset?.priceFeedQuote === 'base';
+}
+
+export { convertsRewardPriceToUsd, usdBasePriceFeedFor };

@@ -483,8 +483,13 @@ async function stalePointer(deps: CacheDeps): Promise<{ pointer: RegistryVersion
  * says so.
  */
 const ANSWERED = /no such (table|column|index)|syntax error|constraint failed|not authorized|datatype mismatch/i;
-// D1's own transient failures are those its documentation says to retry: an object reset or restarted, a replica cut off
-const UNREACHABLE = /network connection lost|fetch failed|timed? ?out|connection (reset|refused|closed)|storage (error|operation)|internal error|overloaded|unavailable|code was updated|object to be reset|transient issue|replica disconnected/i;
+/*
+ * D1 not answering: what its documentation says to retry — a connection
+ * lost, a request stream it could not read, an object reset or restarted, a
+ * transient issue, a replica cut off — and what it puts down to load, an
+ * overload or a storage operation past its timeout.
+ */
+const UNREACHABLE = /network connection lost|client disconnected|fetch failed|\btimed? ?out\b|connection (reset|refused|closed)|storage (error|operation)|internal error|overloaded|unavailable|code was updated|object to be reset|transient issue|replica disconnected/i;
 
 function isUnreachable(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);

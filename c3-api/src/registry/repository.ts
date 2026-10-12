@@ -30,6 +30,7 @@ import type { VersionRef } from './version-headers.js';
 import {
   MarketOverlay,
   NetworkOverlay,
+  overlayOfException,
   parseMarketOverlay,
   parseNetworkOverlay,
   storedInstant,
@@ -92,11 +93,13 @@ type CandidateInput = {
 /*
  * The reviewed overlay of one stored version, keyed by chain id and by
  * market key (marketKey), which is how an import looks up the decisions made
- * for a market it rediscovers.
+ * for a market it rediscovers. `comets` is the Comet each market overlay was
+ * made for: a key the source gives another Comet does not hand it them.
  */
 type ClonedOverlays = {
   networks: Map<number, NetworkOverlay>,
   markets:  Map<string, MarketOverlay>,
+  comets:   Map<string, Address | null>,
 };
 
 /*
@@ -321,7 +324,12 @@ function networkStatement(
   }, condition);
 }
 
-function exceptionStatements(db: D1Database, scope: Scope, network: NetworkV1, condition?: Condition): D1PreparedStatement[] {
+function exceptionStatements(
+  db: D1Database,
+  scope: Scope,
+  network: Pick<NetworkV1, 'priceExceptions'>,
+  condition?: Condition,
+): D1PreparedStatement[] {
   return network.priceExceptions.map(exception => insertStatement(db, 'network_price_exceptions', {
     ...scope,
     price_feed_address:              exception.priceFeedAddress,
@@ -333,6 +341,45 @@ function exceptionStatements(db: D1Database, scope: Scope, network: NetworkV1, c
     provenance:                      exception.provenance,
     expires_at:                      exception.expiresAt,
   }, condition));
+}
+
+/*
+ * A stored price exception as the wire shape states it: what
+ * exceptionStatements wrote, read back. The snapshot and the overlay both read
+ * an exception through it. Each kind is written out, so the key order follows
+ * the wire contract and the kind stays a literal the union can discriminate;
+ * and there is no default, so a kind added to EXCEPTION_KINDS does not compile
+ * until it is read here, rather than being read as another.
+ */
+function priceExceptionOfRow(row: NetworkPriceExceptionRow): PriceExceptionV1 {
+  switch (row.kind) {
+    case 'zero_price':
+      return {
+        kind:             'zero_price',
+        priceFeedAddress: row.price_feed_address,
+        provenance:       row.provenance,
+        expiresAt:        row.expires_at,
+      };
+    case 'fixed_price':
+      return {
+        kind:             'fixed_price',
+        priceFeedAddress: row.price_feed_address,
+        price:            { value: row.fixed_price_value!, decimals: row.fixed_price_decimals! },
+        provenance:       row.provenance,
+        expiresAt:        row.expires_at,
+      };
+    case 'deprecated_price_remap':
+      return {
+        kind:                 'deprecated_price_remap',
+        priceFeedAddress:     row.price_feed_address,
+        replacementPriceFeed: {
+          address:  row.replacement_price_feed_address!,
+          decimals: row.replacement_price_feed_decimals!,
+        },
+        provenance:           row.provenance,
+        expiresAt:            row.expires_at,
+      };
+  }
 }
 
 /*
@@ -671,37 +718,7 @@ async function readSnapshot(db: D1Database, versionId: string): Promise<NetworkV
       presentation,
       priceExceptions: (exceptionRows.results ?? [])
         .filter(exception => exception.network_id === network.id)
-        .map((exception): PriceExceptionV1 => {
-          // each branch is written out, so the key order follows the wire
-          // contract and the kind stays a literal the union can discriminate
-          if (exception.kind === 'fixed_price') {
-            return {
-              kind:             'fixed_price',
-              priceFeedAddress: exception.price_feed_address,
-              price:            { value: exception.fixed_price_value!, decimals: exception.fixed_price_decimals! },
-              provenance:       exception.provenance,
-              expiresAt:        exception.expires_at,
-            };
-          }
-          if (exception.kind === 'deprecated_price_remap') {
-            return {
-              kind:                 'deprecated_price_remap',
-              priceFeedAddress:     exception.price_feed_address,
-              replacementPriceFeed: {
-                address:  exception.replacement_price_feed_address!,
-                decimals: exception.replacement_price_feed_decimals!,
-              },
-              provenance:           exception.provenance,
-              expiresAt:            exception.expires_at,
-            };
-          }
-          return {
-            kind:             'zero_price',
-            priceFeedAddress: exception.price_feed_address,
-            provenance:       exception.provenance,
-            expiresAt:        exception.expires_at,
-          };
-        }),
+        .map(priceExceptionOfRow),
       markets,
     };
   });
@@ -1076,7 +1093,8 @@ function storedExpiry(value: string | null): string | null {
  * The overlay a network's rows state: its row and its price exceptions, read
  * back through the parser as the document a PUT takes. Every reader of a
  * stored network overlay goes through it, so the digest a read answers is the
- * one a write compares its expectation with.
+ * one a write compares its expectation with. An exception is the one the
+ * snapshot serves (priceExceptionOfRow), as the decision it states.
  */
 function networkOverlayOf(
   network: { display_name: string, metadata: string },
@@ -1088,14 +1106,7 @@ function networkOverlayOf(
     displayName:               network.display_name,
     assetDisplayOverrides:     presentation.assetDisplayOverrides ?? [],
     unwrappedCollateralAssets: presentation.unwrappedCollateralAssets ?? [],
-    priceExceptions:           exceptions.map(row => {
-      const shared = { priceFeedAddress: row.price_feed_address, provenance: row.provenance, expiresAt: storedExpiry(row.expires_at) };
-      return row.kind === 'fixed_price'
-        ? { kind: row.kind, ...shared, price: { value: row.fixed_price_value, decimals: row.fixed_price_decimals } }
-        : row.kind === 'deprecated_price_remap'
-          ? { kind: row.kind, ...shared, replacementPriceFeedAddress: row.replacement_price_feed_address }
-          : { kind: row.kind, ...shared };
-    }),
+    priceExceptions:           exceptions.map(row => overlayOfException({ ...priceExceptionOfRow(row), expiresAt: storedExpiry(row.expires_at) })),
   }, scope);
 }
 
@@ -1164,12 +1175,13 @@ async function readOverlaysOf(db: D1Database, sources: string, values: SqlValue[
               market.rewards_enabled, market.account_rewards_enabled, market.transaction_history_enabled,
               base.display_name AS base_display_name, base.is_wrapped_native,
               base.usd_price_feed_address, reward.price_feed_address AS reward_price_feed_address,
-              reward.price_feed_quote AS reward_price_feed_quote
+              reward.price_feed_quote AS reward_price_feed_quote, comet.address AS comet
        FROM markets AS market
        JOIN registry_networks AS network ON network.id = market.network_id
        JOIN sources ON sources.id = market.registry_version_id
        LEFT JOIN market_assets AS base ON base.market_id = market.id AND base.role = 'base'
        LEFT JOIN market_assets AS reward ON reward.market_id = market.id AND reward.role = 'reward'
+       LEFT JOIN market_contracts AS comet ON comet.market_id = market.id AND comet.role = 'comet'
        WHERE market.reviewed = 1 AND ${countedIn('market', marketKeyIn('network', 'market'))}
        ORDER BY sources.precedence, network.chain_id, market.creation_block, market.deployment_key`
     ).bind(...values),
@@ -1183,7 +1195,7 @@ async function readOverlaysOf(db: D1Database, sources: string, values: SqlValue[
       collateral_value_quote: PriceQuote, rewards_enabled: number, account_rewards_enabled: number,
       transaction_history_enabled: number, base_display_name: string | null, is_wrapped_native: number | null,
       usd_price_feed_address: string | null, reward_price_feed_address: string | null,
-      reward_price_feed_quote: PriceQuote | null,
+      reward_price_feed_quote: PriceQuote | null, comet: Address | null,
     }>,
   ];
 
@@ -1209,6 +1221,7 @@ async function readOverlaysOf(db: D1Database, sources: string, values: SqlValue[
   }
 
   const markets = new Map<string, MarketOverlay>();
+  const comets  = new Map<string, Address | null>();
   let defaultMarket: string | null = null;
   for (const row of marketRows.results ?? []) {
     const key     = marketKey(row.chain_id, row.deployment_key);
@@ -1248,9 +1261,10 @@ async function readOverlaysOf(db: D1Database, sources: string, values: SqlValue[
       defaultMarket = null;
     }
     markets.set(key, overlay);
+    comets.set(key, row.comet);
   }
 
-  return { networks, markets };
+  return { networks, markets, comets };
 }
 
 // the version that is on, as a source of overlays; none before the first activation
@@ -1258,8 +1272,8 @@ const ACTIVE_SOURCE = `SELECT active_version_id, 0, 0 FROM registry_state WHERE 
 
 /*
  * Rebuilds the reviewed overlay of a stored version: what an overlay write
- * compares a document with, and what an import inherits from the version it
- * clones.
+ * compares a document with. An import reads what it inherits through
+ * readImportOverlays.
  */
 async function readOverlays(db: D1Database, versionId: string): Promise<ClonedOverlays> {
   return readOverlaysOf(db, `SELECT ?1, 0, 0`, [ versionId ]);
@@ -1557,6 +1571,8 @@ export {
   findAttemptsByCommit,
   insertStatement,
   marketWrites,
+  exceptionStatements,
+  priceExceptionOfRow,
   readSnapshot,
   readUnreviewed,
   latestValidationAttempt,

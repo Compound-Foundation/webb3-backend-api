@@ -59,7 +59,7 @@ type Status = {
   },
   candidates: {
     importing: Array<{ versionId: string, unreviewed: { networks: number, markets: number } }>,
-    validated: Array<{ versionId: string }>,
+    validated: Array<{ versionId: string, unserved: string[] }>,
     invalid:   number,
   },
   chainCheck: {
@@ -193,6 +193,7 @@ t.test('a validated version newer than the active one is reported as waiting to 
 
   const waiting = await status();
   t.same(waiting.candidates.validated.map(entry => entry.versionId), [ newer.versionId ], 'the validated version is named');
+  t.same(waiting.candidates.validated[0]?.unserved, [], 'serving every market the active one does');
   t.same(waiting.candidates.importing, [], 'and it is no draft');
   t.same(waiting.alerts, [ 'candidate-awaiting-activation' ]);
 
@@ -202,6 +203,59 @@ t.test('a validated version newer than the active one is reported as waiting to 
   const rolledBack = await status();
   t.same([ rolledBack.candidates.validated, rolledBack.alerts ], [ [], [] ],
     'a version that was on and was rolled back from waits for nobody');
+});
+
+/*
+ * Nothing holds back a version that would stop serving a market the active
+ * one serves: the scheduled import validates it, and it can be switched on.
+ * So the status names the markets it would drop, by their keys in the active
+ * version, until a version at least that new is on.
+ */
+t.test('a validated version that would stop serving a market is raised with the markets it drops', async t => {
+  const db = await freshDatabase();
+  // the version on serves every market of the fixture but Scroll's, which it holds switched off
+  const on = structuredClone(snapshot);
+  on.networks.find(network => network.chainId === 534352)!.markets[0]!.status = 'disabled';
+  const { versionId: active } = await seedCandidate(db, on);
+  await activateSeeded(db, active);
+  await db.prepare(`UPDATE registry_state SET last_upstream_checked_at = ?1 WHERE singleton_id = 1`)
+    .bind(new Date().toISOString()).run();
+  t.equal((await server.fetch('/registry/v1/active')).status, 200);
+
+  /*
+   * The source drops wbtc, renames usdt to a key the version holds switched
+   * off, and gives weth's key to another Comet, switched off too. Base's
+   * market is renamed, and deprecated, and so still served under its new key;
+   * Base also has a market at wbtc's address, which on another chain is
+   * another Comet. Scroll's stays switched off, as it was.
+   */
+  const next    = structuredClone(on);
+  const mainnet = next.networks.find(network => network.chainId === 1)!;
+  const base    = next.networks.find(network => network.chainId === 8453)!;
+  const market  = (key: string) => mainnet.markets.find(entry => entry.deploymentKey === key)!;
+  Object.assign(market('usdt'), { deploymentKey: 'usdt-renamed', status: 'disabled' });
+  Object.assign(market('weth'), { status: 'disabled' });
+  market('weth').contracts = { ...market('weth').contracts, comet: '0x1111111111111111111111111111111111111111' };
+  base.markets.push({
+    ...structuredClone(base.markets[0]!),
+    deploymentKey: 'wbtc-twin',
+    contracts:     { ...base.markets[0]!.contracts, comet: market('wbtc').contracts.comet },
+  });
+  Object.assign(base.markets[0]!, { deploymentKey: 'aero-renamed', status: 'deprecated' });
+  mainnet.markets = mainnet.markets.filter(entry => entry.deploymentKey !== 'wbtc');
+  const dropping = await seedCandidate(db, next, { versionId: randomUUID(), attempt: 2 });
+  await validateSeeded(db, dropping.versionId);
+  await recordRun(db, { status: 'completed', outcome: 'imported' });
+
+  const raised = await status();
+  t.same(raised.candidates.validated.map(({ versionId, unserved }) => ({ versionId, unserved })), [
+    { versionId: dropping.versionId, unserved: [ '1/usdt', '1/wbtc', '1/weth' ] },
+  ], 'the version names each market of the active one whose Comet it does not serve');
+  t.same(raised.alerts, [ 'candidate-awaiting-activation', 'candidate-drops-markets' ], 'and the status raises it');
+
+  await switchOn(db, dropping.versionId);
+  t.equal((await server.fetch('/registry/v1/active')).status, 200);
+  t.same((await status()).alerts, [], 'until it is switched on, which is the decision the alert asks for');
 });
 
 t.test('a version skipped for a newer one is not raised again by a rollback past both', async t => {

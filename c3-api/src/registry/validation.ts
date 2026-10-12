@@ -4,7 +4,6 @@ import {
   marketKey,
 } from '../../lib/model/comet-registry.js';
 
-import { orderNetworks } from './overlay.js';
 import {
   Condition,
   both,
@@ -125,6 +124,19 @@ function validateMarket(network: NetworkV1, market: MarketV1): CheckResult[] {
     { rewards: market.capabilities.rewards, priceFeed: reward?.priceFeed ?? null },
   ));
   /*
+   * Nor without the rewards contract: the token a market pays is read through
+   * it (catalog.ts, cometOf), and a market served with rewards but without
+   * one fails the routes that serve them, every market of the answer with it.
+   * No import writes such a market, since it reads the token through that
+   * contract too; this keeps any version that holds one from being served.
+   */
+  results.push(check(
+    'rewards-capability-has-contract',
+    scope,
+    !market.capabilities.rewards || market.contracts.rewards !== null,
+    { rewards: market.capabilities.rewards, rewardsContract: market.contracts.rewards },
+  ));
+  /*
    * What an account is owed is read from the rewards contract, in the token
    * it pays, and nothing stands in for either where a market lacks it: a
    * market whose account rewards are served must have both.
@@ -199,17 +211,13 @@ function validateNetwork(network: NetworkV1, reviewed: boolean): CheckResult[] {
    * and is not listed, so it needs no decision yet: a chain the source has
    * just added arrives that way, and does not hold the rest of the version
    * back.
+   *
+   * Wherever validation asks, a candidate's market is served by its status
+   * alone, not as the catalog has it (isServed): one without a Comet still
+   * counts, and fails comet-contract-declared.
    */
   const served = network.markets.filter(market => market.status !== 'disabled').map(market => market.deploymentKey);
   results.push(check('served-network-reviewed', scope, reviewed || served.length === 0, { served }));
-
-  const deploymentKeys = network.markets.map(market => market.deploymentKey);
-  results.push(check(
-    'deployment-keys-unique',
-    scope,
-    new Set(deploymentKeys).size === deploymentKeys.length,
-    { deploymentKeys },
-  ));
 
   const comets = network.markets.map(market => market.contracts.comet);
   results.push(check(
@@ -234,17 +242,6 @@ function validateNetwork(network: NetworkV1, reviewed: boolean): CheckResult[] {
     scope,
     new Set(listingKeys).size === listingKeys.length,
     { listingKeys: listingKeys.filter((key, index) => listingKeys.indexOf(key) !== index) },
-  ));
-
-  // markets are served in this order, so the snapshot must already be sorted
-  const ordered = [ ...network.markets ].sort((left, right) => (
-    left.creationBlock - right.creationBlock
-      || (left.deploymentKey < right.deploymentKey ? -1 : left.deploymentKey > right.deploymentKey ? 1 : 0)
-  ));
-  results.push(check(
-    'markets-ordered',
-    scope,
-    ordered.every((market, index) => market.deploymentKey === network.markets[index]?.deploymentKey),
   ));
 
   return results;
@@ -279,20 +276,6 @@ function validateCandidate({ networks, roots, unreviewedNetworks = [] }: Candida
       { expected: roots.length, imported: roots.length - missing.length, missing },
     ));
   }
-
-  const chainIds = networks.map(network => network.chainId);
-  results.push(check(
-    'networks-unique',
-    'global',
-    new Set(chainIds).size === chainIds.length,
-    { chainIds },
-  ));
-  results.push(check(
-    'networks-ordered',
-    'global',
-    chainIds.every((chainId, index) => index === 0 || chainId > chainIds[index - 1]!),
-    { chainIds },
-  ));
 
   const defaults = networks.flatMap(network => network.markets
     .filter(market => market.isDefault)
@@ -343,9 +326,8 @@ async function judgeVersion(
 ): Promise<Verdict> {
   // read before the rows, so an overlay written while they are read moves it past them
   const { revision, attempt } = await readRevision(db, versionId);
-  const [ snapshot, unreviewed ] = await Promise.all([ readSnapshot(db, versionId), readUnreviewed(db, versionId) ]);
-  const networks = orderNetworks(snapshot);
-  const results  = validateCandidate({
+  const [ networks, unreviewed ] = await Promise.all([ readSnapshot(db, versionId), readUnreviewed(db, versionId) ]);
+  const results = validateCandidate({
     networks,
     unreviewedNetworks: unreviewed.networks,
     ...(roots === null ? {} : { roots }),

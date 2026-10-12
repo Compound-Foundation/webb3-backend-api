@@ -130,9 +130,8 @@ interface TransactionHistoryRouteData {
   accountAddress: Eth.Address;
   queryParams: URL['searchParams'];
   /*
-   * The registry, not loaded: the handler refuses a testnet market, or a
-   * cursor that reads one, before it reads the registry, as the market
-   * routes refuse a testnet.
+   * The registry, not loaded: the handler refuses a testnet market before
+   * it reads the registry, as the market routes refuse a testnet.
    */
   registry: RequestCatalog;
 }
@@ -407,25 +406,10 @@ async function unsafeRoute(
    * A market path that names no market endpoint is the client's mistake
    * whatever the registry holds, so it is answered before the registry is
    * read: a mistyped suffix is a 400 even while the registry is unavailable.
-   */
-  if (resourceApi === 'market' && !isValidMarketEndpointSuffix(strippedEndpointSuffix)) {
-    return new Response(`Error: Not a valid market API endpoint`, { status: 400 });
-  }
-
-  /*
    * Testnets are not served (testnets.ts): a market route that names one, or
    * asks for every network with them, is refused before the registry is
    * read, which has none to answer with.
-   */
-  if (resourceApi === 'market') {
-    if (networkAlias === AllNetworks) {
-      refuseTestnetsParameter(url.searchParams);
-    } else {
-      refuseTestnet(networkAlias);
-    }
-  }
-
-  /*
+   *
    * A market address is resolved through the registry, and a governance one
    * through the static constants.
    *
@@ -437,6 +421,15 @@ async function unsafeRoute(
    * constants.
    */
   if (resourceApi === 'market') {
+    if (!isValidMarketEndpointSuffix(strippedEndpointSuffix)) {
+      return new Response(`Error: Not a valid market API endpoint`, { status: 400 });
+    }
+    if (networkAlias === AllNetworks) {
+      refuseTestnetsParameter(url.searchParams);
+    } else {
+      refuseTestnet(networkAlias);
+    }
+
     const catalog  = await registry.load();
     // If we specify all networks, we must also be querying all contracts
     const contract = contractSpecifier === AllContracts || networkAlias === AllNetworks
@@ -444,9 +437,6 @@ async function unsafeRoute(
       : catalog.marketAt(networkAlias, contractSpecifier as Eth.Address)?.comet ?? null;
     if (contract === null) {
       return new Response(`Error: Contract address not known`, { status: 400 });
-    }
-    if (!isValidMarketEndpointSuffix(strippedEndpointSuffix)) {
-      return new Response(`Error: Not a valid market API endpoint`, { status: 400 });
     }
     const data: MarketRouteData = {
       apiHost: context.env.V3_API_HOST,

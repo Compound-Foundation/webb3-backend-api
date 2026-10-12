@@ -14,6 +14,7 @@ import * as KnownNetwork from '../../well-known/networks/network.js';
 import {
   GetPrice,
   BaseBorrowMin,
+  BaseUsdPrice,
   type PriceError,
   type PriceRead,
 } from '../comet.js';
@@ -24,10 +25,11 @@ import {
   BorrowRewardsApr,
   SupplyRewardsApr,
 } from '../rewards.js';
+import { convertsRewardPriceToUsd } from '../rewards/base-price-feed.js';
 
 type MarketRewards = Compute.Spec<{
   name: 'marketRewards';
-  depends: [BaseBorrowMin, SupplyRewardsApr, BorrowRewardsApr, GetPrice];
+  depends: [BaseBorrowMin, SupplyRewardsApr, BorrowRewardsApr, GetPrice, BaseUsdPrice];
   expects: {
     apiHost: string;
     nodeHost: string;
@@ -81,7 +83,7 @@ function baseAssetLabel(contract: RegistryComet): { symbol: string, description:
   };
 }
 
-const { implement, pipe, pipe1 } = Compute.Functor<MarketRewards>({});
+const { implement, pipe } = Compute.Functor<MarketRewards>({});
 const marketRewards = implement({
   // 5: a price that reverts is reported as the market's status
   version: 5,
@@ -119,13 +121,12 @@ const marketRewards = implement({
     /*
      * The feed that prices the reward token, as the registry states it. A
      * market without one — Scroll, which has no COMP feed — is reported with
-     * no reward price and no reward rate rather than by name, and a market
-     * whose reward feed quotes the base asset is converted to USD with the
-     * market's USD feed, so every market reports its reward price in the same
-     * unit.
+     * no reward price and no reward rate rather than by name. A reward price
+     * its feed states in the market's base asset is converted to USD, so every
+     * market reports its reward price in the same unit (base-price-feed.ts).
      */
-    const rewardPriceFeed   = rewardAsset?.priceFeed ?? null;
-    const usdConversionFeed = rewardAsset?.priceFeedQuote === 'base' ? market.baseAsset.usdPriceFeed : null;
+    const rewardPriceFeed = rewardAsset?.priceFeed ?? null;
+    const convertsToUsd   = convertsRewardPriceToUsd(contract);
 
     const baseBorrowMin = { apiHost, nodeHost, nodeKey, contract, network, blockNumber };
 
@@ -187,55 +188,67 @@ const marketRewards = implement({
     }
 
     const apr = { apiHost, nodeHost, nodeKey, contract, network, blockNumber, rewardsTokenPriceFeed: rewardPriceFeed };
+    const reads = {
+      baseBorrowMin,
+      supplyRewardsApr: apr,
+      borrowRewardsApr: apr,
+      getPrice: {
+        apiHost,
+        nodeHost,
+        nodeKey,
+        contract,
+        network,
+        priceFeed: rewardPriceFeed,
+        blockNumber,
+      },
+    };
+
+    /*
+     * The first price that reverts is the market's answer, in the order the
+     * rewards are valued: the reward price, the rates measured with it, and
+     * the USD price that converts it.
+     */
+    const reported = (
+      { getPrice: rewardAssetPrice, baseBorrowMin, supplyRewardsApr, borrowRewardsApr }: {
+        getPrice:         PriceRead,
+        baseBorrowMin:    BigFixnum,
+        supplyRewardsApr: SupplyRewardsApr['returns'],
+        borrowRewardsApr: BorrowRewardsApr['returns'],
+      },
+      baseAssetUsdPrice: PriceRead | null,
+    ): MarketRewards['returns'] => {
+      const failure = ({ status, message }: PriceError): MarketRewards['returns'] => (
+        { chainId, comet: { address: contract.address }, status, message }
+      );
+      if (rewardAssetPrice.status === 'error') {
+        return failure(rewardAssetPrice);
+      }
+      if (supplyRewardsApr.status === 'error') {
+        return failure(supplyRewardsApr);
+      }
+      if (borrowRewardsApr.status === 'error') {
+        return failure(borrowRewardsApr);
+      }
+      const results = { baseBorrowMin, supplyRewardsApr: supplyRewardsApr.apr, borrowRewardsApr: borrowRewardsApr.apr };
+      if (baseAssetUsdPrice === null) {
+        return summary(results, rewardAssetPrice.price.toString());
+      }
+      return baseAssetUsdPrice.status === 'error'
+        ? failure(baseAssetUsdPrice)
+        : summary(results, rewardAssetPrice.price.mul(baseAssetUsdPrice.price).toString());
+    };
+
+    /*
+     * The USD price that converts the reward price is read beside the rest,
+     * not once both rates are in: a round of its own would hold up every
+     * market of its network, which are read together.
+     */
+    if (!convertsToUsd) {
+      return pipe([ reads, results => reported(results, null) ]);
+    }
     return pipe([
-      {
-        baseBorrowMin,
-        supplyRewardsApr: apr,
-        borrowRewardsApr: apr,
-        getPrice: {
-          apiHost,
-          nodeHost,
-          nodeKey,
-          contract,
-          network,
-          priceFeed: rewardPriceFeed,
-          blockNumber,
-        },
-      },
-      ({ getPrice: rewardAssetPrice, baseBorrowMin, supplyRewardsApr, borrowRewardsApr }) => {
-        const failure = ({ status, message }: PriceError): MarketRewards['returns'] => (
-          { chainId, comet: { address: contract.address }, status, message }
-        );
-        if (rewardAssetPrice.status === 'error') {
-          return failure(rewardAssetPrice);
-        }
-        if (supplyRewardsApr.status === 'error') {
-          return failure(supplyRewardsApr);
-        }
-        if (borrowRewardsApr.status === 'error') {
-          return failure(borrowRewardsApr);
-        }
-        const results = { baseBorrowMin, supplyRewardsApr: supplyRewardsApr.apr, borrowRewardsApr: borrowRewardsApr.apr };
-        if (usdConversionFeed === null) {
-          return summary(results, rewardAssetPrice.price.toString());
-        }
-        return pipe1([
-          {
-            getPrice: {
-              apiHost,
-              nodeHost,
-              nodeKey,
-              contract,
-              network,
-              priceFeed: usdConversionFeed,
-              blockNumber,
-            },
-          },
-          (baseAssetUsdPrice: PriceRead) => baseAssetUsdPrice.status === 'error'
-            ? failure(baseAssetUsdPrice)
-            : summary(results, rewardAssetPrice.price.mul(baseAssetUsdPrice.price).toString()),
-        ]);
-      },
+      { ...reads, baseUsdPrice: { apiHost, nodeHost, nodeKey, contract, network, blockNumber } },
+      ({ baseUsdPrice, ...results }) => reported(results, baseUsdPrice),
     ]);
   },
 });

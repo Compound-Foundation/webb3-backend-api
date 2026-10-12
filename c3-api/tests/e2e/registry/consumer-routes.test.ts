@@ -1,5 +1,9 @@
 import t, { Test } from 'tap';
 
+import { createHash } from 'node:crypto';
+
+import { defaultAbiCoder } from '@ethersproject/abi';
+
 import C3Api, { Env } from '../../../entrypoint.js';
 
 import * as Eth from '../../../lib/eth-constants.js';
@@ -8,7 +12,7 @@ import type * as KnownNetwork from '../../../lib/well-known/networks/network.js'
 
 import { streamEventsOf } from '../../../src/transaction-history-handler/transaction-history-items-handler.js';
 
-import { MemoryKv } from '../../util/kv.js';
+import { MemoryKv, refusingKv } from '../../util/kv.js';
 import * as mock from '../../util/mock/mock.js';
 import { makeTestEnv } from '../../util/test-env.js';
 import { activeRegistryDatabase } from '../../util/registry-database.js';
@@ -94,6 +98,14 @@ function captureErrors(t: Test): string[] {
   const error = console.error;
   console.error = (...parameters: unknown[]) => { lines.push(parameters.map(String).join(' ')); };
   t.teardown(() => { console.error = error; });
+  return lines;
+}
+
+function captureWarnings(t: Test): string[] {
+  const lines: string[] = [];
+  const warn = console.warn;
+  console.warn = (...parameters: unknown[]) => { lines.push(parameters.map(String).join(' ')); };
+  t.teardown(() => { console.warn = warn; });
   return lines;
 }
 
@@ -277,11 +289,16 @@ t.test('without an active version the market and account routes fail explicitly'
 
   /*
    * A path that names no market endpoint is the client's mistake whatever
-   * the registry holds, so it is answered without reading the registry.
+   * the registry holds, so it is answered without reading the registry, and
+   * so is a cursor of a form the history never hands out.
    */
   const mistyped = await get(env, `/market/${MAINNET}/${USDC}/sumary`);
   t.equal(mistyped.status, 400, 'a mistyped endpoint is a 400 even with nothing active');
   t.match(await mistyped.text(), /Not a valid market API endpoint/);
+
+  const malformed = await get(env, `/account/${USDC}/transaction_history?cursor=..`);
+  t.same([ malformed.status, await malformed.text() ], [ 400, 'Cursor is invalid' ],
+    'and so is a cursor of another form than the history hands out');
 });
 
 /*
@@ -324,6 +341,14 @@ t.test('a market no stream reads is not addressable in the history filter', asyn
 });
 
 /*
+ * A cursor as the history names one, the hex SHA-256 of what it holds: here,
+ * of what a test says the cursor is.
+ */
+function cursorId(about: string): string {
+  return createHash('sha256').update(about).digest('hex');
+}
+
+/*
  * A cursor belongs to one version: its stream keys and block anchors describe
  * that version's markets. Reading a page against another version would mix
  * two descriptions of the same addresses, so the client is told to start over.
@@ -332,7 +357,7 @@ t.test('a transaction history cursor from another version is refused', async t =
   const registry = await activeRegistryDatabase();
   t.teardown(() => registry.dispose());
 
-  const cursor = 'cursor-from-another-version';
+  const cursor = cursorId('a cursor from another version');
   const seed   = {
     [cursor]: {
       registryVersionId: '00000000-0000-4000-8000-00000000dead',
@@ -368,7 +393,7 @@ t.test('a cursor from another version that reads the same streams carries on', a
   const registry = await activeRegistryDatabase();
   t.teardown(() => registry.dispose());
 
-  const cursor = 'cursor-from-an-identical-version';
+  const cursor = cursorId('a cursor from an identical version');
   const seed   = {
     [cursor]: {
       registryVersionId: '00000000-0000-4000-8000-0000000000aa',
@@ -390,14 +415,15 @@ t.test('a cursor from another version that reads the same streams carries on', a
 });
 
 /*
- * A cursor upgraded from before the registry reads the streams of the
- * networks it had at the cutover, and no others. A version that reads the
- * same streams on those networks leaves it going, whatever it serves on
- * another network; one that changes them ends it.
+ * A cursor issued before the registry names no version, and keeps its
+ * positions by network rather than by stream. Whatever it reads, a version
+ * ends it as it ends a cursor of another version, and the client starts
+ * over. Nor is one that an earlier release upgraded compared on the networks
+ * it had any more: it is a cursor of the version it was upgraded against.
  */
-t.test('a cursor upgraded from before the registry is compared on the networks it reads', async t => {
+t.test('a cursor issued before the registry is ended, as one of another version is', async t => {
   const fixture: RegistrySnapshotV1 = loadRegistrySnapshotFixture();
-  // a version that also serves history on Base, which the cursor never read
+  // a version that also serves history on Base, which a cursor of mainnet alone never read
   const snapshot: RegistrySnapshotV1 = {
     ...fixture,
     networks: fixture.networks.map(network => network.chainId !== 8453 ? network : {
@@ -416,6 +442,16 @@ t.test('a cursor upgraded from before the registry is compared on the networks i
     'the version reads history on two networks');
   const mainnet = streams.filter(stream => stream.network === MAINNET);
 
+  // a page of every market as the history kept it before the registry: without a version, and by network
+  const legacy = {
+    profilesByAddress: {},
+    filter:            { markets: [], actions: [], initiatedBy: [], contractAddresses: [], networks: [] },
+    streamEvents:      streams,
+    cursors:           Object.fromEntries(streams.map(stream => [
+      stream.network,
+      { ...stream, blockNumber: 19_000_000, transactionHash: '0xabc' },
+    ])),
+  };
   const payload = (overrides: Record<string, unknown>) => ({
     registryVersionId: '00000000-0000-4000-8000-0000000000bb',
     profilesByAddress: {},
@@ -425,10 +461,17 @@ t.test('a cursor upgraded from before the registry is compared on the networks i
     cursors: {},
     ...overrides,
   });
+  const cursors = {
+    legacy:        cursorId('a cursor issued before the registry'),
+    upgraded:      cursorId('a cursor an earlier release upgraded'),
+    ofTheRegistry: cursorId('a cursor of a version without Base'),
+    changed:       cursorId('a cursor upgraded, of other streams'),
+  };
   const seed = {
-    'upgraded':        payload({ upgraded: true }),
-    'of-the-registry': payload({}),
-    'changed':         payload({
+    [cursors.legacy]:        legacy,
+    [cursors.upgraded]:      payload({ upgraded: true }),
+    [cursors.ofTheRegistry]: payload({}),
+    [cursors.changed]:       payload({
       upgraded:     true,
       streamEvents: mainnet.map(stream => ({ ...stream, marketContractAddresses: stream.marketContractAddresses.slice(1) })),
     }),
@@ -436,11 +479,156 @@ t.test('a cursor upgraded from before the registry is compared on the networks i
   const env  = envWith({ APP_DB: registry.db, kv_mainnet: MemoryKv({ seed }) });
   const page = (cursor: string) => get(env, `/account/0x420f253087044b8BCf028dd89F8fe83Ba6275E84/transaction_history?cursor=${cursor}`);
 
-  const upgraded = await page('upgraded');
-  t.equal(upgraded.status, 400, 'a version that reads the same streams on its networks leaves it going');
-  t.match(await upgraded.text(), /different markets filter/, 'refused only for the filter the request changed');
+  const ended = await page(cursors.legacy);
+  t.equal(ended.status, 409, 'a cursor issued before the registry is ended, though it reads the streams the version reads');
+  const error = await envelopeOf(t, ended);
+  t.equal(error.code, 'REGISTRY_VERSION_CHANGED', 'with the code that tells the client to restart pagination');
+  t.same(error.details, {
+    cursorRegistryVersionId: null,
+    registryVersionId:       registry.versionId,
+  }, 'naming no version for the cursor, and the version that is active now');
 
-  t.equal((await page('of-the-registry')).status, 409,
-    'while a cursor the registry issued for a version without Base is ended by the one with it');
-  t.equal((await page('changed')).status, 409, 'and a version that reads other streams on its networks ends the upgraded one');
+  t.equal((await page(cursors.upgraded)).status, 409,
+    'one an earlier release upgraded is ended by a version that reads a stream it does not');
+  t.equal((await page(cursors.ofTheRegistry)).status, 409, 'as a cursor the registry issued for a version without Base is');
+  t.equal((await page(cursors.changed)).status, 409, 'and as one that reads other streams on its networks is');
+});
+
+/*
+ * The history names a cursor by the hex SHA-256 of what it holds, and hands
+ * out no other. A value of any other form is no cursor: it is invalid as one
+ * KV does not hold is, and KV is not asked for it, since workerd refuses some
+ * such keys outright — '', '.' and '..' — and the request would fail with
+ * that instead.
+ */
+t.test('a cursor of another form than the history hands out is invalid, without asking KV', async t => {
+  const registry = await activeRegistryDatabase();
+  t.teardown(() => registry.dispose());
+
+  // KV as workerd has it, refusing a key it cannot take, and the keys it was asked for
+  const asked: unknown[] = [];
+  const kv = refusingKv(MemoryKv({}), (_method, [ key ]) => {
+    asked.push(key);
+    return key === '' ? 'Key name cannot be empty.'
+      : key === '.' || key === '..' ? `"${key}" is not allowed as a key name.`
+      : false;
+  });
+  const env  = envWith({ APP_DB: registry.db, kv_mainnet: kv });
+  const page = (cursor: string) => get(env,
+    `/account/0x420f253087044b8BCf028dd89F8fe83Ba6275E84/transaction_history?cursor=${encodeURIComponent(cursor)}`);
+
+  const issued = cursorId('a cursor nobody was given');
+  for (const [ cursor, what ] of [
+    [ '', 'an empty cursor' ],
+    [ '.', '"."' ],
+    [ '..', '".."' ],
+    [ 'f'.repeat(513), 'a cursor longer than KV takes' ],
+    [ issued.toUpperCase(), 'one in upper case' ],
+    [ issued.slice(1), 'one a digit short' ],
+    [ `${issued}0`, 'one a digit long' ],
+    [ 'cursor-of-another-form', 'and a name' ],
+  ] as const) {
+    const response = await page(cursor);
+    t.same([ response.status, await response.text() ], [ 400, 'Cursor is invalid' ], `${what} is invalid`);
+  }
+  t.same(asked, [], 'and KV was asked for none of them');
+
+  const unknown = await page(issued);
+  t.same([ unknown.status, await unknown.text() ], [ 400, 'Cursor is invalid' ],
+    'while a cursor of the form the history hands out is invalid when KV does not hold it');
+  t.same(asked, [ issued ], 'which KV was asked for');
+});
+
+/*
+ * Cursors are kept in the namespace history is cached in, but nothing
+ * computes one again. A computed value KV cannot read is a miss; a cursor KV
+ * cannot read is a failure the client may retry, not a cursor never issued.
+ */
+t.test('a cursor KV cannot read fails the request, and is not called invalid', async t => {
+  const registry = await activeRegistryDatabase();
+  t.teardown(() => registry.dispose());
+  const errors = captureErrors(t);
+
+  const response = await get(
+    envWith({ APP_DB: registry.db, kv_mainnet: refusingKv(MemoryKv({}), method => method === 'get') }),
+    `/account/0x420f253087044b8BCf028dd89F8fe83Ba6275E84/transaction_history?cursor=${'ab'.repeat(32)}`,
+  );
+
+  t.equal(response.status, 500);
+  t.equal((await envelopeOf(t, response)).code, 'INTERNAL');
+  t.match(errors.join('\n'), /KV GET failed: 503 Service Unavailable/, 'and the log has what KV answered');
+});
+
+/*
+ * A node on which an account has no history: no logs, and no DeFi Saver
+ * proxy (getAllProxies answers the zero address and no other).
+ */
+function noHistory(call: Call): object {
+  switch (call.method) {
+    case 'eth_getBlockByNumber': return { result: { number: '0x1c9c380', timestamp: '0x6a8e5f00', transactions: [] } };
+    case 'eth_getLogs':          return { result: [] };
+    default:                     return { result: defaultAbiCoder.encode([ 'address', 'address[]' ], [ Eth.NullAddress, [] ]) };
+  }
+}
+
+/*
+ * A cursor's id is the digest of what it holds, and names no account: the
+ * same page asked twice, or the first pages of two accounts without history
+ * at one block, keep one cursor. KV takes one write a second to a key, and
+ * the write it refuses with 429 is of the cursor it took a moment before.
+ */
+t.test('a page whose cursor KV has just kept is answered, though KV refuses to write it again', async t => {
+  const registry = await activeRegistryDatabase();
+  t.teardown(() => registry.dispose());
+  const warnings = captureWarnings(t);
+
+  // these pages are asked within a second, so KV takes one write of a key
+  const kv      = MemoryKv({});
+  const written = new Set<unknown>();
+  const env     = envWith({ APP_DB: registry.db, kv_mainnet: refusingKv(kv, (method, [ key ]) => {
+    if (method !== 'put') {
+      return false;
+    }
+    const again = written.has(key);
+    written.add(key);
+    return again;
+  }) });
+
+  const account = '0x420f253087044b8BCf028dd89F8fe83Ba6275E84';
+  const another = '0x2000000000000000000000000000000000000002';
+  const cursors: string[] = [];
+  for (const asking of [ account, account, another ]) {
+    const { response } = await answering(noHistory, () => get(env, `/account/${asking}/transaction_history`));
+    t.equal(response.status, 200, `a first page of ${asking} is answered`);
+    cursors.push((await response.json() as { cursor: string }).cursor);
+  }
+  const [ cursor ] = cursors;
+  t.same(cursors, [ cursor, cursor, cursor ], 'with the one cursor every page of them is at');
+  t.ok(await kv.get(cursor!), 'which KV keeps');
+  t.same(warnings, [ 1, 2 ].map(() => `history cursor written twice in a second: KV PUT failed: 429 Too Many Requests: ${cursor}`),
+    'and the log says each time KV refused to write it again');
+});
+
+/*
+ * While KV does not answer, no cursor can be kept or read, and every page of
+ * history fails. A first page fails only after it has been read in full from
+ * the chain, as every route is read while its cache is refused: its cursor is
+ * written last.
+ */
+t.test('a page whose cursor KV cannot keep fails, rather than hand out one no page can read', async t => {
+  const registry = await activeRegistryDatabase();
+  t.teardown(() => registry.dispose());
+  const errors   = captureErrors(t);
+  const warnings = captureWarnings(t);
+
+  // KV not answering refuses a write as it refuses a read, with 503
+  const env = envWith({ APP_DB: registry.db, kv_mainnet: refusingKv(MemoryKv({}), method => (
+    method === 'put' ? 'KV PUT failed: 503 Service Unavailable' : true
+  )) });
+
+  const { response } = await answering(noHistory, () => get(env, '/account/0x420f253087044b8BCf028dd89F8fe83Ba6275E84/transaction_history'));
+  t.equal(response.status, 500);
+  t.equal((await envelopeOf(t, response)).code, 'INTERNAL');
+  t.match(errors.join('\n'), /KV PUT failed: 503 Service Unavailable/, 'and the log has what KV answered');
+  t.match(warnings.join('\n'), /computation cache unreadable/, 'once the page was read without the cache');
 });

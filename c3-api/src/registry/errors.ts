@@ -29,6 +29,7 @@ type RegistryErrorCode = (
   // the reviewed overlay is unusable
   | 'OVERLAY_INVALID'
   | 'OVERLAY_FEED_UNREADABLE'
+  | 'OVERLAY_CREATION_BLOCK_WRONG'
   // the stored candidate is not in the state the caller expected
   | 'CANDIDATE_STATE_CONFLICT'
   // the sync fence refused the work
@@ -75,7 +76,8 @@ function isRegistryError(error: unknown): error is RegistryError {
  * The set is deliberately narrow. A revert or an unreadable answer stays a
  * spent attempt, because it usually is the contract, and a run that never
  * spends an attempt would retry forever — which is what the `sync-stalled`
- * alert watches for.
+ * alert watches for. D1 restarted or overloaded under a root, which says so
+ * in words of its own rather than a network's, is a spent attempt too.
  */
 const TRANSPORT_CODES: ReadonlySet<RegistryErrorCode> = new Set([
   // the node provider did not answer
@@ -91,7 +93,7 @@ const TRANSPORT_CODES: ReadonlySet<RegistryErrorCode> = new Set([
 ]);
 
 // what a Worker or a network says when it is the carrier that failed, not the payload
-const INFRASTRUCTURE = /too many subrequests|exceeded .*cpu|network connection lost|fetch failed|connection (reset|refused|closed)|timed? ?out/i;
+const INFRASTRUCTURE = /too many subrequests|exceeded .*cpu|network connection lost|fetch failed|connection (reset|refused|closed)|\btimed? ?out\b/i;
 
 function isTransportFailure(error: unknown): boolean {
   if (isRegistryError(error)) {

@@ -42,9 +42,10 @@ import {
  */
 
 /*
- * A market of a validated version. Validation refuses one that does not
- * declare its Comet (comet-contract-declared), so every market the catalog
- * materializes has one, and is addressed and keyed by it.
+ * A market the API serves: one that is not disabled, with its Comet, which
+ * is what it is addressed and keyed by. Validation refuses a market that does
+ * not declare its Comet (comet-contract-declared), so of a validated version
+ * only the disabled markets are left out.
  */
 type ServedMarket = MarketV1 & { contracts: MarketV1['contracts'] & { comet: Address } };
 
@@ -193,9 +194,28 @@ function marketDigest(market: MarketV1, priceExceptions: PriceExceptionV1[]): st
   return keccak256(canonicalJson({ identity: { ...identity, baseAsset }, priceExceptions: applied })).slice(0, 16);
 }
 
-// every market of a validated version passes; this is what says so to the compiler
-function hasComet(market: MarketV1): market is ServedMarket {
-  return market.contracts.comet !== null;
+/*
+ * Whether the API serves a market. A disabled market is not served: the
+ * version keeps it for diagnostics, and nothing the API serves may resolve
+ * through it, its tokens included. A deprecated one is, because positions
+ * and history in it must stay reachable. Every read of a version asks this;
+ * validation judges a candidate's markets by their status alone, and
+ * /admin/status asks the same in SQL (candidate-drops-markets).
+ */
+function isServed(market: MarketV1): market is ServedMarket {
+  return market.status !== 'disabled' && market.contracts.comet !== null;
+}
+
+/*
+ * The networks of a version that serve a market, each with the markets it
+ * serves. A network whose every market is disabled serves nothing — a chain
+ * the source has just added arrives that way, with nothing about it reviewed
+ * — and is left out.
+ */
+function servedNetworks(snapshot: RegistrySnapshotV1): Array<{ network: NetworkV1, markets: ServedMarket[] }> {
+  return snapshot.networks
+    .map(network => ({ network, markets: network.markets.filter(isServed) }))
+    .filter(({ markets }) => markets.length > 0);
 }
 
 /*
@@ -350,21 +370,10 @@ function catalogOf(snapshot: RegistrySnapshotV1, now: Date = new Date()): Catalo
   // what transaction history reads of each network, which its cache key is made of
   const historyKeys = new Map<string, string>();
 
-  for (const network of snapshot.networks) {
+  for (const { network, markets: served } of servedNetworks(snapshot)) {
     const name = networkName(network);
     if (name === null) {
       // a network this API cannot name is not one it can serve
-      continue;
-    }
-    /*
-     * A disabled market is not served: the version keeps it for diagnostics,
-     * and nothing the API serves may resolve through it, its tokens included.
-     * A network whose every market is disabled serves nothing — a chain the
-     * source has just added arrives that way, with nothing about it reviewed
-     * — and is not a network the catalog offers.
-     */
-    const served = network.markets.filter(market => market.status !== 'disabled').filter(hasComet);
-    if (served.length === 0) {
       continue;
     }
     networks.push(network);
@@ -416,4 +425,4 @@ function catalogOf(snapshot: RegistrySnapshotV1, now: Date = new Date()): Catalo
 }
 
 export type { Catalog, CatalogMarket, RegistryComet, ServedMarket };
-export { catalogOf };
+export { catalogOf, isServed, servedNetworks };

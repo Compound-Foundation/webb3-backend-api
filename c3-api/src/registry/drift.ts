@@ -1,6 +1,8 @@
 import { Address, MarketV1, NetworkV1, RegistrySnapshotV1, marketKey } from '../../lib/model/comet-registry.js';
 
 import type { CachedSnapshot } from './cache.js';
+import { servedNetworks } from './catalog.js';
+import type { ServedMarket } from './catalog.js';
 import { CometFacts, RpcTransport, readCometFacts } from './enrichment.js';
 import { isRegistryError } from './errors.js';
 
@@ -109,12 +111,12 @@ async function readChainCheck(kv: KVNamespace): Promise<ChainCheck | null> {
  * is no comparison. A collateral the chain added or removed is one too, with
  * nothing on the side that lacks it.
  */
-function driftsOf(network: NetworkV1, market: MarketV1, facts: CometFacts, seenAt: string): ChainDrift[] {
+function driftsOf(network: NetworkV1, market: ServedMarket, facts: CometFacts, seenAt: string): ChainDrift[] {
   const where = {
     chainId: network.chainId,
     network: network.key,
     market:  marketKey(network.chainId, market.deploymentKey),
-    comet:   market.contracts.comet!,
+    comet:   market.contracts.comet,
   };
   const drifts: ChainDrift[] = [];
 
@@ -195,22 +197,19 @@ async function compareWithChain(
   checkedAt: Date,
 ): Promise<ChainCheck> {
   const seenAt = checkedAt.toISOString();
-  const served = snapshot.networks
-    .map(network => ({ network, markets: network.markets.filter(market => market.status !== 'disabled') }))
-    .filter(({ markets }) => markets.length > 0);
 
-  const read = await Promise.all(served.map(async ({ network, markets }): Promise<{
+  const read = await Promise.all(servedNetworks(snapshot).map(async ({ network, markets }): Promise<{
     drifts: ChainDrift[],
     unread: UnreadNetwork | null,
   }> => {
     try {
       const facts = await readCometFacts(
         deps.transportFor(network.key),
-        markets.map(market => market.contracts.comet!),
+        markets.map(market => market.contracts.comet),
         network.key,
       );
       return {
-        drifts: markets.flatMap(market => driftsOf(network, market, facts.get(market.contracts.comet!)!, seenAt)),
+        drifts: markets.flatMap(market => driftsOf(network, market, facts.get(market.contracts.comet)!, seenAt)),
         unread: null,
       };
     } catch (error) {

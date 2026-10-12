@@ -379,6 +379,63 @@ async function readFeeds(
   return (await readTokensAndFeeds(transport, [], addresses, scope)).feeds;
 }
 
+// a block number as JSON-RPC writes it
+function quantity(block: number): string {
+  return `0x${block.toString(16)}`;
+}
+
+/*
+ * Whether the creation block an overlay states for each market of one
+ * network is the block its Comet was deployed in: the Comet has code at that
+ * block and none at the block before it. A block past the latest one is no
+ * block yet, and is not asked about. Every block is above 0: one of 0 is the
+ * market not stating any.
+ *
+ * It answers what is wrong, naming each market by `scope` as the document
+ * names it, and nothing when every block is right. It reads the latest
+ * block, then the code of every Comet at both blocks, in batches of
+ * MAX_CALLS_PER_BATCH calls: two round trips for up to fifty markets. A node
+ * provider that does not answer fails the read, as it fails readFeeds: the
+ * chain has then said nothing about any block.
+ */
+async function readCreationBlocks(
+  transport: RpcTransport,
+  markets: Array<{ scope: string, comet: Address, block: number }>,
+  network: string,
+): Promise<string[]> {
+  if (markets.length === 0) {
+    return [];
+  }
+  const [ answer ] = await answersOf(transport, [ { method: 'eth_blockNumber', params: [] } ], network);
+  const result = resultOf(answer!, network);
+  const head   = /^0x[0-9a-f]+$/i.test(result) ? Number.parseInt(result, 16) : Number.NaN;
+  if (!Number.isSafeInteger(head)) {
+    throw new RegistryError('CHAIN_RESPONSE_INVALID', `eth_blockNumber returned no block number`, network);
+  }
+
+  const reached = markets.filter(market => market.block <= head);
+  const codes   = await callAll(transport, reached.flatMap(({ comet, block }): jsonRpc.Call[] => [
+    { method: 'eth_getCode', params: [ comet, quantity(block) ] },
+    { method: 'eth_getCode', params: [ comet, quantity(block - 1) ] },
+  ]), network);
+  const codeOf  = new Map(reached.map((market, index) => [ market, { at: codes[index * 2]!, before: codes[index * 2 + 1]! } ]));
+
+  return markets.flatMap(market => {
+    const { scope, comet, block } = market;
+    const code = codeOf.get(market);
+    if (code === undefined) {
+      return [ `${scope}.creationBlock ${block} is past the latest block, ${head}` ];
+    }
+    if (code.at === '0x') {
+      return [ `${scope}.creationBlock ${block} is before the Comet ${comet} was deployed: it has no code at that block` ];
+    }
+    if (code.before !== '0x') {
+      return [ `${scope}.creationBlock ${block} is after the Comet ${comet} was deployed: it has code at block ${block - 1}` ];
+    }
+    return [];
+  });
+}
+
 /*
  * Reads one market. The Comet itself is authoritative for base asset, feeds,
  * and collateral assets; the rewards contract names the reward token.
@@ -515,5 +572,6 @@ export {
   enrichMarket,
   proxyTransport,
   readCometFacts,
+  readCreationBlocks,
   readFeeds,
 };

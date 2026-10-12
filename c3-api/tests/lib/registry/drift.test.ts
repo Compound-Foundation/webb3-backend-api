@@ -275,6 +275,44 @@ t.test('a version switched on keeps no drift of a market it does not serve', asy
 });
 
 /*
+ * A disabled market is not compared: nothing the registry serves describes
+ * it, so its Comet is not asked, and what the chain says of it is no drift.
+ * A network whose every market is disabled serves nothing, and is not read.
+ */
+t.test('a disabled market is not compared, and a network of them is not read', async t => {
+  const weth    = marketOf('weth');
+  const version = {
+    ...snapshot,
+    networks: snapshot.networks.map(network => ({
+      ...network,
+      markets: network.markets.map(market => (
+        market.contracts.comet === USDC || network.key === 'scroll-mainnet' ? { ...market, status: 'disabled' as const } : market
+      )),
+    })),
+  };
+  const chain = fakeChain(snapshot, { changes: {
+    [USDC]:                  { basePriceFeed: MOVED },
+    [weth.contracts.comet!]: { basePriceFeed: MOVED },
+  } });
+  // the Comets the check asks anything of
+  const comets = new Set<string>();
+  const check  = await checkChain({
+    ...depsOf(chain, { version }),
+    transportFor: network => async calls => {
+      calls.forEach(call => comets.add(call.params[0].to));
+      return chain.transportFor(network)(calls);
+    },
+  });
+
+  t.same(check?.drifts.map(({ market, field }) => ({ market, field })), [ { market: '1/weth', field: 'priceFeed' } ],
+    'a feed the chain moved is a drift of the market served, and of none disabled');
+  t.notOk(comets.has(USDC), 'whose Comet is not asked anything');
+  t.ok(comets.has(weth.contracts.comet!), 'while the Comets of its network that are served are');
+  t.same(Object.keys(rounds(chain)).sort(), [ 'base-mainnet', 'ethereum-mainnet' ],
+    'and a network whose markets are all disabled is not read at all');
+});
+
+/*
  * The check is made once a day, by the first invocation of the day. One that
  * could not read a chain is made again an hour later, at the next
  * invocation; and a version switched on since the last check is checked at
