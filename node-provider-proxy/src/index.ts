@@ -81,25 +81,41 @@ export default {
 };
 
 /*
+ * The most calls one request is charged for. It must be above the limit of
+ * every rateLimiter binding in wrangler.toml, so that a large batch is still
+ * refused, while bounding the limit() calls made for one request.
+ */
+const MAX_CHARGED_CALLS = 100;
+
+/*
  * Count each JSON-RPC call in the request against the client's rate limit,
  * so that batching calls into one request does not raise the limit.
  *
  * Cloudflare sets cf-connecting-ip on every request from the internet, and
- * clients cannot override it. Requests from other Workers over a service
- * binding do not have it, and are not limited. If the limiter fails, let the
- * request through: an error in the limiter must not take the proxy down.
+ * clients cannot override it. With the zone's Pseudo IPv4 setting on, it
+ * holds a made-up IPv4 address and the real one is in cf-connecting-ipv6.
+ * Requests from other Workers over a service binding have neither header,
+ * and are not limited. If the limiter fails, let the request through: an
+ * error in the limiter must not take the proxy down.
  */
 async function isRateLimited(request: Request, rateLimiter?: RateLimit) {
-  const clientIp = request.headers.get('cf-connecting-ip');
+  const clientIp = (
+       request.headers.get('cf-connecting-ipv6')
+    ?? request.headers.get('cf-connecting-ip')
+  );
   if (!rateLimiter || !clientIp) {
     return false;
   }
   try {
-    const key   = rateLimitKey(clientIp);
-    const calls = await countRpcs(request);
-    for (let call = 0; call < calls; call++) {
-      const { success } = await rateLimiter.limit({ key });
-      if (!success) {
+    const key = rateLimitKey(clientIp);
+    // charge the first call before reading the body, so that a client over
+    // the limit cannot make the proxy parse large bodies
+    if (!(await rateLimiter.limit({ key })).success) {
+      return true;
+    }
+    const calls = Math.min(await countRpcs(request), MAX_CHARGED_CALLS);
+    for (let call = 1; call < calls; call++) {
+      if (!(await rateLimiter.limit({ key })).success) {
         return true;
       }
     }
@@ -136,7 +152,7 @@ function rateLimitKey(clientIp: string) {
 async function countRpcs(request: Request) {
   try {
     const body = await request.clone().json();
-    return Array.isArray(body) ? Math.max(1, body.length) : 1;
+    return Array.isArray(body) ? body.length : 1;
   } catch {
     return 1;
   }

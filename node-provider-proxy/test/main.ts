@@ -822,3 +822,55 @@ test('log-only mode serves requests over the rate limit', async () => {
   const response = await Api.fetch(request, env);
   assert.equal(response.status, 200);
 });
+
+test('a client over the rate limit is refused before its body is read', async () => {
+  const env = makeTestEnv({});
+  env['rateLimiter'] = makeRateLimiter(0);
+
+  const request = chainIdRequest('ethereum-mainnet', { 'cf-connecting-ip': '192.0.2.1' }, { batchSize: 3 });
+  let bodyRead = false;
+  const clone = request.clone.bind(request);
+  request.clone = () => { bodyRead = true; return clone(); };
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 429);
+  assert.equal(bodyRead, false);
+});
+
+test('one request is charged for at most 100 calls', async () => {
+  const env = makeTestEnv({});
+  const rateLimiter = makeRateLimiter(1000);
+  env['rateLimiter'] = rateLimiter;
+
+  const request = chainIdRequest('ethereum-mainnet', { 'cf-connecting-ip': '192.0.2.1' }, { batchSize: 150 });
+  await Api.fetch(request, env);
+  assert.equal(rateLimiter.counts.get('192.0.2.1'), 100);
+});
+
+test('empty batches and non-JSON bodies are charged as one call', async () => {
+  const env = makeTestEnv({});
+  const rateLimiter = makeRateLimiter(10);
+  env['rateLimiter'] = rateLimiter;
+
+  for (const [ ip, body ] of [ [ '192.0.2.1', '[]' ], [ '192.0.2.2', 'not json' ] ]) {
+    const request = new Request('https://node-provider.test.local/ethereum-mainnet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'cf-connecting-ip': ip! },
+      body: body!,
+    });
+    await Api.fetch(request, env);
+    assert.equal(rateLimiter.counts.get(ip!), 1, `body ${body}`);
+  }
+});
+
+test('cf-connecting-ipv6 is preferred over a pseudo IPv4 address', async () => {
+  const env = makeTestEnv({});
+  const rateLimiter = makeRateLimiter(10);
+  env['rateLimiter'] = rateLimiter;
+
+  const request = chainIdRequest('ethereum-mainnet', {
+    'cf-connecting-ip':   '240.0.0.1',
+    'cf-connecting-ipv6': '2001:db8:0:1::1',
+  });
+  await Api.fetch(request, env);
+  assert.deepEqual([ ...rateLimiter.counts.keys() ], [ '2001:db8:0:1::/64' ]);
+});
