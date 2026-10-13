@@ -6,6 +6,9 @@ on:
   push:
     branches: [main]
   pull_request:
+    # "edited" covers a base-branch change (a stacked PR retargeted to main),
+    # which would otherwise leave a path check computed against the old base.
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
 permissions:
