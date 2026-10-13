@@ -20,7 +20,7 @@ The node provider proxy requires several items to be configured in order to func
 
 Each of the secrets vars have the following descriptions:
 
-- `allowedAppKey` - Optional application key for the proxy to check for on all proxied requests. The proxy has the url format of `http://hostname/{network}/{optional_appkey}`. This is a Worker secret, not a `wrangler.toml` var; see [Application key](#application-key).
+- `allowedAppKey` - Optional application key for the proxy to check for on all proxied requests. The proxy has the url format of `http://hostname/{network}/{optional_appkey}`. This is a Worker secret, not a `wrangler.toml` var. See [Application key](#application-key).
 - `allowedHosts` - Optional hostnames array to check for on all proxied requests. Can be used to aid in checking the origination of a proxy request comes from a known source. Any client can forge the `Origin` header, so this does not authenticate callers.
 - `alchemyXXXMainnet` - Alchemy RPC Key - The proxy relies on Alchemy as the sole provider for rpc traffic.
 - `infuraKey` - Infura RPC Key (configurable) - The proxy can be configured to use quicknode for rpc traffic.
@@ -34,7 +34,7 @@ Each production environment protects the RPC provider quota in a different way, 
 
 | Environment | Hostname | Callers | Control |
 |---|---|---|---|
-| `production-v3-api` | `node-provider-v3-api.compound.xyz` | c3-api (`v3-api` and `v3-api-stage`), through a service binding | `allowedAppKey` secret |
+| `production-v3-api` | `node-provider-v3-api.compound.xyz` | c3-api (`v3-api` and `v3-api-stage`), through a service binding | `allowedAppKey` secret, `rateLimiter` binding for callers of the public hostname |
 | `production-v3-app` | `node-provider-v3-app.compound.xyz` | Browsers on the v3 app | `rateLimiter` binding, `allowedHosts` |
 | `production-v2` | `node-provider-v2.compound.xyz` | Browsers on the v2 app | `rateLimiter` binding, `allowedHosts` |
 
@@ -50,7 +50,7 @@ To enable the key for the first time, set c3-api's key before the proxy's. Other
 
 ```sh
 KEY=$(openssl rand -hex 32)
-# 1. c3-api sends the key; the proxy still ignores it
+# 1. c3-api sends the key, which the proxy still ignores
 (cd ../c3-api && echo "$KEY" | npx wrangler secret put NODE_PROXY_KEY --env production)
 (cd ../c3-api && echo "$KEY" | npx wrangler secret put NODE_PROXY_KEY --env stage)
 # 2. the proxy enforces the key
@@ -73,9 +73,13 @@ Do not add `allowedAppKey` to `[vars]` in `wrangler.toml`: Cloudflare rejects a 
 
 ### Rate limit
 
-`production-v3-app` and `production-v2` bind a [Workers rate limiter](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) as `rateLimiter`: 60 requests per 60 seconds for each value of the `cf-connecting-ip` header. Over that limit the proxy responds `429` with `Retry-After: 60`. `OPTIONS` preflight requests are not counted.
+Each production environment binds a [Workers rate limiter](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) as `rateLimiter`: 60 JSON-RPC calls per 60 seconds for each client. A batch counts once for each call in it. Over the limit the proxy responds `429` with `Retry-After: 60`. `OPTIONS` preflight requests are not counted.
 
-Cloudflare counts the limit separately in each of its locations, and the count is eventually consistent, so a client can exceed it briefly. Requests without `cf-connecting-ip`, and requests made while the limiter is failing, are not limited. The `namespace_id` of each binding must be unique in the Cloudflare account.
+The client is the `cf-connecting-ip` header, which Cloudflare sets on every request from the internet. IPv6 clients are counted by their /64 prefix, because one host usually holds a whole /64. Requests from other Workers over a service binding, such as c3-api's, have no `cf-connecting-ip` and are not limited. Requests made while the limiter is failing are not limited either.
+
+Cloudflare counts the limit separately in each of its locations, and the count is eventually consistent, so a client can exceed it briefly. Clients behind one shared IPv4 address, such as a carrier-grade NAT, share one limit. The `namespace_id` of each binding must be unique in the Cloudflare account.
+
+When `rateLimitLogOnly` is `true`, the proxy serves requests over the limit and logs `rate limit exceeded (log only)` for each one. `production-v3-app` and `production-v2` start in this mode. To check how often real users would be refused, run `npx wrangler tail --env production-v3-app --search "rate limit exceeded"` while the apps are busy. Then set `rateLimitLogOnly = false` and deploy.
 
 ## Running Locally
 

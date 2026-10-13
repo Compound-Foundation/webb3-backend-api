@@ -44,6 +44,9 @@ defaultRetryAfterUpstreamErrorSeconds = 5     #  5s backoff Retry-After
 
 [env.production-v2.vars]
 allowedHosts = ["v2-app.compound.xyz", "v2-pinata-host.compound.xyz"]
+# log requests over the rate limit instead of refusing them, until the
+# logs show the limit does not refuse real users: see README.md
+rateLimitLogOnly = true
 
 # secrets: ^^^ same as above, manage with wrangler
 [env.production-v2.vars.settings]
@@ -63,7 +66,7 @@ kv_namespaces = [
 ]
 
 # browsers call this proxy directly and cannot hold an app key, so limit
-# each client IP instead: 60 requests per 60s, per Cloudflare location.
+# each client IP instead: 60 JSON-RPC calls per 60s, per Cloudflare location.
 [[env.production-v2.ratelimits]]
 name = "rateLimiter"
 namespace_id = "1651"
@@ -71,6 +74,9 @@ simple = { limit = 60, period = 60 }
 
 [env.production-v3-app.vars]
 allowedHosts = ["app.compound.xyz", "v3-app.compound.xyz", "v3-pinata-host.compound.xyz"]
+# log requests over the rate limit instead of refusing them, until the
+# logs show the limit does not refuse real users: see README.md
+rateLimitLogOnly = true
 
 [env.production-v3-app.vars.settings]
 maskUpstreamErrors                    = true  # obscure upstream errors
@@ -89,7 +95,7 @@ kv_namespaces = [
 ]
 
 # browsers call this proxy directly and cannot hold an app key, so limit
-# each client IP instead: 60 requests per 60s, per Cloudflare location.
+# each client IP instead: 60 JSON-RPC calls per 60s, per Cloudflare location.
 [[env.production-v3-app.ratelimits]]
 name = "rateLimiter"
 namespace_id = "1652"
@@ -115,3 +121,10 @@ routes = [
 kv_namespaces = [
     { binding = "kv", id = "f3f191a18c474989b97755cd2a938089" },
 ]
+
+# c3-api calls arrive over its service binding, without cf-connecting-ip,
+# so they are not limited. this limits anyone calling the public hostname.
+[[env.production-v3-api.ratelimits]]
+name = "rateLimiter"
+namespace_id = "1653"
+simple = { limit = 60, period = 60 }

@@ -7,12 +7,13 @@ export interface Env extends providers.Secrets {
   kv: KVNamespace;
   // behavioral settings, such as fallback expiration TTL
   settings: Settings;
-  // configurable allow key and allow list. allowedAppKey is a Worker secret;
-  // when it is not set, the proxy does not check application keys.
+  // configurable allow key and allow list. allowedAppKey is a Worker secret.
+  // When it is not set, the proxy does not check application keys.
   allowedAppKey?: string;
   allowedHosts: string[];
-  // per-client-IP rate limiter, bound only on browser-facing environments
+  // per-client rate limiter, and whether to only log requests over the limit
   rateLimiter?: RateLimit;
+  rateLimitLogOnly?: boolean;
 }
 
 // Stub execution context for the default fetch() arg (and tests). Only
@@ -46,13 +47,17 @@ export default {
     if (request.method === 'OPTIONS') { // 200: OK
       return cors(origin, new Response());
     }
-    // Throttle each client IP on environments that bind a rate limiter.
-    if (await isRateLimited(request, env.rateLimiter)) { // 429: Too Many Requests
-      return cors(origin, new Response(`rate limited`, {
-        status: 429,
-        // the period of every rateLimiter binding in wrangler.toml
-        headers: { 'Retry-After': '60' },
-      }));
+    // Throttle each client on environments that bind a rate limiter.
+    if (await isRateLimited(request, env.rateLimiter)) {
+      if (env.rateLimitLogOnly) {
+        console.warn(`rate limit exceeded (log only)`);
+      } else { // 429: Too Many Requests
+        return cors(origin, new Response(`rate limited`, {
+          status: 429,
+          // the period of every rateLimiter binding in wrangler.toml
+          headers: { 'Retry-After': '60' },
+        }));
+      }
     }
     // Load secrets from environment to instantiate node endpoints.
     const endpoints = providers.instantiate(env);
@@ -76,10 +81,13 @@ export default {
 };
 
 /*
- * Count the request against the client IP's rate limit. Cloudflare sets
- * cf-connecting-ip on every request from the internet, and clients cannot
- * override it. If the limiter is unbound or fails, let the request through:
- * an error in the limiter must not take the proxy down.
+ * Count each JSON-RPC call in the request against the client's rate limit,
+ * so that batching calls into one request does not raise the limit.
+ *
+ * Cloudflare sets cf-connecting-ip on every request from the internet, and
+ * clients cannot override it. Requests from other Workers over a service
+ * binding do not have it, and are not limited. If the limiter fails, let the
+ * request through: an error in the limiter must not take the proxy down.
  */
 async function isRateLimited(request: Request, rateLimiter?: RateLimit) {
   const clientIp = request.headers.get('cf-connecting-ip');
@@ -87,11 +95,50 @@ async function isRateLimited(request: Request, rateLimiter?: RateLimit) {
     return false;
   }
   try {
-    const { success } = await rateLimiter.limit({ key: clientIp });
-    return !success;
+    const key   = rateLimitKey(clientIp);
+    const calls = await countRpcs(request);
+    for (let call = 0; call < calls; call++) {
+      const { success } = await rateLimiter.limit({ key });
+      if (!success) {
+        return true;
+      }
+    }
+    return false;
   } catch (error) {
     console.error(`rate limiter error: ${(error as Error).message}`);
     return false;
+  }
+}
+
+/*
+ * An IPv6 client usually holds a whole /64 and can send each request from a
+ * different address in it, so IPv6 clients are limited by their /64 prefix.
+ */
+function rateLimitKey(clientIp: string) {
+  // IPv4, or IPv4-mapped IPv6 such as ::ffff:192.0.2.1
+  if (!clientIp.includes(':') || clientIp.includes('.')) {
+    return clientIp;
+  }
+  const [ head = '', tail = '' ] = clientIp.split('::');
+  const headGroups = head.split(':').filter(group => group.length > 0);
+  const tailGroups = tail.split(':').filter(group => group.length > 0);
+  const zeroGroups = Array(Math.max(0, 8 - headGroups.length - tailGroups.length)).fill('0');
+  const prefix = [ ...headGroups, ...zeroGroups, ...tailGroups ]
+    .slice(0, 4)
+    .map(group => parseInt(group, 16).toString(16));
+  return `${prefix.join(':')}::/64`;
+}
+
+/*
+ * The number of JSON-RPC calls in the request body: the length of a batch,
+ * and 1 for a single call or a body that is not a JSON array.
+ */
+async function countRpcs(request: Request) {
+  try {
+    const body = await request.clone().json();
+    return Array.isArray(body) ? Math.max(1, body.length) : 1;
+  } catch {
+    return 1;
   }
 }
 
@@ -100,6 +147,8 @@ function cors(origin: string, response: Response) {
   headers.set('Access-Control-Allow-Origin', origin);
   headers.set('Access-Control-Allow-Headers', 'Content-Type, User-Agent, Accept');
   headers.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  // let browsers read the backoff on 429 and 503 responses
+  headers.set('Access-Control-Expose-Headers', 'Retry-After');
   for (const [ name, value ] of Object.entries(SECURITY_HEADERS)) {
     headers.set(name, value);
   }

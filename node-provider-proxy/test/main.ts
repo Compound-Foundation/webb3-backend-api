@@ -130,11 +130,19 @@ function makeTestEnv({ storage }: {
  * eth_chainId is answered by the proxy itself, so these requests reach
  * the end of the handler without any upstream fetch.
  */
-function chainIdRequest(path: string, headers: Record<string, string> = {}) {
+function chainIdRequest(
+  path: string,
+  headers: Record<string, string> = {},
+  { batchSize }: { batchSize?: number } = {},
+) {
+  const call = (id: number) => ({ id, jsonrpc: '2.0', method: 'eth_chainId', params: [] });
+  const body = batchSize === undefined
+    ? call(1)
+    : Array.from({ length: batchSize }, (_, index) => call(index + 1));
   return new Request(`https://node-provider.test.local/${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...headers },
-    body: JSON.stringify({ id: 1, jsonrpc: '2.0', method: 'eth_chainId', params: [] }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -382,6 +390,7 @@ test('OPTIONS requests get proper CORS headers', async () => {
     [ 'access-control-allow-origin',  'https://app.compound.finance'     ],
     [ 'access-control-allow-methods', 'POST, OPTIONS'                    ],
     [ 'access-control-allow-headers', 'Content-Type, User-Agent, Accept' ],
+    [ 'access-control-expose-headers', 'Retry-After'                      ],
     ...SECURITY_HEADER_ENTRIES,
   ]));
 });
@@ -425,6 +434,7 @@ test('POST requests get proper CORS headers', async () => {
     [ 'access-control-allow-origin',  'https://app.compound.finance'     ],
     [ 'access-control-allow-methods', 'POST, OPTIONS'                    ],
     [ 'access-control-allow-headers', 'Content-Type, User-Agent, Accept' ],
+    [ 'access-control-expose-headers', 'Retry-After'                      ],
     ...SECURITY_HEADER_ENTRIES,
   ]));
 });
@@ -705,6 +715,7 @@ test('requests over the rate limit get 429 with CORS headers', async () => {
   assert.equal(response.status, 429);
   assert.equal(response.headers.get('retry-after'), '60');
   assert.equal(response.headers.get('access-control-allow-origin'), 'https://app.compound.xyz');
+  assert.equal(response.headers.get('access-control-expose-headers'), 'Retry-After');
   assertSecurityHeaders(response);
 });
 
@@ -761,6 +772,51 @@ test('rate limiter errors let the request through', async () => {
   env['rateLimiter'] = {
     async limit(): Promise<RateLimitOutcome> { throw new Error('limiter down'); },
   };
+
+  const request = chainIdRequest('ethereum-mainnet', { 'cf-connecting-ip': '192.0.2.1' });
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 200);
+});
+
+test('each call in a batch counts against the rate limit', async () => {
+  const env = makeTestEnv({});
+  const rateLimiter = makeRateLimiter(3);
+  env['rateLimiter'] = rateLimiter;
+  const headers = { 'cf-connecting-ip': '192.0.2.1' };
+
+  const withinLimit = await Api.fetch(chainIdRequest('ethereum-mainnet', headers, { batchSize: 3 }), env);
+  assert.equal(withinLimit.status, 200);
+  assert.equal(rateLimiter.counts.get('192.0.2.1'), 3);
+
+  const overLimit = await Api.fetch(chainIdRequest('ethereum-mainnet', headers, { batchSize: 1000 }), env);
+  assert.equal(overLimit.status, 429);
+  assert.equal(rateLimiter.counts.get('192.0.2.1'), 4, `stops counting at the first refusal`);
+});
+
+test('IPv6 clients are rate limited by their /64 prefix', async () => {
+  const env = makeTestEnv({});
+  const rateLimiter = makeRateLimiter(1);
+  env['rateLimiter'] = rateLimiter;
+
+  const first  = await Api.fetch(chainIdRequest('ethereum-mainnet', { 'cf-connecting-ip': '2001:db8:0:1::1' }), env);
+  const second = await Api.fetch(chainIdRequest('ethereum-mainnet', { 'cf-connecting-ip': '2001:0db8:0000:0001:ffff:ffff:ffff:ffff' }), env);
+  const other  = await Api.fetch(chainIdRequest('ethereum-mainnet', { 'cf-connecting-ip': '2001:db8:0:2::1' }), env);
+  const mapped = await Api.fetch(chainIdRequest('ethereum-mainnet', { 'cf-connecting-ip': '::ffff:192.0.2.1' }), env);
+  assert.equal(first.status,  200);
+  assert.equal(second.status, 429, `same /64 as the first request`);
+  assert.equal(other.status,  200, `different /64`);
+  assert.equal(mapped.status, 200, `IPv4-mapped addresses are not grouped`);
+  assert.deepEqual(new Map(rateLimiter.counts), new Map([
+    [ '2001:db8:0:1::/64', 2 ],
+    [ '2001:db8:0:2::/64', 1 ],
+    [ '::ffff:192.0.2.1',  1 ],
+  ]));
+});
+
+test('log-only mode serves requests over the rate limit', async () => {
+  const env = makeTestEnv({});
+  env['rateLimiter'] = makeRateLimiter(0);
+  env['rateLimitLogOnly'] = true;
 
   const request = chainIdRequest('ethereum-mainnet', { 'cf-connecting-ip': '192.0.2.1' });
   const response = await Api.fetch(request, env);
