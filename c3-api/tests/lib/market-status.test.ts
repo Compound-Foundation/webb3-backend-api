@@ -24,7 +24,7 @@ import {
   type UninstantiatedContext,
 } from '../../src/router.js';
 
-import { fixtureCatalog } from '../util/registry-fixture.js';
+import { fixtureCatalog, loadRegistrySnapshotFixture } from '../util/registry-fixture.js';
 
 import '../../shim/node-self.js';
 
@@ -270,4 +270,114 @@ t.test('a node that fails one market still fails the list', async t => {
   ] as const) {
     await t.rejects(answered(), /the node did not serve usdc/, what);
   }
+});
+
+const USDT = '0x3afdc9bca9213a35503b077a6072f3d0d5ab0840';
+
+// the fixture with the markets of `comets` created at `block`
+function createdAt(block: number, comets: string[]) {
+  const fixture = loadRegistrySnapshotFixture();
+  return fixtureCatalog({
+    ...fixture,
+    networks: fixture.networks.map(network => ({
+      ...network,
+      markets: network.markets.map(market => (
+        comets.includes(market.contracts.comet!) ? { ...market, creationBlock: block } : market
+      )),
+    })),
+  });
+}
+
+// the warning a market the chain has not reached is logged with, kept out of the test's output
+function quiet(test: { teardown(fn: () => void): unknown }): void {
+  const warn = console.warn;
+  console.warn = () => {};
+  test.teardown(() => { console.warn = warn; });
+}
+
+/*
+ * A market whose creation block is past the latest block has no point in the
+ * index of an account's rewards: it is answered as an error naming the block,
+ * and the other markets of its rewards contract are read. Base's AERO market
+ * is alone under its rewards contract here, and the index the contract's
+ * reward configurations are read on starts at its earliest market, so those
+ * are not read at all.
+ */
+t.test('the rewards of an account answer a market the chain has not reached as an error', async t => {
+  quiet(t);
+  const created = LATEST.number + 1;
+  const read: string[] = [];
+  const answer: Answer = (name, context) => {
+    if (name === 'getRewardConfigsSleuth') {
+      read.push(context.network);
+    }
+    return answers([])(name, context);
+  };
+
+  const response = await accountRewardsSummary(
+    { apiHost: '', nodeHost: '', nodeKey: '', account: ACCOUNT, catalog: createdAt(created, [ USDT, AERO ]) },
+    instantiated(answer, BATCHED),
+  );
+
+  t.equal(response.status, 200);
+  const body    = await response.json() as Array<Entry & { amount_owed?: string }>;
+  const message = `creationBlock ${created} is past the latest block, ${LATEST.number}`;
+  const entryOf = (address: string) => body.find(entry => entry.comet.address.toLowerCase() === address);
+  t.strictSame(entryOf(USDT), { chain_id: 1, comet: { address: comet(MAINNET, USDT).address }, status: 'error', message },
+    'a market beside others under its rewards contract is an error naming its block');
+  t.strictSame(entryOf(AERO), { chain_id: 8453, comet: { address: comet('base-mainnet', AERO).address }, status: 'error', message },
+    'and so is one alone under its own');
+  t.match(entryOf(USDC), { status: 'success', amount_owed: '1' }, 'while the others are read');
+  t.equal(body.length, 5, 'every market with claimable rewards is answered');
+  t.same(read, [ MAINNET ], 'and reward configurations are read only where the chain has reached a market');
+});
+
+/*
+ * What the rewards contract pays is read for all its markets at once, and
+ * decides nothing for one the chain has not reached: that one is an error
+ * though the contract pays it nothing, as it is where no market of the
+ * contract is reached and nothing is read. One the chain has reached that the
+ * contract pays nothing is left out, as it always was.
+ */
+t.test('the rewards of an account answer a market the chain has not reached as an error whatever its contract pays', async t => {
+  quiet(t);
+  const created = LATEST.number + 1;
+  const nothing = { rewardConfig: { rewardToken: '0x0000000000000000000000000000000000000000' } };
+  // the contract pays nothing for USDT and WBTC, and the others as usual
+  const answer: Answer = (name, context) => {
+    const answered = answers([])(name, context);
+    return name !== 'getRewardConfigsSleuth' ? answered : (answered as unknown[]).map((config, index) => (
+      [ USDT, WBTC ].includes(context.cometMarkets[index].address.toLowerCase()) ? nothing : config
+    ));
+  };
+
+  const response = await accountRewardsSummary(
+    { apiHost: '', nodeHost: '', nodeKey: '', account: ACCOUNT, catalog: createdAt(created, [ USDT ]) },
+    instantiated(answer, BATCHED),
+  );
+
+  t.equal(response.status, 200);
+  const body    = await response.json() as Entry[];
+  const entryOf = (address: string) => body.find(entry => entry.comet.address.toLowerCase() === address);
+  t.strictSame(entryOf(USDT), {
+    chain_id: 1,
+    comet:    { address: comet(MAINNET, USDT).address },
+    status:   'error',
+    message:  `creationBlock ${created} is past the latest block, ${LATEST.number}`,
+  }, 'a market the chain has not reached is an error though its rewards contract pays it nothing');
+  t.equal(entryOf(WBTC), undefined, 'while one it has reached is left out');
+});
+
+/*
+ * A creation block is past the latest block only until the chain reaches it:
+ * the market is read from then on, as every other is.
+ */
+t.test('a market is read once the chain reaches its creation block', async t => {
+  const reached = { ...routeData(MAINNET, AllContracts), catalog: createdAt(LATEST.number, [ USDT ]) };
+
+  const summary = await marketHandlers.latestSummary(reached, uninstantiated(answers([])));
+  t.equal(statuses(await summary.json())[USDT], 'success', 'the summary reads it');
+
+  const history = await marketHandlers.historicalSummary(reached, instantiated(answers([])));
+  t.equal(statuses(await history.json())[USDT], 'success', 'and so does the history');
 });
