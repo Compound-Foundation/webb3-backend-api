@@ -1,10 +1,15 @@
 import t, { Test } from 'tap';
+import { readFileSync } from 'node:fs';
 import { MemoryKv } from '../util/kv.js';
 import C3Api, { Env } from '../../entrypoint.js';
-import { STAGE_ACCESS_HEADER } from '../../src/stage-access.js';
+import {
+  STAGE_ACCESS_HEADER,
+  UNGATED_ENVIRONMENTS,
+  MINIMUM_KEY_LENGTH,
+} from '../../src/stage-access.js';
 import '../../shim/node-self.js';
 
-const STAGE_ACCESS_KEY_VALUE = 'stage-access-key-for-tests';
+const STAGE_ACCESS_KEY_VALUE = 'stage-access-key-for-tests-0123456789abcdef';
 
 function makeEnv(overrides: Partial<Env>): Env {
   return {
@@ -59,11 +64,12 @@ t.test(`stage accepts a request with the access key`, async t => {
 });
 
 t.test(`stage without a configured access key rejects every request`, async t => {
-  for (const configuredKey of [ undefined, '' ]) {
+  const shortKey = 'k'.repeat(MINIMUM_KEY_LENGTH - 1);
+  for (const configuredKey of [ undefined, '', shortKey ]) {
     const env = configuredKey === undefined
       ? makeEnv({})
       : makeEnv({ STAGE_ACCESS_KEY: configuredKey });
-    for (const presentedKey of [ undefined, '', 'anything' ]) {
+    for (const presentedKey of [ undefined, '', 'anything', shortKey ]) {
       const headers: Record<string, string> = presentedKey === undefined
         ? {}
         : { [STAGE_ACCESS_HEADER]: presentedKey };
@@ -163,4 +169,45 @@ t.test(`stage answers a CORS preflight without the access key`, async t => {
   const response = await C3Api.fetch(preflight, env);
   t.equal(response.status, 204, 'preflight returns 204');
   t.equal(await response.text(), '', 'preflight body is empty');
+});
+
+/*
+ * Reads ENVIRONMENT from each [vars] and [env.<name>.vars] table. The tables
+ * in wrangler.toml are flat key = "value" lines, so a line scan suffices.
+ */
+function readDeployedEnvironments(): Map<string, string> {
+  const toml = readFileSync(new URL('../../../wrangler.toml', import.meta.url), 'utf8');
+  const environments = new Map<string, string>();
+  let table: string | null = null;
+  for (const line of toml.split('\n')) {
+    const header = line.match(/^\[(?:env\.([\w-]+)\.)?vars\]\s*$/);
+    if (header !== null) {
+      table = header[1] ?? 'default';
+      continue;
+    }
+    if (line.startsWith('[')) {
+      table = null;
+      continue;
+    }
+    const value = line.match(/^ENVIRONMENT\s*=\s*"([^"]*)"/);
+    if (table !== null && value !== null) {
+      environments.set(table, value[1]!);
+    }
+  }
+  return environments;
+}
+
+t.test(`wrangler.toml gates every deployment except production`, async t => {
+  const environments = readDeployedEnvironments();
+  t.equal(environments.get('production'), 'production', 'production deploys as production');
+  t.equal(environments.get('stage'), 'stage', 'stage deploys as stage');
+  for (const [ table, environment ] of environments) {
+    if (table === 'production' || table === 'default') {
+      continue;
+    }
+    t.notOk(
+      UNGATED_ENVIRONMENTS.includes(environment),
+      `[env.${table}] sets a gated ENVIRONMENT (${environment})`,
+    );
+  }
 });

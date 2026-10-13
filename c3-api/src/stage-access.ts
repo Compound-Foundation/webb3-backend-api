@@ -8,12 +8,19 @@
  * the STAGE_ACCESS_HEADER request header.
  *
  * The gate fails closed: an unknown or missing ENVIRONMENT is gated, and a
- * gated deployment without a STAGE_ACCESS_KEY secret rejects every request.
+ * gated deployment whose STAGE_ACCESS_KEY secret is unset or shorter than
+ * MINIMUM_KEY_LENGTH rejects every request.
  */
 
 const STAGE_ACCESS_HEADER = 'X-Stage-Access-Key';
 
 const UNGATED_ENVIRONMENTS: readonly string[] = [ 'production', 'local', 'test' ];
+
+/*
+ * A shorter configured key is treated as unset, so that a guessable key
+ * cannot open the gate. Generate the key with `openssl rand -hex 32`.
+ */
+const MINIMUM_KEY_LENGTH = 32;
 
 interface StageAccessEnv {
   ENVIRONMENT?:      string,
@@ -48,7 +55,7 @@ async function isStageAccessAllowed(request: Request, env: StageAccessEnv): Prom
     return true;
   }
   const expectedKey = env.STAGE_ACCESS_KEY;
-  if (expectedKey === undefined || expectedKey === '') {
+  if (expectedKey === undefined || expectedKey.length < MINIMUM_KEY_LENGTH) {
     return false;
   }
   const presentedKey = request.headers.get(STAGE_ACCESS_HEADER);
@@ -60,5 +67,7 @@ async function isStageAccessAllowed(request: Request, env: StageAccessEnv): Prom
 
 export {
   STAGE_ACCESS_HEADER,
+  UNGATED_ENVIRONMENTS,
+  MINIMUM_KEY_LENGTH,
   isStageAccessAllowed,
 };

@@ -42,11 +42,12 @@ curl -H "X-Stage-Access-Key: $STAGE_ACCESS_KEY" \
   'https://v3-api-stage.compound.xyz/market/{network}/{contract}/summary'
 ```
 
-Set or rotate the secret with the command below. Do not store leading or
-trailing whitespace in the secret: HTTP header values are trimmed, so such a
-key never matches.
+Set or rotate the secret with the command below. The worker treats a key
+shorter than 32 characters as unset. Generate it rather than choosing it, and
+keep surrounding whitespace out of it: HTTP header values are trimmed, so such
+a key never matches.
 ```sh
-npx wrangler secret put STAGE_ACCESS_KEY --env stage
+printf %s "$(openssl rand -hex 32)" | npx wrangler secret put STAGE_ACCESS_KEY --env stage
 ```
 
 # Testing
