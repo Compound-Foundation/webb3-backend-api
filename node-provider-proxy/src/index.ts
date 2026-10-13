@@ -7,9 +7,12 @@ export interface Env extends providers.Secrets {
   kv: KVNamespace;
   // behavioral settings, such as fallback expiration TTL
   settings: Settings;
-  // configurable allow key and allow list
-  allowedAppKey: string;
+  // configurable allow key and allow list. allowedAppKey is a Worker secret;
+  // when it is not set, the proxy does not check application keys.
+  allowedAppKey?: string;
   allowedHosts: string[];
+  // per-client-IP rate limiter, bound only on browser-facing environments
+  rateLimiter?: RateLimit;
 }
 
 // Stub execution context for the default fetch() arg (and tests). Only
@@ -43,6 +46,14 @@ export default {
     if (request.method === 'OPTIONS') { // 200: OK
       return cors(origin, new Response());
     }
+    // Throttle each client IP on environments that bind a rate limiter.
+    if (await isRateLimited(request, env.rateLimiter)) { // 429: Too Many Requests
+      return cors(origin, new Response(`rate limited`, {
+        status: 429,
+        // the period of every rateLimiter binding in wrangler.toml
+        headers: { 'Retry-After': '60' },
+      }));
+    }
     // Load secrets from environment to instantiate node endpoints.
     const endpoints = providers.instantiate(env);
     // Validate the request, then forward it to the node provider.
@@ -51,7 +62,7 @@ export default {
         endpoints,
         kv:       env.kv,
         settings: env.settings,
-        allowedAppKey: env.allowedAppKey,
+        allowedAppKey: env.allowedAppKey ?? '',
         allowedHosts: env.allowedHosts,
         defer:    context.waitUntil,
       });
@@ -63,6 +74,26 @@ export default {
     return cors(origin, response);
   },
 };
+
+/*
+ * Count the request against the client IP's rate limit. Cloudflare sets
+ * cf-connecting-ip on every request from the internet, and clients cannot
+ * override it. If the limiter is unbound or fails, let the request through:
+ * an error in the limiter must not take the proxy down.
+ */
+async function isRateLimited(request: Request, rateLimiter?: RateLimit) {
+  const clientIp = request.headers.get('cf-connecting-ip');
+  if (!rateLimiter || !clientIp) {
+    return false;
+  }
+  try {
+    const { success } = await rateLimiter.limit({ key: clientIp });
+    return !success;
+  } catch (error) {
+    console.error(`rate limiter error: ${(error as Error).message}`);
+    return false;
+  }
+}
 
 function cors(origin: string, response: Response) {
   const headers = new Headers(response.headers);

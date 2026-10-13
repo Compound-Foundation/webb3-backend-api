@@ -126,6 +126,33 @@ function makeTestEnv({ storage }: {
   };
 }
 
+/*
+ * eth_chainId is answered by the proxy itself, so these requests reach
+ * the end of the handler without any upstream fetch.
+ */
+function chainIdRequest(path: string, headers: Record<string, string> = {}) {
+  return new Request(`https://node-provider.test.local/${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: JSON.stringify({ id: 1, jsonrpc: '2.0', method: 'eth_chainId', params: [] }),
+  });
+}
+
+/*
+ * Rate limiter test double: allows `limit` calls per key, then refuses.
+ */
+function makeRateLimiter(limit: number) {
+  const counts = new Map<string, number>();
+  return {
+    counts,
+    async limit({ key }: RateLimitOptions): Promise<RateLimitOutcome> {
+      const count = (counts.get(key) ?? 0) + 1;
+      counts.set(key, count);
+      return { success: count <= limit };
+    },
+  };
+}
+
 // before each test, replace the global fetch with a fresh mock
 declare var fetch: mock.Fetch;
 test.beforeEach(() => globalThis.fetch = mock.fetch({}));
@@ -221,6 +248,25 @@ test('configured key but no sent key causes 401', async () => {
   });
   const response = await Api.fetch(request, env);
   assert.equal(response.status, 401);
+});
+
+test('configured key with matching sent key is authorized', async () => {
+  const env = makeTestEnv({});
+  env['allowedAppKey'] = 'test_key_12345678901';
+
+  const request = chainIdRequest('ethereum-mainnet/test_key_12345678901');
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { id: 1, jsonrpc: '2.0', result: '0x1' });
+});
+
+test('unset app key secret does not check keys', async () => {
+  const env = makeTestEnv({});
+  delete env['allowedAppKey'];
+
+  const request = chainIdRequest('ethereum-mainnet/undefined');
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 200);
 });
 
 test('non configured allowed hosts is authorized', async () => {
@@ -643,4 +689,80 @@ test('eth_chainId is pre-empted (no upstream)', async (_) => {
   assert.deepEqual(json, { id: 43, jsonrpc: '2.0', result: '0x1' },
     `response should contain expected JSON-RPC response`
   );
+});
+
+// per-client-IP rate limiting
+test('requests over the rate limit get 429 with CORS headers', async () => {
+  const env = makeTestEnv({});
+  env['rateLimiter'] = makeRateLimiter(2);
+  const headers = { 'cf-connecting-ip': '192.0.2.1', 'origin': 'https://app.compound.xyz' };
+
+  for (let i = 0; i < 2; i++) {
+    const response = await Api.fetch(chainIdRequest('ethereum-mainnet', headers), env);
+    assert.equal(response.status, 200, `request ${i} is within the limit`);
+  }
+  const response = await Api.fetch(chainIdRequest('ethereum-mainnet', headers), env);
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get('retry-after'), '60');
+  assert.equal(response.headers.get('access-control-allow-origin'), 'https://app.compound.xyz');
+  assertSecurityHeaders(response);
+});
+
+test('rate limit is counted per client IP', async () => {
+  const env = makeTestEnv({});
+  const rateLimiter = makeRateLimiter(1);
+  env['rateLimiter'] = rateLimiter;
+
+  const first  = await Api.fetch(chainIdRequest('ethereum-mainnet', { 'cf-connecting-ip': '192.0.2.1' }), env);
+  const second = await Api.fetch(chainIdRequest('ethereum-mainnet', { 'cf-connecting-ip': '192.0.2.2' }), env);
+  const third  = await Api.fetch(chainIdRequest('ethereum-mainnet', { 'cf-connecting-ip': '192.0.2.1' }), env);
+  assert.equal(first.status,  200);
+  assert.equal(second.status, 200);
+  assert.equal(third.status,  429);
+  assert.deepEqual(new Map(rateLimiter.counts), new Map([[ '192.0.2.1', 2 ], [ '192.0.2.2', 1 ]]));
+});
+
+test('rate limit is checked before the app key', async () => {
+  const env = makeTestEnv({});
+  env['allowedAppKey'] = 'test_key_12345678901';
+  env['rateLimiter'] = makeRateLimiter(0);
+
+  const request = chainIdRequest('ethereum-mainnet/badkey', { 'cf-connecting-ip': '192.0.2.1' });
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 429);
+});
+
+test('OPTIONS requests are not rate limited', async () => {
+  const env = makeTestEnv({});
+  const rateLimiter = makeRateLimiter(0);
+  env['rateLimiter'] = rateLimiter;
+
+  const request = new Request('https://node-provider.test.local/ethereum-mainnet', {
+    method: 'OPTIONS',
+    headers: { 'cf-connecting-ip': '192.0.2.1' },
+  });
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 200);
+  assert.equal(rateLimiter.counts.size, 0);
+});
+
+test('requests without a client IP are not rate limited', async () => {
+  const env = makeTestEnv({});
+  const rateLimiter = makeRateLimiter(0);
+  env['rateLimiter'] = rateLimiter;
+
+  const response = await Api.fetch(chainIdRequest('ethereum-mainnet'), env);
+  assert.equal(response.status, 200);
+  assert.equal(rateLimiter.counts.size, 0);
+});
+
+test('rate limiter errors let the request through', async () => {
+  const env = makeTestEnv({});
+  env['rateLimiter'] = {
+    async limit(): Promise<RateLimitOutcome> { throw new Error('limiter down'); },
+  };
+
+  const request = chainIdRequest('ethereum-mainnet', { 'cf-connecting-ip': '192.0.2.1' });
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 200);
 });

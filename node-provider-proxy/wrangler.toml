@@ -18,9 +18,10 @@ kv_namespaces = [
 ]
 
 [vars]
-# secrets
-allowedAppKey = ''
+# allowedAppKey is a secret and must not be declared here: see README.md.
+# to require a key locally, put allowedAppKey in .dev.vars.
 allowedHosts = []
+# secrets
 alchemyEthMainnet = 'ALCHEMY_XXX'
 alchemyArbMainnet = 'ALCHEMY_XXX'
 alchemyPolygonMainnet = 'ALCHEMY_XXX'
@@ -61,6 +62,13 @@ kv_namespaces = [
     { binding = "kv", id = "b656c8d3ba254c2189a436373efab3ef" },
 ]
 
+# browsers call this proxy directly and cannot hold an app key, so limit
+# each client IP instead: 60 requests per 60s, per Cloudflare location.
+[[env.production-v2.ratelimits]]
+name = "rateLimiter"
+namespace_id = "1651"
+simple = { limit = 60, period = 60 }
+
 [env.production-v3-app.vars]
 allowedHosts = ["app.compound.xyz", "v3-app.compound.xyz", "v3-pinata-host.compound.xyz"]
 
@@ -80,7 +88,16 @@ kv_namespaces = [
     { binding = "kv", id = "d38d6e90c1d44dc0b8a6a9acc4dd2d64" },
 ]
 
+# browsers call this proxy directly and cannot hold an app key, so limit
+# each client IP instead: 60 requests per 60s, per Cloudflare location.
+[[env.production-v3-app.ratelimits]]
+name = "rateLimiter"
+namespace_id = "1652"
+simple = { limit = 60, period = 60 }
+
 [env.production-v3-api.vars]
+# c3-api is the only intended caller, so this proxy authenticates callers
+# with the allowedAppKey secret instead of an origin allowlist.
 allowedHosts = []
 
 [env.production-v3-api.vars.settings]
