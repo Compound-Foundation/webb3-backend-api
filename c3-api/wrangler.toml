@@ -23,6 +23,17 @@ kv_namespaces = [
 # developing locally, we can just invoke other workers over the network
 services = []
 
+# per-client rate limit (lib/rate-limit.ts): 120/min in production and
+# local dev, 60/min on stage. The period can only be 10 or 60 seconds. Each
+# namespace_id must be unique in the Cloudflare account, because bindings
+# that share one share counters, even across scripts. The ID registry and the
+# traffic behind these limits are in frontend-devops cloudflare/RATE_LIMITS.md
+# (13xx is reserved for this worker).
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1391"
+simple = { limit = 120, period = 60 }
+
 [vars]
 DEBUG = "fetch"
 ENVIRONMENT = "local"
@@ -57,6 +68,11 @@ kv_namespaces = [
 services = [
     { binding = "node_provider_proxy", service = "node-provider-v3-api" }
 ]
+# bindings are not inherited by named envs, so it is declared again here
+[[env.stage.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1311"
+simple = { limit = 60, period = 60 }
 
 [env.production.vars]
 DEBUG = ""
@@ -79,3 +95,8 @@ kv_namespaces = [
 services = [
     { binding = "node_provider_proxy", service = "node-provider-v3-api" }
 ]
+# bindings are not inherited by named envs, so it is declared again here
+[[env.production.ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1301"
+simple = { limit = 120, period = 60 }
