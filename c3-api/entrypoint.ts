@@ -41,8 +41,9 @@ interface Env extends Flags.Env, ServiceBindings {
   NODE_PROXY_HOST: string,
   NODE_PROXY_KEY: string,
   /*
-   * secret that callers of gated (non-production) deployments must present,
-   * cf. src/stage-access.ts
+   * value callers must send in the X-Stage-Access-Key header on every
+   * deployment except production, local and test; where it is unset, every
+   * request gets a 403
    */
   STAGE_ACCESS_KEY?: string,
 

@@ -1,5 +1,5 @@
 /*
- * Access gate for non-production deployments (audit finding M-03).
+ * Access gate for non-production deployments.
  *
  * The stage worker serves the same data as production and spends the
  * production RPC quota through its service binding, so it must not answer
@@ -41,7 +41,7 @@ async function keysMatch(presented: string, expected: string): Promise<boolean> 
 }
 
 /*
- * Returns true when the request may reach the API in this environment.
+ * Returns true when the request can reach the API in this environment.
  */
 async function isStageAccessAllowed(request: Request, env: StageAccessEnv): Promise<boolean> {
   if (env.ENVIRONMENT !== undefined && UNGATED_ENVIRONMENTS.includes(env.ENVIRONMENT)) {
@@ -60,6 +60,5 @@ async function isStageAccessAllowed(request: Request, env: StageAccessEnv): Prom
 
 export {
   STAGE_ACCESS_HEADER,
-  StageAccessEnv,
   isStageAccessAllowed,
 };

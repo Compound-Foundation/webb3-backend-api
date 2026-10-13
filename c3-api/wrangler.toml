@@ -45,8 +45,8 @@ MEMORY_CACHE_SEED = "stage"
 host    = "node-provider-v3-api.compound.xyz"
 binding = "node_provider_proxy"
 
-# stage requires the STAGE_ACCESS_KEY secret; without it every request gets a
-# 403 (cf. src/stage-access.ts):
+# callers of stage must send the STAGE_ACCESS_KEY secret in the
+# X-Stage-Access-Key header; while the secret is unset, every request gets a 403:
 #   npx wrangler secret put STAGE_ACCESS_KEY --env stage
 [env.stage]
 name = "v3-api-stage"

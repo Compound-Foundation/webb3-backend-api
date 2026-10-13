@@ -42,7 +42,9 @@ curl -H "X-Stage-Access-Key: $STAGE_ACCESS_KEY" \
   'https://v3-api-stage.compound.xyz/market/{network}/{contract}/summary'
 ```
 
-Set or rotate the secret with:
+Set or rotate the secret with the command below. Do not store leading or
+trailing whitespace in the secret: HTTP header values are trimmed, so such a
+key never matches.
 ```sh
 npx wrangler secret put STAGE_ACCESS_KEY --env stage
 ```

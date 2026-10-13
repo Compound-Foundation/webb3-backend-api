@@ -4,7 +4,7 @@ import C3Api, { Env } from '../../entrypoint.js';
 import { STAGE_ACCESS_HEADER } from '../../src/stage-access.js';
 import '../../shim/node-self.js';
 
-const STAGE_KEY = 'stage-access-key-for-tests';
+const STAGE_ACCESS_KEY_VALUE = 'stage-access-key-for-tests';
 
 function makeEnv(overrides: Partial<Env>): Env {
   return {
@@ -38,23 +38,23 @@ function assertForbidden(t: Test, response: Response) {
 }
 
 t.test(`stage rejects a request without the access key`, async t => {
-  const env = makeEnv({ STAGE_ACCESS_KEY: STAGE_KEY });
+  const env = makeEnv({ STAGE_ACCESS_KEY: STAGE_ACCESS_KEY_VALUE });
   const response = await C3Api.fetch(request(), env);
   assertForbidden(t, response);
   t.equal(await response.text(), 'forbidden', 'rejection body holds no API data');
 });
 
 t.test(`stage rejects a request with a wrong access key`, async t => {
-  const env = makeEnv({ STAGE_ACCESS_KEY: STAGE_KEY });
-  for (const wrongKey of [ '', 'wrong', `${STAGE_KEY}x`, STAGE_KEY.slice(0, -1) ]) {
+  const env = makeEnv({ STAGE_ACCESS_KEY: STAGE_ACCESS_KEY_VALUE });
+  for (const wrongKey of [ '', 'wrong', `${STAGE_ACCESS_KEY_VALUE}x`, STAGE_ACCESS_KEY_VALUE.slice(0, -1) ]) {
     const response = await C3Api.fetch(request({ [STAGE_ACCESS_HEADER]: wrongKey }), env);
     assertForbidden(t, response);
   }
 });
 
 t.test(`stage accepts a request with the access key`, async t => {
-  const env = makeEnv({ STAGE_ACCESS_KEY: STAGE_KEY });
-  const response = await C3Api.fetch(request({ [STAGE_ACCESS_HEADER]: STAGE_KEY }), env);
+  const env = makeEnv({ STAGE_ACCESS_KEY: STAGE_ACCESS_KEY_VALUE });
+  const response = await C3Api.fetch(request({ [STAGE_ACCESS_HEADER]: STAGE_ACCESS_KEY_VALUE }), env);
   t.equal(response.status, 404, 'request reaches the router');
 });
 
@@ -74,21 +74,89 @@ t.test(`stage without a configured access key rejects every request`, async t =>
 
 t.test(`unknown or missing environments are gated`, async t => {
   for (const environment of [ 'jordan-stage', 'Production', '', undefined ]) {
-    const env = makeEnv({ ENVIRONMENT: environment as string, STAGE_ACCESS_KEY: STAGE_KEY });
+    const env = makeEnv({ ENVIRONMENT: environment as string, STAGE_ACCESS_KEY: STAGE_ACCESS_KEY_VALUE });
     assertForbidden(t, await C3Api.fetch(request(), env));
   }
 });
 
 t.test(`production, local and test are not gated`, async t => {
   for (const environment of [ 'production', 'local', 'test' ]) {
-    const env = makeEnv({ ENVIRONMENT: environment });
-    const response = await C3Api.fetch(request(), env);
-    t.equal(response.status, 404, `${environment} request reaches the router`);
+    for (const env of [
+      makeEnv({ ENVIRONMENT: environment }),
+      makeEnv({ ENVIRONMENT: environment, STAGE_ACCESS_KEY: STAGE_ACCESS_KEY_VALUE }),
+    ]) {
+      const response = await C3Api.fetch(request(), env);
+      t.equal(response.status, 404, `${environment} request reaches the router`);
+    }
+  }
+});
+
+/*
+ * A KV namespace and a node provider binding that count every use and fail,
+ * so a test can tell whether a request did any work before it was answered.
+ */
+function makeCountingResources() {
+  const uses = { kv: 0, nodeProvider: 0, fetch: 0 };
+  const kv = new Proxy({}, {
+    get: () => async () => {
+      uses.kv++;
+      throw new Error('kv used');
+    },
+  }) as KVNamespace;
+  const nodeProvider = {
+    fetch: async () => {
+      uses.nodeProvider++;
+      throw new Error('node provider used');
+    },
+  } as unknown as { fetch: typeof self.fetch };
+  return { uses, kv, nodeProvider };
+}
+
+t.test(`stage rejects a data route before touching KV or RPC`, async t => {
+  const originalFetch = globalThis.fetch;
+  t.teardown(() => { globalThis.fetch = originalFetch; });
+
+  const dataRoute = `http://test.local/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3/summary`;
+  for (const [ presentedKey, expectWork ] of [
+    [ undefined, false ],
+    [ 'wrong', false ],
+    // control: the same request with the key does reach KV or RPC, which
+    // shows that this test can detect work done for a request
+    [ STAGE_ACCESS_KEY_VALUE, true ],
+  ] as const) {
+    const { uses, kv, nodeProvider } = makeCountingResources();
+    globalThis.fetch = async () => {
+      uses.fetch++;
+      throw new Error('network used');
+    };
+    const env = makeEnv({
+      STAGE_ACCESS_KEY: STAGE_ACCESS_KEY_VALUE,
+      MEMORY_CACHE_SEED: `stage-access-work-${presentedKey ?? 'none'}`,
+      NODE_PROXY_HOST: 'node-provider.test',
+      kv_mainnet: kv,
+      kv_testnet: kv,
+      node_provider_proxy: nodeProvider,
+      URL_SERVICE_BINDING_OVERRIDES: [
+        { host: 'node-provider.test', binding: 'node_provider_proxy' },
+      ],
+    });
+    const headers: Record<string, string> = presentedKey === undefined
+      ? {}
+      : { [STAGE_ACCESS_HEADER]: presentedKey };
+    const response = await C3Api.fetch(new Request(dataRoute, { headers }), env);
+    const work = uses.kv + uses.nodeProvider + uses.fetch;
+    if (expectWork) {
+      t.not(response.status, 403, 'request with the key passes the gate');
+      t.ok(work > 0, 'request with the key reaches KV or RPC');
+    } else {
+      assertForbidden(t, response);
+      t.equal(work, 0, `rejected request (key: ${presentedKey}) does no KV or RPC work`);
+    }
   }
 });
 
 t.test(`stage answers a CORS preflight without the access key`, async t => {
-  const env = makeEnv({ STAGE_ACCESS_KEY: STAGE_KEY });
+  const env = makeEnv({ STAGE_ACCESS_KEY: STAGE_ACCESS_KEY_VALUE });
   const preflight = new Request(`http://test.local/legacy/mainnet/gas-price`, {
     method: 'OPTIONS',
   });
