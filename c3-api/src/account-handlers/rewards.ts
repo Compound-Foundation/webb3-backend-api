@@ -6,6 +6,7 @@ import * as KnownNetwork from '../../lib/well-known/networks/network.js';
 
 import type { CatalogMarket } from '../registry/catalog.js';
 
+import { unreachedMarket } from '../market.js';
 import { AccountRouteData } from '../router.js';
 
 import { Context } from './handlers.js';
@@ -54,32 +55,35 @@ async function rewardsSummary(
     const rewards = await evaluator.evaluate(evaluator.pipe1([
       { ethGetBlock: { apiHost, nodeHost, nodeKey, blockReference: 'latest', network } },
       latestBlock => {
-
-          const getRewardConfigsSleuth = Fallible.must(cometRewards.getRewardConfigsSleuth.index.project({
-            apiHost,
-            nodeHost,
-            nodeKey, 
-            network,            
-            block: latestBlock,
-            cometMarkets: contracts
-          }));
+          const configs = { apiHost, nodeHost, nodeKey, network, block: latestBlock, cometMarkets: contracts };
+          /*
+           * The index the reward configurations are read on starts at the
+           * earliest market of the group, so it refuses the latest block
+           * only when the chain has reached none of them: each is then
+           * answered as a market the chain has not reached (market.ts).
+           */
+          if (!cometRewards.getRewardConfigsSleuth.index.covers(configs)) {
+            return evaluator.split(contracts.map(contract => evaluator.value(unreachedMarket(contract, latestBlock))));
+          }
+          const getRewardConfigsSleuth = Fallible.must(cometRewards.getRewardConfigsSleuth.index.project(configs));
 
           return evaluator.pipe1([
             { getRewardConfigsSleuth },
             rewardConfigs => {
               return evaluator.split(rewardConfigs.map((rewardConfig, index) =>{
+                /*
+                 * Asked before what the contract pays, which is read only
+                 * where the chain has reached another market of the contract:
+                 * a market it has not reached is an error either way.
+                 */
+                const origin = { apiHost, nodeHost, nodeKey, account, network, contract: contracts[index], block: latestBlock };
+                if (!accountComputations.accountRewards.index.covers(origin)) {
+                  return evaluator.value(unreachedMarket(contracts[index], latestBlock));
+                }
                 if (rewardConfig.rewardConfig.rewardToken === Eth.NullAddress) {
                   return evaluator.value('SKIP' as const);
                 }
-                const accountRewards = Fallible.must(accountComputations.accountRewards.index.project({
-                  apiHost,
-                  nodeHost,
-                  nodeKey,
-                  account,
-                  network,
-                  contract: contracts[index],
-                  block: latestBlock,
-                }));
+                const accountRewards = Fallible.must(accountComputations.accountRewards.index.project(origin));
                 return evaluator.pull1({ accountRewards });
               }));
             }

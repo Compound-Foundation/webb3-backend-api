@@ -641,14 +641,16 @@ async function writeOverlays(
   }
 
   /*
-   * The creation block is where every index of a market starts, and one the
-   * chain contradicts fails the routes that read the market, those over every
-   * network among them. A document that changes it has it checked against the
-   * chain, with one read per network, whether or not it serves the market: a
-   * later document that switches the market on and keeps the block then
-   * serves one that was checked. A document that keeps the block reads
-   * nothing for it, as one that keeps its feeds does, and a block of 0 states
-   * none.
+   * The creation block is where every index of a market starts. One past the
+   * latest block leaves none of the market's values to read, and the market
+   * routes and the rewards of an account answer it as an error until the
+   * chain reaches it (market.ts, unreachedMarket); one before the deployment
+   * fails the history routes that read the market, those over every network
+   * among them. A document that changes it has it checked against the chain,
+   * with one read per network, whether or not it serves the market: a later
+   * document that switches the market on and keeps the block then serves one
+   * that was checked. A document that keeps the block reads nothing for it,
+   * as one that keeps its feeds does, and a block of 0 states none.
    */
   const creations = new Map<string, Parameters<CreationReader>[1]>();
   for (const { key, row, overlay } of changedMarkets) {

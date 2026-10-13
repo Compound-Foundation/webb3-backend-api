@@ -122,10 +122,30 @@ A summary lists every collateral with its own status:
 
 A history reports this per day, with the day's `date` and `timestamp`. A
 market is read in full again once a registry version that says how to price
-the feed is active. Only a price feed reports a status this way: a node that
-does not answer still fails the whole request, with `503 UPSTREAM_UNAVAILABLE`,
-and so does any other call that reverts, with `500 INTERNAL`
-([Errors](#errors)).
+the feed is active.
+
+A market whose `creationBlock` in the active version is past the latest
+block of its chain is `error` too, on every market route and on
+`/account/{address}/rewards`, asked for alone or among others, and in a
+history on every day. None of its values can be read, since every index of
+a market starts at its creation block, and the other markets are answered
+as usual. The message names the block:
+
+```json
+{ "chain_id": 1, "comet": { "address": "0x3Afd…0840" }, "status": "error", "message": "creationBlock 33400000 is past the latest block, 23400000" }
+```
+
+Writing an overlay refuses such a block, but a version can hold one that
+write never checked — inherited by an import from an overlay written before
+it did, say. The market is answered so until a version with the right block
+is active, or until the chain reaches the block. From then on it is read
+again, but its history repeats the day of that block for every day before
+it, so the block still needs correcting.
+
+Only a price feed and a creation block the chain has not reached report a
+status this way: a node that does not answer still fails the whole request,
+with `503 UPSTREAM_UNAVAILABLE`, and so does any other call that reverts,
+with `500 INTERNAL` ([Errors](#errors)).
 
 ## Market labels
 
@@ -258,6 +278,15 @@ collateral the version remaps to another feed (`deprecated_price_remap`) is
 read from that feed, and where it does not answer — on a day before it was
 deployed — from the feed its Comet named that day; the collateral is
 `error`, and the day `partially`, only when neither answers.
+
+A market whose creation block is past the latest block has no day to
+sample ([Market status](#market-status)). It reports the same days as the
+other markets of its network, each as its `error` with the day's `date` and
+`timestamp`:
+
+```json
+{ "chain_id": 1, "comet": { "address": "0x3Afd…0840" }, "status": "error", "message": "creationBlock 33400000 is past the latest block, 23400000", "timestamp": 1758012347, "date": "2025-09-16" }
+```
 
 ## `/market/{network}/{address}/rewards/summary`
 ### description:
@@ -1440,9 +1469,13 @@ rewards contract names no reward token is refused with `409`.
 A `creationBlock` the document changes is held against the chain, unless it
 is `0`: it must be the block the market's Comet was deployed in — the Comet
 has code at that block and none at the block before it — and not past the
-chain's latest block. Every index of the market starts there, and a wrong one
-fails the routes that read the market, those over all networks among them. A
-block the chain contradicts is refused with `422` and `details.code`
+chain's latest block. Every index of the market starts there. One past the
+latest block leaves none of the market's values to read, and the market
+routes and `/account/{address}/rewards` answer it as `error` until the chain
+reaches it ([Market status](#market-status)); one before the deployment
+fails the history routes that read the market, those over all networks among
+them, while the market is younger than the days they report. A block the
+chain contradicts is refused with `422` and `details.code`
 `OVERLAY_CREATION_BLOCK_WRONG`, whose message names the block and says
 whether it is before the deployment, after it, or past the latest block, and
 nothing is written; a node provider that did not answer is `503`, worth
