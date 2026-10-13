@@ -4,6 +4,7 @@ import * as Flags from './lib/flags.js';
 import * as Debug from './lib/debug-log.js';
 
 import { route }      from './src/router.js';
+import { isStageAccessAllowed } from './src/stage-access.js';
 import * as Evaluator from './src/evaluator.js';
 
 import * as v2           from './lib/computations/v2.js';
@@ -39,6 +40,11 @@ interface Env extends Flags.Env, ServiceBindings {
   V3_API_HOST: string,
   NODE_PROXY_HOST: string,
   NODE_PROXY_KEY: string,
+  /*
+   * secret that callers of gated (non-production) deployments must present,
+   * cf. src/stage-access.ts
+   */
+  STAGE_ACCESS_KEY?: string,
 
   /*
    * for worker-to-worker requests we need to override fetch() requests to
@@ -89,6 +95,12 @@ export default {
           'Access-Control-Allow-Methods': 'GET',
           ...SECURITY_HEADERS,
         },
+      });
+    }
+    if (!await isStageAccessAllowed(request, env)) {
+      return new Response('forbidden', {
+        status: 403,
+        headers: { ...CORS_HEADERS, ...SECURITY_HEADERS },
       });
     }
     const quota = Quota.initialize({
