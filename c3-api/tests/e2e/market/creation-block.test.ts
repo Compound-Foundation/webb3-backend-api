@@ -65,6 +65,17 @@ const COMET = new Interface([
   'function getBorrowRate(uint) returns (uint)',
   'function totalsCollateral(address) view returns (uint128)',
   'function symbol() view returns (string)',
+  // the reserves and the interest rate model of a market
+  'function getReserves() view returns (int256)',
+  'function getCollateralReserves(address) view returns (uint256)',
+  'function supplyKink() view returns (uint256)',
+  'function supplyPerSecondInterestRateBase() view returns (uint256)',
+  'function supplyPerSecondInterestRateSlopeLow() view returns (uint256)',
+  'function supplyPerSecondInterestRateSlopeHigh() view returns (uint256)',
+  'function borrowKink() view returns (uint256)',
+  'function borrowPerSecondInterestRateBase() view returns (uint256)',
+  'function borrowPerSecondInterestRateSlopeLow() view returns (uint256)',
+  'function borrowPerSecondInterestRateSlopeHigh() view returns (uint256)',
   // the rewards of a market
   'function baseBorrowMin() view returns (uint)',
   'function baseMinForRewards() view returns (uint256)',

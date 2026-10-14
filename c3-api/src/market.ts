@@ -9,7 +9,7 @@ import * as evm     from '../lib/computations/evm.js';
 import * as market  from '../lib/computations/market.js';
 import * as rewards from '../lib/computations/rewards.js';
 
-import { snakeifyCamelObject } from '../lib/camel-snake.js';
+import { snakeifyCamelObject, snakeifyCamelObjectDeep } from '../lib/camel-snake.js';
 
 import type { RegistryComet } from '../lib/model/comet-registry.js';
 import type { MarketIdentity } from '../lib/computations/market/market-summary.js';
@@ -157,7 +157,12 @@ async function latestSummary(
         ])
       );
 
-      return summary.map(snakeifyCamelObject);
+      /*
+       * The keys the summary nests, of its rate model and its collateral,
+       * are snake_case too. The other routes keep the nested keys they
+       * always answered.
+       */
+      return summary.map(snakeifyCamelObjectDeep);
     })
   );
 
