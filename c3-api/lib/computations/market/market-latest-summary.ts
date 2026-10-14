@@ -31,8 +31,9 @@ import type { CollateralStatus, MarketIdentity, MarketSummary } from './market-s
  * Each field is reported where the reads it is made of were, and left out
  * where they were not. A market whose base asset could not be priced is an
  * error, as in marketSummary, but reports everything that does not need the
- * price that failed: it leaves out its totals where its base price could not
- * be read, and its base asset's USD price where that could not.
+ * price that failed: it leaves out its base price and its totals where the
+ * base price could not be read, and its base asset's USD price where that
+ * could not.
  */
 
 // what the summary reports of a market however its base asset was priced
@@ -45,11 +46,12 @@ type Reported = {
   collaterals:            CollateralStatus[],
 };
 
-// what is made of the prices of the base asset: the totals of its base price, and its USD price
+// what is made of the prices of the base asset: the totals at its base price, its USD price, and that base price
 type Priced = {
   totalBorrowValue: string,
   totalSupplyValue: string,
   baseUsdPrice:     string,
+  basePrice:        string,
 };
 
 type MarketLatestSummary = Compute.Spec<{
@@ -83,7 +85,7 @@ function collateralSummary({ asset, symbol, price }: Collateral): CollateralStat
 
 const { implement, pipe } = Compute.Functor<MarketLatestSummary>({});
 const marketLatestSummary = implement({
-  // 2: without reserves, the rate model or each collateral's price and parameters
+  // 2: with base_price, and without reserves, the rate model or each collateral's price and parameters
   version: 2,
   compute({ apiHost, nodeHost, nodeKey, network, contract, block }) {
     const { chainId } = Fallible.must(
@@ -129,6 +131,14 @@ const marketLatestSummary = implement({
           totalCollateralValue: collateralValue(collateralDetails).toString(),
           utilization: utilization.toString(),
           ...(baseUsdPrice.status === 'success' ? { baseUsdPrice: baseUsdPrice.price.toString() } : {}),
+          /*
+           * What the totals are valued at, which marketSummary keeps to itself.
+           * Only it turns any total back into an amount of the base asset: the
+           * USD price is the same number only on a market quoted in USD, while
+           * both are read through one feed, and on the WBTC market, whose feeds
+           * answer in BTC, it is the price of BTC.
+           */
+          ...(basePrice.status    === 'success' ? { basePrice:    basePrice.price.toString() }    : {}),
           collateralAssetSymbols: collateralDetails.map(({ symbol }) => symbol),
           collaterals,
         };
@@ -141,7 +151,7 @@ const marketLatestSummary = implement({
         return {
           ...identity,
           status: collaterals.some(collateral => collateral.status === 'error') ? 'partially' : 'success',
-          // both prices were read, so the fields carry the totals and the base asset's USD price
+          // both prices were read, so the fields carry the totals and both prices
           ...(fields as Reported & Priced),
         };
       },

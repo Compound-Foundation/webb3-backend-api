@@ -96,6 +96,7 @@ t.test(`market-minutely-summary@block:16380543`, async (t) => {
     totalCollateralValue: "198600936.76810451139983159362475978",
     utilization: "555903304895608716",
     baseUsdPrice: "1.0",
+    basePrice: "1.0",
     collateralAssetSymbols: ["COMP", "WBTC", "WETH", "UNI", "LINK"],
     collaterals: [
       { address: "0xc00e94Cb662C3520282E6f5717214004A7f26888", symbol: "COMP", status: "success" },

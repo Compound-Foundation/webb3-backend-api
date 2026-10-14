@@ -118,6 +118,7 @@ t.test('a market whose every price reads reports every field, in the order the A
     totalCollateralValue:   '5154.99578686',
     utilization:            '500000000000000000',
     baseUsdPrice:           '0.99890608',
+    basePrice:              '0.99890608',
     collateralAssetSymbols: [ 'COMP', 'WETH' ],
     collaterals: [
       { address: COMP, symbol: 'COMP', status: 'success' },
@@ -151,10 +152,12 @@ t.test('a market reports what marketSummary reports of it, as it reports it', as
       collateralDetails:   stub(() => reads.collaterals),
     });
     const context = contextOf(reads.contract);
-    const [ before, latest ] = await evaluate(split([
+    const [ before, { basePrice, ...latest } ] = await evaluate(split([
       pull1({ marketSummary: context }),
       pull1({ marketLatestSummary: context }),
     ])) as [ any, any ];
+    // which marketSummary keeps to itself
+    t.equal(basePrice, (reads.basePrice ?? READS.basePrice).price.toString(), `${status}: the base price its totals are valued at`);
 
     t.equal(before.status, status, `marketSummary reports the market as ${status}`);
     t.strictSame(latest, before, `${status}: every field as marketSummary reports it`);
@@ -174,7 +177,7 @@ t.test('a market quoted in USD whose base price reverts reports every field it c
   const after  = [ 'collateralAssetSymbols', 'collaterals' ];
   const cases = [
     { reads: { basePrice: BASE, baseUsdPrice: USD }, message: BASE.message, keys: [ ...common, ...after ], name: 'both revert' },
-    { reads: { baseUsdPrice: USD },                  message: USD.message,  keys: [ 'totalBorrowValue', 'totalSupplyValue', ...common, ...after ], name: 'its USD price reverts' },
+    { reads: { baseUsdPrice: USD },                  message: USD.message,  keys: [ 'totalBorrowValue', 'totalSupplyValue', ...common, 'basePrice', ...after ], name: 'its USD price reverts' },
     { reads: { basePrice: BASE },                    message: BASE.message, keys: [ ...common, 'baseUsdPrice', ...after ], name: 'its base price reverts' },
   ];
   for (const { reads, message, keys, name } of cases) {
@@ -187,6 +190,61 @@ t.test('a market quoted in USD whose base price reverts reports every field it c
     'the totals at the base price that was read');
   const usd = await summaryOf({ basePrice: BASE, collaterals: [ usdtComp(), usdtWeth() ] });
   t.equal(usd.baseUsdPrice, '0.99890608', 'and the USD price that was read');
+});
+
+/*
+ * The base price is reported right after the base asset's USD price wherever
+ * it was read: on a success, on a partial market, and on an error its USD
+ * price alone made. Where it reverted, it is left out, as the totals made of
+ * it are.
+ */
+t.test('the base price is reported wherever it was read, right after the USD price', async t => {
+  const BASE = reverted('execution reverted: the base feed');
+  const USD  = reverted('execution reverted: the USD feed');
+  // the keys of a summary from its utilization to its collateral's symbols, where its prices are
+  const pricesOf = (summary: any) => {
+    const keys = Object.keys(summary);
+    return keys.slice(keys.indexOf('utilization') + 1, keys.indexOf('collateralAssetSymbols'));
+  };
+  const cases: Array<{ name: string, reads: { basePrice?: PriceRead, baseUsdPrice?: PriceRead }, weth: Collateral, status: string, prices: string[] }> = [
+    { name: 'a success',                   reads: {},                                     weth: usdtWeth(),           status: 'success',   prices: [ 'baseUsdPrice', 'basePrice' ] },
+    { name: 'a partial market',            reads: {},                                     weth: usdtWeth(reverted()), status: 'partially', prices: [ 'baseUsdPrice', 'basePrice' ] },
+    { name: 'an error of its USD price',   reads: { baseUsdPrice: USD },                  weth: usdtWeth(),           status: 'error',     prices: [ 'basePrice' ] },
+    { name: 'an error of its base price',  reads: { basePrice: BASE },                    weth: usdtWeth(),           status: 'error',     prices: [ 'baseUsdPrice' ] },
+    { name: 'an error of both its prices', reads: { basePrice: BASE, baseUsdPrice: USD }, weth: usdtWeth(),           status: 'error',     prices: [] },
+  ];
+  for (const { name, reads, weth, status, prices } of cases) {
+    const summary = await summaryOf({ ...reads, collaterals: [ usdtComp(), weth ] });
+    t.equal(summary.status, status, `${name}: ${status}`);
+    t.strictSame(pricesOf(summary), prices, `${name}: ${prices.join(', then ') || 'neither price'}`);
+    if (prices.includes('basePrice')) {
+      t.equal(summary.basePrice, '0.99890608', `${name}: the base price as it was read`);
+    }
+  }
+});
+
+/*
+ * On a market quoted in USD, the base price and the base asset's USD price
+ * are read through the one base feed, and are the same number. The WBTC
+ * market's feeds answer in BTC: its base price is WBTC in BTC, and its USD
+ * price that of BTC, so only the base price turns a total back into WBTC.
+ * Each is written with every digit its feed gives, and not rounded.
+ */
+t.test('the base price is the USD price on a market quoted in USD, and WBTC in BTC on the WBTC market', async t => {
+  const usdc = await summaryOf({ basePrice: read(at8(99_982_834)), baseUsdPrice: read(at8(99_982_834)), collaterals: [ usdtComp(), usdtWeth() ] });
+  t.match(usdc, { baseUsdPrice: '0.99982834', basePrice: '0.99982834' }, 'a market quoted in USD: the same number as its USD price');
+
+  // the frontend's example: 29.05271362 WBTC supplied, at 0.9984988 BTC each, and 82731.39 USD per BTC
+  const wbtc = await summaryOf({
+    contract:     marketOf('wbtc'),
+    basePrice:    read(at8(99_849_880)),
+    baseUsdPrice: read(at8(8_273_139_000_000)),
+    totalSupply:  BigFixnum.from({ decimals: 8, value: 2_905_271_362 }),
+    collaterals:  [],
+  });
+  t.match(wbtc, { status: 'success', totalSupplyValue: '29.009099686313656', baseUsdPrice: '82731.39', basePrice: '0.9984988' },
+    'the WBTC market: its total in BTC, the price of BTC in USD, and the price of WBTC in BTC its total is valued at');
+  t.not(wbtc.basePrice, wbtc.baseUsdPrice, 'which is not its USD price');
 });
 
 /*

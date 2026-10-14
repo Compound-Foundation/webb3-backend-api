@@ -14,7 +14,7 @@ type MarketMinutelySummary = Compute.Spec<{
 
 const { implement, pull1 } = Compute.Functor<MarketMinutelySummary>({});
 const marketMinutelySummary = implement({
-  // 7: the latest summary, without reserves, the rate model or each collateral's price and parameters
+  // 7: the latest summary, with base_price, and without reserves, the rate model or each collateral's price and parameters
   version: 7,
   index: Index.MinutelyBlockIndex,
   key(name, {block, ...context}) {

@@ -11,7 +11,7 @@ import * as rewards from '../lib/computations/rewards.js';
 
 import { snakeifyCamelObject } from '../lib/camel-snake.js';
 
-import type { RegistryComet } from '../lib/model/comet-registry.js';
+import { checksumAddress, type RegistryComet } from '../lib/model/comet-registry.js';
 import type { MarketIdentity } from '../lib/computations/market/market-summary.js';
 
 import { ApiError } from './http/errors.js';
@@ -104,13 +104,50 @@ function reportUnreached(contract: RegistryComet, message: string): void {
   console.warn(`creation block not reached: ${contract.address} on ${contract.network}: ${message}`);
 }
 
+/*
+ * A market of the summary with what the active registry version says of it,
+ * as /registry/v1/active serves the market: the rewards contract and the
+ * bulker beside its Comet, then what the website keys, names and lists the
+ * market by. Nothing is read for them, so every market the summary answers
+ * has them, whatever its status, one the chain has not reached too. They are
+ * added here, not cached with what was read: the cache keys leave the labels
+ * out (catalog.ts, marketDigest), and a version that changes one is answered
+ * at once. Every other route names the Comet by its address alone, and only
+ * the rewards routes answer some of the rest, in fields of their own: the
+ * rewards contract and the labels (market-rewards.ts).
+ *
+ * An address is checksummed, as the Comet's is, where the version stores it
+ * lowercase. A contract or a slug the version has none of is left out, never
+ * null, as the summary leaves out whatever it cannot give.
+ */
+function described<Summary extends MarketIdentity>({ chainId, comet, ...summary }: Summary, contract: RegistryComet) {
+  const market = contract.registry.market;
+  const { rewards, bulker } = market.contracts;
+  return {
+    chainId,
+    comet: {
+      ...comet,
+      ...(rewards === null ? {} : { rewards: checksumAddress(rewards) }),
+      ...(bulker  === null ? {} : { bulker:  checksumAddress(bulker) }),
+    },
+    deploymentKey:   market.deploymentKey,
+    displayName:     market.displayName,
+    baseAssetName:   market.baseAsset.displayName,
+    isWrappedNative: market.baseAsset.isWrappedNative,
+    ...(market.slug === null ? {} : { slug: market.slug }),
+    isDefault:       market.isDefault,
+    isInstitutional: market.isInstitutional,
+    ...summary,
+  };
+}
+
 async function latestSummary(
   { apiHost, nodeHost, nodeKey, network, contract, catalog }: MarketRouteData,
   context: UninstantiatedRouterContext,
 ): Promise<Response> {
   const selectedNetworks = networksOf(network);
 
-  const { evaluate, pipe1, pull1, split, value } = context.instantiateEvaluator('mainnet', {
+  const { evaluate, pipe1, split, value } = context.instantiateEvaluator('mainnet', {
     flags: {
       ...context.flags,
       batchingEnabled: true,
@@ -148,11 +185,11 @@ async function latestSummary(
           (latestBlock) => split(selectedContracts.map((contract) => {
             const origin = { apiHost, nodeHost, nodeKey, network, contract, block: latestBlock };
             if (!market.marketMinutelySummary.index.covers(origin)) {
-              return value(unreachedMarket(contract, latestBlock));
+              return value(described(unreachedMarket(contract, latestBlock), contract));
             }
             const projected = Fallible.must(market.marketMinutelySummary.index.project(origin));
             projected.block.timestamp = latestBlock.timestamp;
-            return pull1({ marketMinutelySummary: projected });
+            return pipe1([ { marketMinutelySummary: projected }, computed => described(computed, contract) ]);
           })),
         ])
       );

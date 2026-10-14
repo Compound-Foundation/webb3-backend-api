@@ -140,6 +140,15 @@ as usual. The message names the block:
 { "chain_id": 1, "comet": { "address": "0x3Afd…0840" }, "status": "error", "message": "creationBlock 33400000 is past the latest block, 23400000" }
 ```
 
+`/summary` answers it with what the registry version says of the market as
+well, as it answers every market, since none of that is read: the rewards
+contract and the bulker in `comet`, and the market's keys and labels after
+it ([Market registry fields](#market-registry-fields)):
+
+```json
+{ "chain_id": 1, "comet": { "address": "0x3Afd…0840", "rewards": "0x1B0e…5a40", "bulker": "0xa397…00c7" }, "deployment_key": "usdt", "display_name": "USDT", "base_asset_name": "Tether", "is_wrapped_native": false, "is_default": false, "is_institutional": false, "status": "error", "message": "creationBlock 33400000 is past the latest block, 23400000" }
+```
+
 Writing an overlay refuses such a block, but a version can hold one that
 write never checked — inherited by an import from an overlay written before
 it did, say. The market is answered so until a version with the right block
@@ -168,11 +177,55 @@ market, `USDC.e` (`USDbC` on Base) and `USD Coin (Bridged)` for bridged USDC,
 { "chain_id": 1, "comet": { "address": "0xa175…ae94" }, "base_asset": { "symbol": "ETH", "description": "Ether", … }, … }
 ```
 
-The summaries report the token's own on-chain symbol instead (`WETH`). The
+`/summary` answers the same two labels as `display_name` and
+`base_asset_name` ([Market registry fields](#market-registry-fields)), but
+names each collateral by the token's own on-chain symbol (`WETH`). The
 history does too, except where the network renames a token in place: bridged
 USDC is `USDC.e` there, although its `symbol()` answers `USDC`. One token can
 therefore appear under two names across the API, so match a market by
 `chain_id` and `comet.address`, never by its symbol.
+
+## Market registry fields
+
+`/summary` answers, beside what it read of each market, what the active
+registry version says of it, as `/registry/v1/active` serves the market.
+`comet` names the market's Comet (`address`), then its rewards contract
+(`rewards`) and its bulker (`bulker`): the market's `contracts.rewards` and
+`contracts.bulker`. The rest comes right after `comet`, before `status`:
+
+- `deployment_key` (`deploymentKey`): the market's key in the version, such
+  as `usdc`
+- `display_name` (`displayName`): its label, such as `USDC`, `ETH` for a
+  WETH market, or `USDC.e` — what the rewards routes answer as
+  `base_asset.symbol`
+- `base_asset_name` (`baseAsset.displayName`): its base asset's name, such
+  as `USD Coin` or `Ether` — their `base_asset.description`
+- `is_wrapped_native` (`baseAsset.isWrappedNative`): whether its base token
+  wraps the chain's own token, as WETH does
+- `slug`: the key the website links the market by, where the version gives
+  one; without one the website links it by its label, so two markets of a
+  network with the same label are told apart by a slug
+- `is_default` (`isDefault`): whether it is the market the website opens
+  first
+- `is_institutional` (`isInstitutional`): whether the website lists it in
+  its institutional section
+
+```json
+{ "chain_id": 1, "comet": { "address": "0xc3d6…cdc3", "rewards": "0x1B0e…5a40", "bulker": "0xa397…00c7" }, "deployment_key": "usdc", "display_name": "USDC", "base_asset_name": "USD Coin", "is_wrapped_native": false, "is_default": true, "is_institutional": false, "status": "success", … }
+```
+
+Each address is checksummed, as `address` is, where `/registry/v1/active`
+writes it lowercase. What the version has none of — a rewards contract, a
+bulker or a slug, which `/registry/v1/active` answers as `null` — is left
+out. None of it is read, so every market has it whatever its `status`, one
+the chain has not reached too ([Market status](#market-status)), and a
+version that changes it is answered as soon as it is active.
+
+Everywhere else `comet` is the Comet's `address` alone. The rewards routes
+answer the rewards contract as `comet_rewards.address`, and the two labels
+as `base_asset.symbol` and `base_asset.description`
+([Market labels](#market-labels)). A day of a history answers none of it,
+and `/market/{network}/{address}/rewards/summary` names no market.
 
 ## Pagination
 
@@ -198,6 +251,18 @@ Point-in-time summary at the current block of various market statistics:
 - Supply APR
 - Utilization, as the Comet answers it: a fraction scaled by 10^18
 - The base asset's price in USD (`base_usd_price`)
+- The base asset's price in the unit the market's price feeds answer in
+  (`base_price`): what `total_supply_value` and `total_borrow_value` are
+  valued at, so either divided by it is an amount of the base asset. It is
+  `1.0` through a constant feed, as on a WETH or wstETH market, and WBTC in
+  BTC on the WBTC market (`0.9984988`, say), whose feeds answer in BTC and
+  whose `base_usd_price` is the price of BTC. On a market quoted in USD it is
+  the same number as `base_usd_price` while both are read through one feed
+  (below), but a total is still divided by `base_price`. It is written as
+  `base_usd_price` is, and not rounded
+- What the active registry version says of the market: its rewards contract
+  and its bulker beside its Comet, in `comet`, and its keys and labels — see
+  [Market registry fields](#market-registry-fields)
 - What could be priced: `status`, and `collaterals` with each collateral's
   own status — see [Market status](#market-status)
 
@@ -212,25 +277,33 @@ there. Each is priced through the feed the Comet reads for it at the block
 summarized. A history lists instead the collaterals its Comet listed on each
 day, named by their token's `symbol()`.
 
-The base asset has two prices: its price in the market's unit, through the
-base feed the Comet names, which values `total_borrow_value` and
-`total_supply_value`; and its price in USD, `base_usd_price`, through the
-feed the registry version names for it — on a market quoted in USD, that
-same base feed while the version agrees with the chain, so both fail
-together. The market is `error` where either could not be read, with the
-node's message for the first where it failed, otherwise for the second, and
-still reports every field that does not need a price that failed: it leaves
-out `total_borrow_value` and `total_supply_value` where the first failed,
-and `base_usd_price` where the second did. The totals stay in the market's
-unit: on a market quoted in its base asset they are in ETH or BTC, and
-without `base_usd_price` nothing here converts them to USD.
-`total_collateral_value` leaves out each collateral that is `error`, as in
-`partially`. A USDC market whose base feed reverts:
+The base asset has two prices: its price in the market's unit,
+`base_price`, through the base feed the Comet names, which values
+`total_borrow_value` and `total_supply_value`; and its price in USD,
+`base_usd_price`, through the feed the registry version names for it — on a
+market quoted in USD, that same base feed while the version agrees with the
+chain, so both fail together. The market is `error` where either could not
+be read, with the node's message for the first where it failed, otherwise
+for the second, and still reports every field that does not need a price
+that failed: it leaves out `base_price`, `total_borrow_value` and
+`total_supply_value` where the first failed, and `base_usd_price` where the
+second did. The totals stay in the market's unit: on a market quoted in its
+base asset they are in ETH or BTC, and without `base_usd_price` nothing
+here converts them to USD. `total_collateral_value` leaves out each
+collateral that is `error`, as in `partially`. A USDC market whose base
+feed reverts, and which the version gives no rewards contract or bulker:
 
 ```json
 {
   "chain_id": 1,
   "comet": { "address": "0xbc37…cCe8" },
+  "deployment_key": "usdc-test-base-revert",
+  "display_name": "USDC-br",
+  "base_asset_name": "USD Coin",
+  "is_wrapped_native": false,
+  "slug": "usdc-test-base-revert",
+  "is_default": false,
+  "is_institutional": false,
   "status": "error",
   "message": "execution reverted",
   "borrow_apr": "0.014999999976144",
@@ -252,16 +325,25 @@ $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3
 {
   "chain_id": 1,
   "comet": {
-    "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3"
+    "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
+    "rewards": "0x1B0e765F6224C21223AeA2af16c1C46E38885a40",
+    "bulker": "0xa397a8C2086C554B531c02E29f3291c9704B00c7"
   },
+  "deployment_key": "usdc",
+  "display_name": "USDC",
+  "base_asset_name": "USD Coin",
+  "is_wrapped_native": false,
+  "is_default": true,
+  "is_institutional": false,
   "status": "success",
   "borrow_apr": "0.024456245200128",
   "supply_apr": "0.008780799134304",
-  "total_borrow_value": "291934.5637828698",
-  "total_supply_value": "802511.3150470128",
+  "total_borrow_value": "291934.56378333468",
+  "total_supply_value": "802511.31504732864",
   "total_collateral_value": "736406.32667881067597418742582842",
   "utilization": "363775913612426560",
   "base_usd_price": "0.99996",
+  "base_price": "0.99996",
   "collateral_asset_symbols": [ "COMP", "WBTC", "WETH", "UNI", "LINK" ],
   "collaterals": [
     { "address": "0xc00e94Cb662C3520282E6f5717214004A7f26888", "symbol": "COMP", "status": "success" },
@@ -278,8 +360,10 @@ $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3
 
 30 days of historical `/summary`s — two in stage, and one in a local run —
 one block sampled per day, oldest first, up to the most recent day sampled.
-Each day carries the same fields as the summary, and its `date` and
-`timestamp`.
+Each day carries its `date` and `timestamp`, and the fields of the summary
+but `base_price` and what the registry version says of the market
+([Market registry fields](#market-registry-fields)): its `comet` is the
+Comet's `address` alone.
 
 A day whose base asset could not be priced reports only what identifies the
 market, with the node's message ([Market status](#market-status)).
