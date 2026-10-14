@@ -381,34 +381,3 @@ t.test('a market is read once the chain reaches its creation block', async t => 
   const history = await marketHandlers.historicalSummary(reached, instantiated(answers([])));
   t.equal(statuses(await history.json())[USDT], 'success', 'and so does the history');
 });
-
-/*
- * The summary nests fields of its own — its rate model, and the price and
- * the numbers of each collateral — and answers their keys in snake_case as
- * it answers the rest. The history renames only the fields of a day, and
- * answers what a day nests as it always has.
- */
-t.test('the summary route answers nested keys in snake_case; the history keeps its own', async t => {
-  const nested = {
-    rateModel:   { borrow: { kink: '900000000000000000', slopeLow: '880834601' } },
-    collaterals: [ { address: '0xc00e94Cb662C3520282E6f5717214004A7f26888', priceUsd: '42.17', totalSupply: '3000000000000000000' } ],
-  };
-  const answer: Answer = (name, context) => {
-    const answered = answers([])(name, context);
-    switch (name) {
-      case 'marketMinutelySummary':        return { ...(answered as object), ...nested };
-      case 'historicalMarketDaySummaries': return (answered as object[]).map(day => ({ ...day, ...nested }));
-      default:                             return answered;
-    }
-  };
-  const usdc = routeData(MAINNET, comet(MAINNET, USDC));
-
-  const summary = await (await marketHandlers.latestSummary(usdc, uninstantiated(answer))).json() as Record<string, unknown>;
-  t.strictSame(summary.rate_model, { borrow: { kink: '900000000000000000', slope_low: '880834601' } }, 'the summary: the keys of its rate model');
-  t.strictSame(summary.collaterals, [ { address: nested.collaterals[0]!.address, price_usd: '42.17', total_supply: '3000000000000000000' } ],
-    'and of each collateral');
-
-  const [ day ] = await (await marketHandlers.historicalSummary(usdc, instantiated(answer))).json() as Array<Record<string, unknown>>;
-  t.match(day, { chain_id: 1, status: 'success' }, 'the history: the fields of a day in snake_case');
-  t.strictSame([ day!.rate_model, day!.collaterals ], [ nested.rateModel, nested.collaterals ], 'and what it nests as it is');
-});

@@ -75,10 +75,9 @@ could not be reached, or answered a call with an error that is not a revert,
 such as a rate limit. It can succeed later — after the seconds `Retry-After`
 names, when the proxy said, which a browser can read. A call the contract
 reverted is its answer instead: a price read reports it as a
-[status](#market-status), the market summary leaves out a `reserves` it could
-not read ([Market status](#market-status)), and any other call that reverts
-fails the request with a `500`. The registry's endpoints say how they answer
-either under [Registry v1](#registry-v1).
+[status](#market-status), and any other call that reverts fails the request
+with a `500`. The registry's endpoints say how they answer either under
+[Registry v1](#registry-v1).
 
 A `500` is answered with the code `INTERNAL` and the message `the request
 could not be completed`, never with what failed — a database error, or what
@@ -126,11 +125,6 @@ A summary lists every collateral with its own status:
 ]
 ```
 
-`/summary` reports more of each collateral than a history does: its
-`price_usd`, `total_supply`, `reserves`, `supply_cap` and three factors, and
-every one of them but `price_usd` for a collateral whose feed reverted, as
-wUSDM's above. The section on `/summary` says when another is left out.
-
 A history reports this per day, with the day's `date` and `timestamp`. A
 market is read in full again once a registry version that says how to price
 the feed is active.
@@ -160,15 +154,6 @@ that reverts, with `500 INTERNAL` ([Errors](#errors)).
 ```json
 { "address": "0x1f98…f984", "symbol": "UNI", "status": "error", "message": "asset 3 of the Comet is 0x…, not the UNI the registry version describes" }
 ```
-
-`/summary` makes one exception to that `500`: where the Comet's read of the
-`reserves` of a market, or of one of its collaterals, reverts, it leaves
-that `reserves` out rather than fail. The Comet reads both from the
-token's `balanceOf`, which can revert with the token — paused, upgraded, or
-without code — and a collateral's reserves revert as well where the Comet
-holds less of it than its accounts supplied. The status does not change,
-and the worker logs a `reserves reverted:` warning naming the call, once a
-minute per Comet and call for as long as it lasts.
 
 ## Market labels
 
@@ -215,21 +200,6 @@ Point-in-time summary at the current block of various market statistics:
 - The base asset's price in USD (`base_usd_price`)
 - What could be priced: `status`, and `collaterals` with each collateral's
   own status — see [Market status](#market-status)
-- The market's reserves (`reserves`), as `getReserves()` answers them: the
-  base asset the Comet holds and has lent, less what it owes its suppliers —
-  an integer in the base asset's smallest unit, negative where it owes more
-- The interest rate model (`rate_model`), as the Comet's getters answer it:
-  for `borrow` and for `supply`, the utilization at which the rate's slope
-  changes (`kink`), the rate per second at zero utilization (`base`), and
-  what each unit of utilization adds to it below the kink (`slope_low`) and
-  above it (`slope_high`), each an integer scaled by 10^18
-- Each collateral's price in USD (`price_usd`); what accounts supplied of
-  it (`total_supply`), what the Comet holds of it beyond that (`reserves`)
-  and its supply cap (`supply_cap`), each an integer in the token's
-  smallest unit; and its collateral factors for borrowing and for
-  liquidation and its liquidation factor (`borrow_collateral_factor`,
-  `liquidate_collateral_factor`, `liquidation_factor`), each an integer
-  scaled by 10^18
 
 The collaterals are those the active registry version describes for the
 market, in the order the Comet numbers them, and named as the version names
@@ -237,24 +207,10 @@ them: a collateral the Comet listed after the version was imported is left
 out until a version describes it, and the registry's chain check raises it
 meanwhile ([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#a-market-that-changed-on-chain)).
 Where the Comet now holds another asset at a collateral's index, that
-collateral is `error`, with its `address`, `symbol`, `status` and `message`
-alone. Each is priced through the feed the Comet reads for it at the block
+collateral is `error`, and its `message` names the asset the Comet holds
+there. Each is priced through the feed the Comet reads for it at the block
 summarized. A history lists instead the collaterals its Comet listed on each
 day, named by their token's `symbol()`.
-
-`price_usd` is in USD on every market. A market's feeds answer in the unit
-the registry quotes it in (`collateralValueQuote`): on a market quoted in
-USD, AERO's included, `price_usd` is the collateral's price; on one quoted
-in its base asset — the WETH, wstETH and WBTC markets — it is that price
-times `base_usd_price`, which for the WBTC market is the price of BTC, the
-unit its feeds answer in. A price exception of the network applies as it
-does to `total_collateral_value`: a `fixed_price` is in the market's unit,
-and is converted as any other price; a `zero_price` is `"0.0"` on every
-market and is not converted, so it is reported even where `base_usd_price`
-is not. Prices are not rounded: a converted one keeps every decimal of
-both, up to 16, less its trailing zeros. Each is written with a decimal
-point, as `base_usd_price` is: `"42.0"`, never `"42"`, even for a
-`fixed_price` stated at no decimals.
 
 The base asset has two prices: its price in the market's unit, through the
 base feed the Comet names, which values `total_borrow_value` and
@@ -265,12 +221,11 @@ together. The market is `error` where either could not be read, with the
 node's message for the first where it failed, otherwise for the second, and
 still reports every field that does not need a price that failed: it leaves
 out `total_borrow_value` and `total_supply_value` where the first failed,
-`base_usd_price` where the second did, and a collateral's `price_usd` where
-converting it needed the second — a price of zero is there all the same.
-The totals stay in the market's unit: on a market quoted in its base asset
-they are in ETH or BTC, and without `base_usd_price` nothing here converts
-them to USD. `total_collateral_value` leaves out each collateral that is
-`error`, as in `partially`. A USDC market whose base feed reverts:
+and `base_usd_price` where the second did. The totals stay in the market's
+unit: on a market quoted in its base asset they are in ETH or BTC, and
+without `base_usd_price` nothing here converts them to USD.
+`total_collateral_value` leaves out each collateral that is `error`, as in
+`partially`. A USDC market whose base feed reverts:
 
 ```json
 {
@@ -283,20 +238,12 @@ them to USD. `total_collateral_value` leaves out each collateral that is
   "total_collateral_value": "0.0",
   "utilization": "0",
   "collateral_asset_symbols": [ "USDT", "WETH" ],
-  "reserves": "0",
-  "rate_model": {
-    "borrow": { "kink": "800000000000000000", "base": "475646879", "slope_low": "1109842719", "slope_high": "7927447995" },
-    "supply": { "kink": "800000000000000000", "base": "0", "slope_low": "1030568239", "slope_high": "12683916793" }
-  },
   "collaterals": [
-    { "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "symbol": "USDT", "status": "success", "price_usd": "0.99890608", "total_supply": "0", "reserves": "0", "supply_cap": "50000000000000", "borrow_collateral_factor": "800000000000000000", "liquidate_collateral_factor": "850000000000000000", "liquidation_factor": "950000000000000000" },
-    { "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "symbol": "WETH", "status": "success", "price_usd": "2514.24289343", "total_supply": "0", "reserves": "0", "supply_cap": "5265000000000000000000", "borrow_collateral_factor": "830000000000000000", "liquidate_collateral_factor": "870000000000000000", "liquidation_factor": "950000000000000000" }
+    { "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "symbol": "USDT", "status": "success" },
+    { "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "symbol": "WETH", "status": "success" }
   ]
 }
 ```
-
-Either `reserves`, the market's or a collateral's, is left out where the
-Comet's read of it reverted ([Market status](#market-status)).
 
 ```sh
 $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3/summary'
@@ -316,17 +263,12 @@ $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3
   "utilization": "363775913612426560",
   "base_usd_price": "0.99996",
   "collateral_asset_symbols": [ "COMP", "WBTC", "WETH", "UNI", "LINK" ],
-  "reserves": "8434471165951",
-  "rate_model": {
-    "borrow": { "kink": "900000000000000000", "base": "475646879", "slope_low": "880834601", "slope_high": "114155251141" },
-    "supply": { "kink": "900000000000000000", "base": "0", "slope_low": "1141552511", "slope_high": "101344495180" }
-  },
   "collaterals": [
-    { "address": "0xc00e94Cb662C3520282E6f5717214004A7f26888", "symbol": "COMP", "status": "success", "price_usd": "22.9533432", "total_supply": "99992893875192143544031", "reserves": "325734005422", "supply_cap": "100000000000000000000000", "borrow_collateral_factor": "500000000000000000", "liquidate_collateral_factor": "700000000000000000", "liquidation_factor": "750000000000000000" },
-    { "address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "symbol": "WBTC", "status": "success", "price_usd": "82962.97025351", "total_supply": "479292954533", "reserves": "14", "supply_cap": "1000000000000", "borrow_collateral_factor": "800000000000000000", "liquidate_collateral_factor": "850000000000000000", "liquidation_factor": "900000000000000000" },
-    { "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "symbol": "WETH", "status": "success", "price_usd": "2506.25506424", "total_supply": "59653362744797416789073", "reserves": "14577068752", "supply_cap": "500000000000000000000000", "borrow_collateral_factor": "825000000000000000", "liquidate_collateral_factor": "880000000000000000", "liquidation_factor": "930000000000000000" },
-    { "address": "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", "symbol": "UNI",  "status": "success", "price_usd": "7.56097846", "total_supply": "230177760382725001706302", "reserves": "188114187911", "supply_cap": "364691000000000000000000", "borrow_collateral_factor": "680000000000000000", "liquidate_collateral_factor": "740000000000000000", "liquidation_factor": "830000000000000000" },
-    { "address": "0x514910771AF9Ca656af840dff83E8264EcF986CA", "symbol": "LINK", "status": "success", "price_usd": "12.88768", "total_supply": "483716101907276277111576", "reserves": "40462160196507", "supply_cap": "585990000000000000000000", "borrow_collateral_factor": "730000000000000000", "liquidate_collateral_factor": "790000000000000000", "liquidation_factor": "830000000000000000" }
+    { "address": "0xc00e94Cb662C3520282E6f5717214004A7f26888", "symbol": "COMP", "status": "success" },
+    { "address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "symbol": "WBTC", "status": "success" },
+    { "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "symbol": "WETH", "status": "success" },
+    { "address": "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", "symbol": "UNI",  "status": "success" },
+    { "address": "0x514910771AF9Ca656af840dff83E8264EcF986CA", "symbol": "LINK", "status": "success" }
   ]
 }
 ```
@@ -339,11 +281,8 @@ one block sampled per day, oldest first, up to the most recent day sampled.
 Each day carries the same fields as the summary, and its `date` and
 `timestamp`.
 
-A day carries none of the fields `/summary` adds at the latest block: no
-`reserves` or `rate_model`, and no `price_usd`, amounts or parameters of a
-collateral. A day whose base asset could not be priced reports only what
-identifies the market, with the node's message
-([Market status](#market-status)).
+A day whose base asset could not be priced reports only what identifies the
+market, with the node's message ([Market status](#market-status)).
 
 ```sh
 $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3/historical/summary'
