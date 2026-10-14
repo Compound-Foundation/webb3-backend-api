@@ -1531,7 +1531,7 @@ const Base0bps_Slope2000bps = UntypedContract("Base0bps_Slope2000bps", <const>{
 });
 const Base200bps_Slope1000bps = UntypedContract("Base200bps_Slope1000bps", <
   const
-  >{
+>{
   // location
   network: "ethereum-mainnet",
   address: "0x0c3f8df27e1a00b47653fde878d68d35f00714c0",
@@ -1542,7 +1542,7 @@ const Base200bps_Slope1000bps = UntypedContract("Base200bps_Slope1000bps", <
 });
 const Base200bps_Slope3000bps = UntypedContract("Base200bps_Slope3000bps", <
   const
-  >{
+>{
   // location
   network: "ethereum-mainnet",
   address: "0xbae04cbf96391086dc643e842b517734e214d698",
@@ -1577,7 +1577,7 @@ const Base200bps_Slope2000bps_Jump20000bps_Kink90 = UntypedContract(
 );
 const Base500bps_Slope1200bps = UntypedContract("Base500bps_Slope1200bps", <
   const
-  >{
+>{
   // location
   network: "ethereum-mainnet",
   address: "0xa1046abfc2598f48c44fb320d281d3f3c0733c9a",
@@ -1588,7 +1588,7 @@ const Base500bps_Slope1200bps = UntypedContract("Base500bps_Slope1200bps", <
 });
 const Base500bps_Slope1500bps = UntypedContract("Base500bps_Slope1500bps", <
   const
-  >{
+>{
   // location
   network: "ethereum-mainnet",
   address: "0xd928c8ead620bb316d2cefe3caf81dc2dec6ff63",
