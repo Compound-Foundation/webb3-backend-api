@@ -12,6 +12,7 @@ import { failures, validateCandidate } from '../../../src/registry/validation.js
 import { makeTestEnv } from '../../util/test-env.js';
 import { activeRegistryDatabase } from '../../util/registry-database.js';
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
+import { REGISTRY_KEYS, onSummary } from '../../util/summary-registry-fields.js';
 
 import '../../../shim/node-self.js';
 
@@ -65,17 +66,6 @@ const COMET = new Interface([
   'function getBorrowRate(uint) returns (uint)',
   'function totalsCollateral(address) view returns (uint128)',
   'function symbol() view returns (string)',
-  // the reserves and the interest rate model of a market
-  'function getReserves() view returns (int256)',
-  'function getCollateralReserves(address) view returns (uint256)',
-  'function supplyKink() view returns (uint256)',
-  'function supplyPerSecondInterestRateBase() view returns (uint256)',
-  'function supplyPerSecondInterestRateSlopeLow() view returns (uint256)',
-  'function supplyPerSecondInterestRateSlopeHigh() view returns (uint256)',
-  'function borrowKink() view returns (uint256)',
-  'function borrowPerSecondInterestRateBase() view returns (uint256)',
-  'function borrowPerSecondInterestRateSlopeLow() view returns (uint256)',
-  'function borrowPerSecondInterestRateSlopeHigh() view returns (uint256)',
   // the rewards of a market
   'function baseBorrowMin() view returns (uint)',
   'function baseMinForRewards() view returns (uint256)',
@@ -174,7 +164,7 @@ function captured(t: Test, level: 'error' | 'warn'): string[] {
 
 const isUsdt = (entry: Entry) => entry.comet.address.toLowerCase() === USDT;
 
-// how a market the chain has not reached is answered, as every route that lists it answers it
+// how a market the chain has not reached is answered, as every route that lists it but the summary answers it
 function unreached(snapshot: RegistrySnapshotV1) {
   return {
     chain_id: 1,
@@ -182,6 +172,11 @@ function unreached(snapshot: RegistrySnapshotV1) {
     status:   'error',
     message:  MESSAGE,
   };
+}
+
+// and as the summary answers it, with what the version says of the market
+function unreachedOnSummary(snapshot: RegistrySnapshotV1) {
+  return onSummary(unreached(snapshot), fixtureCatalog(snapshot).marketAt(MAINNET, USDT)!.market);
 }
 
 t.test('a version that holds a creation block past the latest block validates', async t => {
@@ -200,18 +195,18 @@ t.test('the summaries answer a market created past the latest block as an error,
   t.equal(everyNetwork.status, 200, 'the summary of every network is answered');
   const every = await everyNetwork.json() as Entry[];
   t.equal(every.length, markets, 'with every market');
-  t.strictSame(every.find(isUsdt), unreached(snapshot), 'that market as an error naming its block');
+  t.strictSame(every.find(isUsdt), unreachedOnSummary(snapshot), 'that market as an error naming its block');
   t.ok(every.filter(entry => !isUsdt(entry)).every(entry => entry.status === 'success'), 'and every other as read');
 
   const mainnet = await get(`/market/${MAINNET}/all-contracts/summary`);
   t.equal(mainnet.status, 200, 'and so is the summary of its network');
   const ofMainnet = await mainnet.json() as Entry[];
   t.equal(ofMainnet.length, 4, 'every market of its network is answered');
-  t.strictSame(ofMainnet.filter(entry => entry.status !== 'success'), [ unreached(snapshot) ], 'and only that one as an error');
+  t.strictSame(ofMainnet.filter(entry => entry.status !== 'success'), [ unreachedOnSummary(snapshot) ], 'and only that one as an error');
 
   const alone = await get(`/market/${MAINNET}/${USDT}/summary`);
   t.equal(alone.status, 200, 'the summary of that market alone is its status, as a price that reverts is');
-  t.strictSame(await alone.json(), unreached(snapshot), 'answered as an object, as one market always was');
+  t.strictSame(await alone.json(), unreachedOnSummary(snapshot), 'answered as an object, as one market always was');
 
   t.notOk(asked.has(USDT), 'and nothing of it was read');
   t.same(warnings.filter(line => line.includes(MESSAGE)), [
@@ -296,4 +291,48 @@ t.test('a read of another market that reverts still fails the summary with 500',
   const response = await get('/market/all-networks/all-contracts/summary');
   t.equal(response.status, 500);
   t.equal((await response.json() as Envelope).error.code, 'INTERNAL', 'as the fault a revert of a read that is not a price is');
+});
+
+/*
+ * The summary answers a market the chain has not reached with what its
+ * registry version says of it, as it answers every market, since nothing is
+ * read for it: the market as /registry/v1/active serves it, with its
+ * addresses checksummed. The history and the rewards answer every market as
+ * they did, with its Comet alone.
+ */
+t.test('the summary answers a market created past the latest block as /registry/v1/active serves it; its history and its rewards do not', async t => {
+  const snapshot = unreachedSnapshot();
+  const get      = await workerOf(t, snapshot);
+  serving(t, snapshot);
+  captured(t, 'warn');
+
+  const active = await (await get('/registry/v1/active')).json() as RegistrySnapshotV1;
+  // the market of an entry as /registry/v1/active serves it
+  const servedOf = (entry: Entry) => active.networks.find(network => network.chainId === entry.chain_id)!.markets
+    .find(market => market.contracts.comet === entry.comet.address.toLowerCase())!;
+  // an entry up to its status, which is what the summary answers of the version, in JSON
+  const described = (entry: Entry) => {
+    const fields = Object.entries(entry);
+    return JSON.stringify(Object.fromEntries(fields.slice(0, fields.findIndex(([ key ]) => key === 'status'))));
+  };
+
+  const alone = await (await get(`/market/${MAINNET}/${USDT}/summary`)).json() as Entry;
+  t.equal(JSON.stringify(alone), JSON.stringify(onSummary(unreached(snapshot), servedOf(alone))),
+    'the summary of that market: its Comet, its rewards contract and its bulker, then its keys and labels, as the version serves them, then its error');
+  for (const path of [ `/market/${MAINNET}/all-contracts/summary`, '/market/all-networks/all-contracts/summary' ]) {
+    const every = await (await get(path)).json() as Entry[];
+    t.equal(JSON.stringify(every.find(isUsdt)), JSON.stringify(alone), `${path}: that market alike`);
+    t.ok(every.every(entry => described(entry) === JSON.stringify(onSummary({ chain_id: entry.chain_id, comet: { address: entry.comet.address } }, servedOf(entry)))),
+      `${path}: and every market as the version serves it`);
+  }
+
+  // what an entry of another route says of its market that only the summary answers
+  const besides = (entry: Record<string, unknown>) => [
+    ...Object.keys(entry.comet as object).filter(key => key !== 'address'),
+    ...Object.keys(entry).filter(key => (REGISTRY_KEYS as readonly string[]).includes(key) || key === 'base_price'),
+  ];
+  const days = await (await get('/market/all-networks/all-contracts/historical/summary')).json() as Day[];
+  t.ok(days.length > 0 && days.every(day => besides(day).length === 0), 'the history: the Comet alone, and no base price, on every day of every market');
+  const rewards = await (await get('/market/all-networks/all-contracts/rewards/dapp-data')).json() as Entry[];
+  t.ok(rewards.length > 0 && rewards.every(entry => besides(entry).length === 0), 'and the rewards of every market: the Comet alone');
 });

@@ -83,7 +83,7 @@ t.test(`market-minutely-summary@block:16380543`, async (t) => {
     `market-minutely-summary is the same as the market-summary at` +
       ` the indexed block for that minute`
   );
-  t.hasStrict(result1, {
+  t.strictSame(result1, {
     chainId: 1,
     comet: {
       address: "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
@@ -96,6 +96,7 @@ t.test(`market-minutely-summary@block:16380543`, async (t) => {
     totalCollateralValue: "198600936.76810451139983159362475978",
     utilization: "555903304895608716",
     baseUsdPrice: "1.0",
+    basePrice: "1.0",
     collateralAssetSymbols: ["COMP", "WBTC", "WETH", "UNI", "LINK"],
     collaterals: [
       { address: "0xc00e94Cb662C3520282E6f5717214004A7f26888", symbol: "COMP", status: "success" },
@@ -105,30 +106,6 @@ t.test(`market-minutely-summary@block:16380543`, async (t) => {
       { address: "0x514910771AF9Ca656af840dff83E8264EcF986CA", symbol: "LINK", status: "success" },
     ],
   });
-  /*
-   * What the latest summary adds is reported as the Comet stores it, each an
-   * integer and the market's reserves signed, beside each collateral's price
-   * in USD.
-   */
-  const integer = /^\d+$/;
-  t.match(result1, {
-    reserves: /^-?\d+$/,
-    rateModel: {
-      borrow: { kink: integer, base: integer, slopeLow: integer, slopeHigh: integer },
-      supply: { kink: integer, base: integer, slopeLow: integer, slopeHigh: integer },
-    },
-  }, `the market's reserves and its interest rate model`);
-  for (const collateral of (result1 as market.MarketMinutelySummary["returns"]).collaterals) {
-    t.match(collateral, {
-      priceUsd:                  /^\d+\.\d+$/,
-      totalSupply:               integer,
-      reserves:                  integer,
-      supplyCap:                 integer,
-      borrowCollateralFactor:    integer,
-      liquidateCollateralFactor: integer,
-      liquidationFactor:         integer,
-    }, `${collateral.symbol}'s price in USD and what the Comet keeps for it`);
-  }
 
   /*
    * check for select expected cache keys
@@ -150,7 +127,7 @@ t.test(`market-minutely-summary@block:16380543`, async (t) => {
     result1,
     `the minute's block gives the same summary`
   );
-  const minutelyKey = `marketMinutelySummary-v4:(block:${projected.block.number};contract:${context.contract.key()};network:${context.network})`;
+  const minutelyKey = `marketMinutelySummary-v7:(block:${projected.block.number};contract:${context.contract.key()};network:${context.network})`;
   t.ok(
     Object.keys(cache.store).includes(minutelyKey),
     `the latest summary is cached under the minute's block, by its own version`

@@ -12,8 +12,6 @@ import { BigFixnum } from '../../lib/bigfixnum.js';
 import * as Evaluator  from '../../lib/symbolic/evaluator.js';
 import { MemoryCache } from '../../lib/symbolic/cache.js';
 
-import { checksumAddress } from '../../lib/model/comet-registry.js';
-
 import * as evm     from '../../lib/computations/evm.js';
 import * as comet   from '../../lib/computations/comet.js';
 import * as market  from '../../lib/computations/market.js';
@@ -28,6 +26,7 @@ import {
 } from '../../src/router.js';
 
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../util/registry-fixture.js';
+import { REGISTRY_KEYS, contractsBesideComet, registryFields } from '../util/summary-registry-fields.js';
 
 import '../../shim/node-self.js';
 
@@ -46,10 +45,6 @@ import '../../shim/node-self.js';
  * computations: a price feed that reverts is that market's answer, and a call
  * the node did not serve fails the summary, as does a request the node
  * provider failed, both as a request the node did not serve.
- *
- * And it is where the route's JSON is held against what the node answered:
- * each number of a Comet and each price in its place, under its key in
- * snake_case, and reserves that revert left out, and nothing else.
  */
 const flags = Flags.parseWithDefaults(process.env);
 const debug = Debug.MakeLogger([]).configure(process.env);
@@ -59,9 +54,7 @@ const catalog  = fixtureCatalog(snapshot);
 
 const LATEST = { number: 30_000_000, timestamp: 1_790_000_000 };
 const USDC   = '0xc3d688b66703497daa19211eedff47f25384cdc3';
-const WETH   = '0xa17581a9e3356d9a858b789d68b4d866e593ae94';
 const WBTC   = '0xe85dc543813b8c2cfeaac371517b925a166a9293';
-const AERO   = '0x784efeb622244d2348d4f2522f8860b96fbece89';
 
 const COMET = new Interface([
   'function numAssets() view returns (uint8)',
@@ -75,17 +68,6 @@ const COMET = new Interface([
   'function getBorrowRate(uint) returns (uint)',
   'function totalsCollateral(address) view returns (uint128)',
   'function symbol() view returns (string)',
-  // the reserves and the interest rate model of a market
-  'function getReserves() view returns (int256)',
-  'function getCollateralReserves(address) view returns (uint256)',
-  'function supplyKink() view returns (uint256)',
-  'function supplyPerSecondInterestRateBase() view returns (uint256)',
-  'function supplyPerSecondInterestRateSlopeLow() view returns (uint256)',
-  'function supplyPerSecondInterestRateSlopeHigh() view returns (uint256)',
-  'function borrowKink() view returns (uint256)',
-  'function borrowPerSecondInterestRateBase() view returns (uint256)',
-  'function borrowPerSecondInterestRateSlopeLow() view returns (uint256)',
-  'function borrowPerSecondInterestRateSlopeHigh() view returns (uint256)',
   // the rewards of a market
   'function baseBorrowMin() view returns (uint)',
   'function baseMinForRewards() view returns (uint256)',
@@ -108,47 +90,12 @@ type Fault = (comet: string, fragment: string, argument: string | undefined) => 
 const marketOf = (comet: string) => catalog.markets().find(entry => entry.comet.address.toLowerCase() === comet)!.comet.registry.market;
 
 /*
- * What the node answers, each number its own, so that one reported in
- * another's place shows: the getters of the interest rate model, alike for
- * every Comet; the reserves of a market, positive but for WETH's, which owes
- * its suppliers more than it holds; what a Comet keeps for a collateral, by
- * the collateral's index; and what accounts supplied of a collateral, and
- * the Comet's reserves of it, by its token. ETH / USD and BTC / USD, which
- * convert the markets quoted in ETH and in BTC to USD, answer prices of
- * their own, as does AERO / USD; every other feed answers 1.0.
+ * The prices the node answers, at eight decimals, where they are not 1.0:
+ * BTC / USD, through which the version prices the base asset of WBTC's market
+ * in USD, so that its base_usd_price shows which feed was read.
  */
-const RATES: Record<string, string> = {
-  supplyKink:                           '850000000000000000',
-  supplyPerSecondInterestRateBase:      '31709791',
-  supplyPerSecondInterestRateSlopeLow:  '1141552511',
-  supplyPerSecondInterestRateSlopeHigh: '101344495180',
-  borrowKink:                           '900000000000000000',
-  borrowPerSecondInterestRateBase:      '475646879',
-  borrowPerSecondInterestRateSlopeLow:  '880834601',
-  borrowPerSecondInterestRateSlopeHigh: '114155251141',
-};
-
-const reservesOf = (comet: string) => comet === WETH ? -5 : 8_434_471_165_951;
-
-const parametersAt = (assetIndex: number) => ({
-  borrowCollateralFactor:    EthersBigNumber.from(10).pow(15).mul(700 + assetIndex),
-  liquidateCollateralFactor: EthersBigNumber.from(10).pow(15).mul(800 + assetIndex),
-  liquidationFactor:         EthersBigNumber.from(10).pow(15).mul(900 + assetIndex),
-  supplyCap:                 EthersBigNumber.from(10).pow(21).mul(assetIndex + 1),
-});
-
-// every collateral token of the snapshot, numbered from one
-const TOKENS = [ ...new Set(snapshot.networks.flatMap(network => network.markets.flatMap(entry => (
-  entry.collateralAssets.map(asset => asset.token.address.toLowerCase())
-)))) ];
-const suppliedOf           = (token: string) => (TOKENS.indexOf(token.toLowerCase()) + 1) * 1_000_000;
-const collateralReservesOf = (token: string) => (TOKENS.indexOf(token.toLowerCase()) + 1) * 1_000;
-
-// the prices of their own, at eight decimals
 const PRICES = new Map<string, number>([
-  [ marketOf(WETH).baseAsset.usdPriceFeed!.address, 250_000_000_000 ],   // ETH / USD: 2500.0
   [ marketOf(WBTC).baseAsset.usdPriceFeed!.address, 8_610_669_000_000 ], // BTC / USD: 86106.69
-  [ marketOf(AERO).baseAsset.priceFeed.address,     89_531_391 ],        // AERO / USD: 0.89531391
 ]);
 
 /*
@@ -178,28 +125,19 @@ function fakeNode(fault: Fault = () => undefined) {
     const entry = markets.get(to.toLowerCase());
     const values = ((): unknown[] => {
       switch (fragment.name) {
-        case 'numAssets':             return [ entry!.collateralAssets.length ];
+        case 'numAssets':          return [ entry!.collateralAssets.length ];
         case 'getAssetInfo': {
           const asset = entry!.collateralAssets[Number(argument)]!;
-          return [ {
-            offset:    asset.assetIndex,
-            asset:     asset.token.address,
-            priceFeed: asset.priceFeed.address,
-            scale:     EthersBigNumber.from(10).pow(asset.token.decimals),
-            ...parametersAt(asset.assetIndex),
-          } ];
+          return [ [ asset.assetIndex, asset.token.address, asset.priceFeed.address, EthersBigNumber.from(10).pow(asset.token.decimals), 0, 0, 0, 0 ] ];
         }
-        case 'baseTokenPriceFeed':    return [ entry!.baseAsset.priceFeed.address ];
-        case 'getPrice':              return [ PRICES.get(argument!) ?? EthersBigNumber.from(10).pow(8) ];
-        case 'getReserves':           return [ reservesOf(to.toLowerCase()) ];
-        case 'totalsCollateral':      return [ suppliedOf(argument!) ];
-        case 'getCollateralReserves': return [ collateralReservesOf(argument!) ];
-        case 'symbol':                return [ symbols.get(to.toLowerCase()) ?? 'TKN' ];
+        case 'baseTokenPriceFeed': return [ entry!.baseAsset.priceFeed.address ];
+        case 'getPrice':           return [ PRICES.get(argument!) ?? EthersBigNumber.from(10).pow(8) ];
+        case 'symbol':             return [ symbols.get(to.toLowerCase()) ?? 'TKN' ];
         case 'totalsBasic': {
           const [ index, base ] = [ EthersBigNumber.from(10).pow(15), EthersBigNumber.from(10).pow(12) ];
           return [ [ index, index, 0, 0, base, base, LATEST.timestamp, 0 ] ];
         }
-        default:                      return [ RATES[fragment.name] ?? EthersBigNumber.from(10).pow(8) ];
+        default:                   return [ EthersBigNumber.from(10).pow(8) ];
       }
     })();
     return { jsonrpc: '2.0', id, result: COMET.encodeFunctionResult(fragment, values) };
@@ -376,9 +314,7 @@ t.test('a request the node provider failed for one network fails the summary', a
 
 // a market of the summary as the route answers it, in JSON
 type Summary = {
-  comet:       { address: string },
-  status:      string,
-  collaterals: Array<Record<string, string>>,
+  comet: { address: string },
   [field: string]: unknown,
 };
 
@@ -390,88 +326,201 @@ async function summaryFrom(t: Test, node: ReturnType<typeof fakeNode>): Promise<
   return await response.json() as Summary[];
 }
 
-const entryOf  = (summary: Summary[], comet: string) => summary.find(entry => entry.comet.address.toLowerCase() === comet)!;
-const pricesOf = (summary: Summary[], comet: string) => entryOf(summary, comet).collaterals.map(collateral => collateral.price_usd);
-const without  = (entry: object, ...fields: string[]) => Object.fromEntries(Object.entries(entry).filter(([ field ]) => !fields.includes(field)));
-
-// `price` for every collateral of a Comet's market
-const everyAt = (comet: string, price: string) => marketOf(comet).collateralAssets.map(() => price);
+const entryOf = (summary: Summary[], comet: string) => summary.find(entry => entry.comet.address.toLowerCase() === comet)!;
+const without = (entry: object, ...fields: string[]) => Object.fromEntries(Object.entries(entry).filter(([ field ]) => !fields.includes(field)));
 
 const REVERT = { code: 3, message: 'execution reverted', data: '0x' };
 
 // the warnings the summary logs while a test runs, kept out of its output
-function captureWarnings(t: Test): string[] {
-  const logged: string[] = [];
+function captureWarnings(t: Test): void {
   const warn = console.warn;
-  console.warn = (...args: unknown[]) => { logged.push(args.join(' ')); };
+  console.warn = () => {};
   t.teardown(() => { console.warn = warn; });
-  return logged;
 }
 
-/*
- * What a Comet stores is answered as it stores it, an integer each, and in
- * snake_case to the deepest key: the reserves of its market, which are
- * signed, its interest rate model, borrow before supply, and for each
- * collateral what accounts supplied of it, the Comet's reserves of it, its
- * supply cap and its factors. The price of each collateral is in USD: as
- * its feed answers it on a market quoted in USD, AERO's among them, and
- * converted with the base asset's USD price on one quoted in its base asset.
- */
-t.test('the summary answers the reserves, the rate model and each collateral\'s parameters as the Comet stores them', async t => {
-  const summary = await summaryFrom(t, fakeNode());
-  t.ok(summary.every(entry => entry.status === 'success'), 'every market is a success');
+const USDT = '0x3afdc9bca9213a35503b077a6072f3d0d5ab0840';
+const WETH = '0xa17581a9e3356d9a858b789d68b4d866e593ae94';
+const AERO = '0x784efeb622244d2348d4f2522f8860b96fbece89';
 
-  const curve = (side: 'borrow' | 'supply') => ({
-    kink:       RATES[`${side}Kink`],
-    base:       RATES[`${side}PerSecondInterestRateBase`],
-    slope_low:  RATES[`${side}PerSecondInterestRateSlopeLow`],
-    slope_high: RATES[`${side}PerSecondInterestRateSlopeHigh`],
-  });
-  for (const { network, deploymentKey, comet } of catalog.markets()) {
-    const entry = entryOf(summary, comet.address.toLowerCase());
+/*
+ * Has the node answer WBTC / BTC, the base price of WBTC's market, at
+ * 0.9984988 for the length of a test, so that its base_price shows which
+ * feed was read.
+ */
+function pricingWbtcInBtc(t: Test): void {
+  const feed = marketOf(WBTC).baseAsset.priceFeed.address;
+  PRICES.set(feed, 99_849_880);
+  t.teardown(() => { PRICES.delete(feed); });
+}
+
+// the fields of a market of the summary that come from its registry version
+const describedOf = (entry: Summary) => Object.fromEntries(Object.entries(entry).filter(([ field ]) => (REGISTRY_KEYS as readonly string[]).includes(field)));
+
+// the fields a market of the summary answers when everything is read, in their order, as its version describes it
+const answered = (comet: string) => [
+  'chain_id', 'comet', ...Object.keys(registryFields(marketOf(comet))), 'status', 'borrow_apr', 'supply_apr',
+  'total_borrow_value', 'total_supply_value', 'total_collateral_value', 'utilization', 'base_usd_price', 'base_price',
+  'collateral_asset_symbols', 'collaterals',
+];
+
+/*
+ * Beside what was read of each market, the summary answers what its registry
+ * version says of it, as /registry/v1/active serves the market: the rewards
+ * contract and the bulker beside its Comet, then its keys and labels, before
+ * its status. Right after the base asset's USD price it answers the base
+ * price its totals are valued at: the same number on a market quoted in USD,
+ * which reads both through its base feed, and WBTC in BTC on the WBTC
+ * market, whose USD price is that of BTC. Each form of the route answers a
+ * market alike.
+ */
+t.test('each market of the summary has what its version says of it, and its base price, in every form', async t => {
+  const node = fakeNode();
+  serving(t, node);
+  pricingWbtcInBtc(t);
+
+  const every = await (await marketHandlers.latestSummary(everyMarket(), context())).json() as Summary[];
+  t.equal(every.length, catalog.markets().length, 'every market is answered');
+  for (const { network, deploymentKey, comet, market } of catalog.markets()) {
+    const entry = entryOf(every, comet.address.toLowerCase());
     const name  = `${network} ${deploymentKey}`;
-    t.strictSame(Object.keys(entry), [
-      'chain_id', 'comet', 'status', 'borrow_apr', 'supply_apr', 'total_borrow_value', 'total_supply_value', 'total_collateral_value',
-      'utilization', 'base_usd_price', 'collateral_asset_symbols', 'reserves', 'rate_model', 'collaterals',
-    ], `${name}: every field, in the order the API writes them`);
-    t.equal(entry.reserves, String(reservesOf(comet.address.toLowerCase())), `${name}: its reserves`);
-    t.strictSame(entry.rate_model, { borrow: curve('borrow'), supply: curve('supply') }, `${name}: each slot of its rate model from its own getter`);
-    t.strictSame(entry.collaterals.map(collateral => without(collateral, 'price_usd')), comet.registry.market.collateralAssets.map(asset => {
-      const parameters = parametersAt(asset.assetIndex);
-      return {
-        address:                     checksumAddress(asset.token.address),
-        symbol:                      asset.token.symbol,
-        status:                      'success',
-        total_supply:                String(suppliedOf(asset.token.address)),
-        reserves:                    String(collateralReservesOf(asset.token.address)),
-        supply_cap:                  parameters.supplyCap.toString(),
-        borrow_collateral_factor:    parameters.borrowCollateralFactor.toString(),
-        liquidate_collateral_factor: parameters.liquidateCollateralFactor.toString(),
-        liquidation_factor:          parameters.liquidationFactor.toString(),
-      };
-    }), `${name}: each number of each collateral from its own read`);
+    t.strictSame(Object.keys(entry), answered(comet.address.toLowerCase()), `${name}: what the version says after its Comet, and the base price after the USD price`);
+    t.equal(JSON.stringify(entry.comet), JSON.stringify({ address: comet.address, ...contractsBesideComet(market) }),
+      `${name}: its Comet, then its rewards contract and its bulker`);
+    t.strictSame(describedOf(entry), registryFields(market), `${name}: its keys and labels as the version has them`);
+    if (market.collateralValueQuote === 'usd') {
+      t.equal(entry.base_price, entry.base_usd_price, `${name}: quoted in USD, its base price is its USD price`);
+    }
+  }
+  t.strictSame([ entryOf(every, WBTC).base_price, entryOf(every, WBTC).base_usd_price ], [ '0.9984988', '86106.69' ],
+    'the WBTC market: its base price, WBTC in BTC, beside the price of BTC in USD');
+
+  const asked = node.requests.length;
+  const mainnet = await (await marketHandlers.latestSummary({ ...everyMarket(), network: 'ethereum-mainnet' }, context())).json() as Summary[];
+  t.equal(JSON.stringify(mainnet), JSON.stringify(every.filter(entry => entry.chain_id === 1)),
+    'the summary of a network answers each of its markets alike');
+
+  const wbtc  = catalog.marketAt('ethereum-mainnet', WBTC)!.comet;
+  const alone = await (await marketHandlers.latestSummary({ ...everyMarket(), network: 'ethereum-mainnet', contract: wbtc }, context())).json() as Summary;
+  t.equal(JSON.stringify(alone), JSON.stringify(entryOf(every, WBTC)), 'and so does the summary of one market');
+  t.equal(node.requests.length - asked, 8, 'four node requests each, as before');
+});
+
+/*
+ * What the version says of a market needs nothing read, so a market whose
+ * prices revert answers it as any other. Its base price is there wherever it
+ * was read: on a partial market, and on an error its USD price alone made.
+ */
+t.test('a market whose prices revert answers what its version says of it, and its base price where it was read', async t => {
+  captureWarnings(t);
+  pricingWbtcInBtc(t);
+  // the feed that reverts on each of three markets
+  const feeds = new Map<string, string>([
+    [ WBTC, marketOf(WBTC).baseAsset.usdPriceFeed!.address ],        // BTC / USD: its USD price alone fails
+    [ WETH, marketOf(WETH).baseAsset.priceFeed.address ],            // its base feed: its base price fails
+    [ USDC, marketOf(USDC).collateralAssets[0]!.priceFeed.address ], // COMP / USD: one of its collaterals fails
+  ]);
+  const summary = await summaryFrom(t, fakeNode((comet, fragment, argument) => (
+    fragment === 'getPrice' && argument === feeds.get(comet) ? REVERT : undefined
+  )));
+
+  for (const { network, deploymentKey, comet, market } of catalog.markets()) {
+    const entry = entryOf(summary, comet.address.toLowerCase());
+    t.equal(JSON.stringify(entry.comet), JSON.stringify({ address: comet.address, ...contractsBesideComet(market) }),
+      `${network} ${deploymentKey}, ${entry.status}: its Comet, its rewards contract and its bulker`);
+    t.strictSame(describedOf(entry), registryFields(market), `${network} ${deploymentKey}, ${entry.status}: its keys and labels`);
   }
 
-  const usdc = entryOf(summary, USDC);
-  t.equal(JSON.stringify(usdc.rate_model), JSON.stringify({ borrow: curve('borrow'), supply: curve('supply') }),
-    'the rate model in the order the API writes it, borrow before supply');
-  t.strictSame(Object.keys(usdc.collaterals[0]!), [
-    'address', 'symbol', 'status', 'price_usd', 'total_supply', 'reserves', 'supply_cap',
-    'borrow_collateral_factor', 'liquidate_collateral_factor', 'liquidation_factor',
-  ], 'and a collateral\'s fields in the order the API writes them');
+  const wbtc = entryOf(summary, WBTC);
+  t.match(wbtc, { status: 'error', base_price: '0.9984988' }, 'WBTC, an error of its USD price: its base price');
+  t.notOk('base_usd_price' in wbtc, 'without the USD price that reverted');
+  const weth = entryOf(summary, WETH);
+  t.match(weth, { status: 'error', base_usd_price: '1.0' }, 'WETH, an error of its base price: its USD price');
+  t.notOk('base_price' in weth || 'total_supply_value' in weth, 'without the base price that reverted, nor the totals made of it');
+  t.match(entryOf(summary, USDC), { status: 'partially', base_price: '1.0', base_usd_price: '1.0' }, 'USDC, partial: both prices');
+});
 
-  t.strictSame(pricesOf(summary, USDC), everyAt(USDC, '1.0'), 'USDC\'s collateral in USD, as its feeds answer');
-  t.strictSame(pricesOf(summary, WETH), everyAt(WETH, '2500.0'), 'WETH\'s at 1.0 ETH, at 2500 USD per ETH');
-  t.strictSame(pricesOf(summary, AERO), everyAt(AERO, '1.0'), 'and AERO\'s as its feeds answer, neither multiplied nor divided by the price of AERO');
+/*
+ * A contract or a slug the version has none of, which /registry/v1/active
+ * answers as null, is left out, as the summary leaves out whatever it cannot
+ * give. A slug the version has is answered, between whether the base asset
+ * wraps the chain's own token and whether the market is the default.
+ */
+t.test('a market whose version has no rewards contract, no bulker or no slug leaves it out', async t => {
+  // USDC's market without a bulker, AERO's without a rewards contract, WETH's with neither, and USDT's institutional, with a slug
+  const version = {
+    ...snapshot,
+    networks: snapshot.networks.map(network => ({
+      ...network,
+      markets: network.markets.map(entry => ({
+        ...entry,
+        ...(entry.contracts.comet === USDT ? { slug: 'usdt-institutional', isInstitutional: true } : {}),
+        contracts: {
+          ...entry.contracts,
+          ...([ USDC, WETH ].includes(entry.contracts.comet!) ? { bulker: null } : {}),
+          ...([ AERO, WETH ].includes(entry.contracts.comet!) ? { rewards: null } : {}),
+        },
+      })),
+    })),
+  };
+  serving(t, fakeNode());
+  const response = await marketHandlers.latestSummary({ ...everyMarket(), catalog: fixtureCatalog(version) }, context());
+  t.equal(response.status, 200, 'the summary is answered');
+  const summary = await response.json() as Summary[];
+
+  const keysOf = (comet: string) => Object.keys(entryOf(summary, comet).comet);
+  t.strictSame(keysOf(USDC), [ 'address', 'rewards' ], 'USDC: its Comet and its rewards contract');
+  t.strictSame(keysOf(AERO), [ 'address', 'bulker' ], 'AERO: its Comet and its bulker');
+  t.strictSame(keysOf(WETH), [ 'address' ], 'WETH: its Comet alone');
+  t.ok(summary.filter(entry => ![ USDC, AERO, WETH ].includes(entry.comet.address.toLowerCase()))
+    .every(entry => Object.keys(entry.comet).join() === 'address,rewards,bulker'), 'and every other market all three');
+
+  const usdt = entryOf(summary, USDT);
+  t.strictSame(Object.keys(usdt).slice(2, 9),
+    [ 'deployment_key', 'display_name', 'base_asset_name', 'is_wrapped_native', 'slug', 'is_default', 'is_institutional' ],
+    'USDT: its slug after whether its base asset wraps the chain\'s own token');
+  t.match(usdt, { slug: 'usdt-institutional', is_institutional: true }, 'as the version has it, in its institutional section');
+  t.ok(summary.filter(entry => entry !== usdt).every(entry => !('slug' in entry)), 'and no other market has a slug');
+  t.ok(summary.every(entry => entry.status === 'success'), 'each market a success all the same');
+});
+
+/*
+ * The summary keeps in its cache only what it read, and keys it without the
+ * labels of the market (catalog.ts, marketDigest): a version that changes
+ * only a label is answered at once, from the summary already cached.
+ */
+t.test('a version that changes only a label is answered at once, from the summary already cached', async t => {
+  const node = fakeNode();
+  serving(t, node);
+  const cached = context();
+  const before = await (await marketHandlers.latestSummary(everyMarket(), cached)).json() as Summary[];
+
+  const relabeled = {
+    ...snapshot,
+    registryVersion: { ...snapshot.registryVersion, id: 'relabeled', checksum: 'f'.repeat(64) },
+    networks: snapshot.networks.map(network => ({
+      ...network,
+      markets: network.markets.map(entry => entry.contracts.comet !== USDC ? entry : {
+        ...entry, displayName: 'USDC-cr', baseAsset: { ...entry.baseAsset, displayName: 'USD Coin (Circle)' },
+      }),
+    })),
+  };
+  const asked = node.requests.length;
+  const after = await (await marketHandlers.latestSummary({ ...everyMarket(), catalog: fixtureCatalog(relabeled) }, cached)).json() as Summary[];
+
+  const networks = new Set(catalog.markets().map(entry => entry.network)).size;
+  t.equal(node.requests.length - asked, networks, 'the summary is read from the cache: only the latest block of each network is asked for');
+  t.match(entryOf(after, USDC), { display_name: 'USDC-cr', base_asset_name: 'USD Coin (Circle)' }, 'and USDC\'s market answers its new labels');
+  t.strictSame(without(entryOf(after, USDC), 'display_name', 'base_asset_name'), without(entryOf(before, USDC), 'display_name', 'base_asset_name'),
+    'and everything else as before');
 });
 
 /*
  * A market whose base asset could not be priced is an error, and answers
  * every field that does not need the price it lacks. The Comet of WBTC's
  * market prices its totals with WBTC / BTC, and the version its base asset
- * in USD with BTC / USD: without the first, it answers all but its totals.
- * One feed prices both on USDC's market, which answers all but its totals
- * and its base asset's USD price, its collateral in USD as its feeds answer.
+ * in USD with BTC / USD: without the first, it answers all but its base
+ * price and its totals. One feed prices both on USDC's market, which answers
+ * all but its totals and both its prices.
  */
 t.test('a market whose base feed reverts answers every field it can', async t => {
   const reading = await summaryFrom(t, fakeNode());
@@ -481,60 +530,26 @@ t.test('a market whose base feed reverts answers every field it can', async t =>
     fragment === 'getPrice' && argument === feeds.get(comet) ? REVERT : undefined
   )));
 
+  // what the version says of a market, which the summary answers after its Comet
+  const described = Object.keys(registryFields(marketOf(WBTC)));
+
   const wbtc = entryOf(reverting, WBTC);
-  t.strictSame(wbtc, { ...without(entryOf(reading, WBTC), 'total_borrow_value', 'total_supply_value'), status: 'error', message: 'execution reverted' },
-    'WBTC: an error, and every field as read but its totals');
+  t.strictSame(wbtc, { ...without(entryOf(reading, WBTC), 'total_borrow_value', 'total_supply_value', 'base_price'), status: 'error', message: 'execution reverted' },
+    'WBTC: an error, and every field as read but its totals and its base price');
   t.strictSame(Object.keys(wbtc), [
-    'chain_id', 'comet', 'status', 'message', 'borrow_apr', 'supply_apr', 'total_collateral_value',
-    'utilization', 'base_usd_price', 'collateral_asset_symbols', 'reserves', 'rate_model', 'collaterals',
+    'chain_id', 'comet', ...described, 'status', 'message', 'borrow_apr', 'supply_apr', 'total_collateral_value',
+    'utilization', 'base_usd_price', 'collateral_asset_symbols', 'collaterals',
   ], 'WBTC: its message after its status');
   t.equal(wbtc.base_usd_price, '86106.69', 'WBTC: its USD price, which is the price of BTC');
-  t.strictSame(pricesOf(reverting, WBTC), everyAt(WBTC, '86106.69'), 'WBTC: its collateral at 1.0 BTC, in USD');
 
   const usdc = entryOf(reverting, USDC);
-  t.strictSame(usdc, { ...without(entryOf(reading, USDC), 'total_borrow_value', 'total_supply_value', 'base_usd_price'), status: 'error', message: 'execution reverted' },
-    'USDC: an error, and every field as read but its totals and its USD price');
+  t.strictSame(usdc, { ...without(entryOf(reading, USDC), 'total_borrow_value', 'total_supply_value', 'base_usd_price', 'base_price'), status: 'error', message: 'execution reverted' },
+    'USDC: an error, and every field as read but its totals and its prices');
   t.strictSame(Object.keys(usdc), [
-    'chain_id', 'comet', 'status', 'message', 'borrow_apr', 'supply_apr', 'total_collateral_value',
-    'utilization', 'collateral_asset_symbols', 'reserves', 'rate_model', 'collaterals',
+    'chain_id', 'comet', ...described, 'status', 'message', 'borrow_apr', 'supply_apr', 'total_collateral_value',
+    'utilization', 'collateral_asset_symbols', 'collaterals',
   ], 'USDC: its message after its status');
-  t.strictSame(pricesOf(reverting, USDC), everyAt(USDC, '1.0'), 'USDC: its collateral in USD, as its feeds answer');
 
   const others = (summary: Summary[]) => summary.filter(entry => ![ WBTC, USDC ].includes(entry.comet.address.toLowerCase()));
   t.strictSame(others(reverting), others(reading), 'and every other market as read');
-});
-
-/*
- * A Comet reads its reserves through the token's balanceOf, so a token that
- * reverts there leaves out those reserves and nothing else: the summary of
- * every network is answered, each market with the status its prices give
- * it, and the log names each revert. WETH is a collateral of USDC's market
- * and of USDT's, and its reserves revert on USDC's alone.
- */
-t.test('a token whose reserves revert leaves out only its reserves', async t => {
-  const reading = await summaryFrom(t, fakeNode());
-  const logged  = captureWarnings(t);
-  const weth    = marketOf(USDC).collateralAssets.find(asset => asset.token.symbol === 'WETH')!.token.address;
-  const reverting = await summaryFrom(t, fakeNode((comet, fragment, argument) => (
-    (comet === USDC && fragment === 'getCollateralReserves' && argument === weth) || (comet === AERO && fragment === 'getReserves')
-      ? REVERT
-      : undefined
-  )));
-
-  t.ok(reverting.every(entry => entry.status === 'success'), 'every market is a success');
-  const usdc = entryOf(reading, USDC);
-  t.strictSame(entryOf(reverting, USDC), {
-    ...usdc,
-    collaterals: usdc.collaterals.map(collateral => collateral.address.toLowerCase() === weth ? without(collateral, 'reserves') : collateral),
-  }, 'USDC: its WETH without its reserves, and every other field as read');
-  t.strictSame(entryOf(reverting, AERO), without(entryOf(reading, AERO), 'reserves'), 'AERO: the market without its reserves, and every other field as read');
-  const others = (summary: Summary[]) => summary.filter(entry => ![ USDC, AERO ].includes(entry.comet.address.toLowerCase()));
-  t.strictSame(others(reverting), others(reading), 'and every other market as read, USDT\'s WETH with its reserves');
-
-  const reverts = logged.filter(line => line.startsWith('reserves reverted: '));
-  const naming  = (prefix: string) => reverts.filter(line => line.startsWith(prefix) && line.endsWith(': execution reverted')).length;
-  t.equal(reverts.length, 2, 'the log names each revert once');
-  t.equal(naming(`reserves reverted: getCollateralReserves(${checksumAddress(weth)}) of ${usdc.comet.address} on ethereum-mainnet at block `), 1,
-    'the token, and the Comet that read it');
-  t.equal(naming(`reserves reverted: getReserves() of ${entryOf(reading, AERO).comet.address} on base-mainnet at block `), 1, 'and the Comet');
 });

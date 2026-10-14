@@ -12,8 +12,7 @@ import { MemoryCache } from '../../../../lib/symbolic/cache.js';
 import * as comet  from '../../../../lib/computations/comet.js';
 import * as market from '../../../../lib/computations/market.js';
 
-import { collateralValue } from '../../../../lib/computations/market/collaterals.js';
-import type { CollateralDetail } from '../../../../lib/computations/market/collateral-details.js';
+import { type Collateral, collateralValue } from '../../../../lib/computations/market/collaterals.js';
 
 import type { RegistryComet } from '../../../../lib/model/comet-registry.js';
 import { checksumAddress } from '../../../../lib/model/comet-registry.js';
@@ -56,28 +55,10 @@ function evaluator(computations: Record<string, unknown>, algorithm: typeof ALGO
 }
 
 /*
- * What the Comet keeps for the asset at an index, beside the asset itself:
- * every field its own, and none the same at two indices, so that one read
- * into another's place, or from another index, shows.
- */
-const keptAt = (assetNumber: number) => ({
-  priceFeed:                 checksumAddress(`0x${'f'.repeat(38)}${assetNumber.toString(16).padStart(2, '0')}`),
-  scale:                     BigNumber.from(10).pow(assetNumber + 1),
-  borrowCollateralFactor:    BigNumber.from(10).pow(15).mul(700 + assetNumber),
-  liquidateCollateralFactor: BigNumber.from(10).pow(15).mul(800 + assetNumber),
-  liquidationFactor:         BigNumber.from(10).pow(15).mul(900 + assetNumber),
-  supplyCap:                 BigNumber.from(1_000_000).mul(assetNumber + 1),
-});
-
-// what the Comet holds of an asset beyond what its accounts supplied: its own for each, read off its address
-const reservesOf = (asset: string) => BigNumber.from(asset.slice(0, 10));
-
-/*
  * The collaterals of a Comet as the chain answers at a block: how many it had
- * listed, the asset at each index — by default the one the version describes
- * there — with what the Comet keeps for it, and the reserves of each asset,
- * with every read recorded. There is no symbol() among the reads to stub,
- * and no ethCall: a computation that read either would fail.
+ * listed, and the asset at each index — by default the one the version
+ * describes there — with every read recorded. There is no symbol() among the
+ * reads to stub, and no ethCall: a computation that read either would fail.
  */
 function collateralsAt(
   contract: RegistryComet,
@@ -85,39 +66,33 @@ function collateralsAt(
     numAssets: number,
     assetAt?:  Record<number, string>,
     price?:    (assetNumber: number) => unknown,
-    reserves?: (asset: string) => BigNumber | null,
   },
   algorithm: typeof ALGORITHMS[number] = 'workingset',
 ) {
   const reads: string[] = [];
   const counted = (name: string, answer: (context: any) => unknown) => stub(context => {
-    reads.push(`${name}:${context.assetNumber ?? context.asset}`);
+    reads.push(`${name}:${context.assetNumber}`);
     return answer(context);
   });
   const described = (assetNumber: number) => contract.registry.market.collateralAssets[assetNumber]?.token.address ?? `0x${'9'.repeat(40)}`;
   const { evaluate, pull1 } = evaluator({
     collateralDetails:    market.collateralDetails,
     numAssets:            stub(() => chain.numAssets),
-    assetInfo:            counted('assetInfo', ({ assetNumber }) => ({
-      asset: checksumAddress(chain.assetAt?.[assetNumber] ?? described(assetNumber)),
-      ...keptAt(assetNumber),
-    })),
+    assetInfo:            counted('assetInfo', ({ assetNumber }) => ({ asset: checksumAddress(chain.assetAt?.[assetNumber] ?? described(assetNumber)) })),
     assetTotalCollateral: counted('assetTotalCollateral', ({ assetNumber }) => BigFixnum.from({ value: assetNumber + 1 })),
     assetPrice:           counted('assetPrice', ({ assetNumber }) => chain.price?.(assetNumber) ?? read(BigFixnum.from({ value: 2 }))),
-    collateralReserves:   counted('collateralReserves', ({ asset }) => chain.reserves ? chain.reserves(asset) : reservesOf(asset)),
   }, algorithm);
   const collaterals = evaluate(pull1({
     collateralDetails: { apiHost: '', nodeHost: '', nodeKey: '', network, contract, blockNumber },
-  })) as Promise<CollateralDetail[]>;
+  })) as Promise<Collateral[]>;
   return { collaterals, reads };
 }
 
-// every read of the collaterals at these indices: once each at its index, and its reserves at the asset the Comet answered there
-const readsOf = (contract: RegistryComet, assetNumbers: number[]) => assetNumbers.flatMap(assetNumber => [
+// every read of the collaterals at these indices: once each at its index
+const readsOf = (assetNumbers: number[]) => assetNumbers.flatMap(assetNumber => [
   `assetInfo:${assetNumber}`,
   `assetPrice:${assetNumber}`,
   `assetTotalCollateral:${assetNumber}`,
-  `collateralReserves:${checksumAddress(contract.registry.market.collateralAssets[assetNumber]!.token.address)}`,
 ]).sort();
 
 const indices = (length: number) => Array.from({ length }, (_, assetNumber) => assetNumber);
@@ -139,44 +114,7 @@ t.test('every collateral is read once, in one pass', async t => {
       'assetInfo:0', 'assetInfo:1',
       'assetPrice:0', 'assetPrice:1',
       'assetTotalCollateral:0', 'assetTotalCollateral:1',
-      `collateralReserves:${COMP}`, `collateralReserves:${WETH}`,
-    ].sort(), `${algorithm}: each read is made once, the reserves of the asset the Comet answered at each index, and no token is asked its symbol`);
-  }
-});
-
-/*
- * The cap and the factors of a collateral are what its Comet answers at its
- * index, and its reserves what the Comet answers for its asset. Reserves the
- * Comet could not read are null on their own: the rest of what it keeps for
- * that collateral is still there.
- */
-t.test('a collateral carries what its Comet keeps for it', async t => {
-  const UNI = checksumAddress(usdt.registry.market.collateralAssets[3]!.token.address);
-  // the parameters with each number written out; reserves that could not be read stay null
-  const written = (parameters: CollateralDetail['parameters']) => parameters === null ? null : Object.fromEntries(
-    Object.entries(parameters).map(([ name, value ]) => [ name, BigNumber.isBigNumber(value) ? value.toString() : value ]),
-  );
-
-  for (const algorithm of ALGORITHMS) {
-    const { collaterals } = collateralsAt(usdt, {
-      numAssets: 16,
-      reserves:  asset => asset === UNI ? null : reservesOf(asset),
-    }, algorithm);
-    const all = await collaterals;
-
-    t.strictSame(all.map(collateral => written(collateral.parameters)), usdt.registry.market.collateralAssets.map((position, assetNumber) => {
-      const kept = keptAt(assetNumber);
-      return {
-        reserves:                  assetNumber === 3 ? null : reservesOf(checksumAddress(position.token.address)).toString(),
-        supplyCap:                 kept.supplyCap.toString(),
-        borrowCollateralFactor:    kept.borrowCollateralFactor.toString(),
-        liquidateCollateralFactor: kept.liquidateCollateralFactor.toString(),
-        liquidationFactor:         kept.liquidationFactor.toString(),
-      };
-    }), `${algorithm}: each collateral with the cap and factors of its own index, and the reserves of its own asset`);
-    t.match(all[3], { symbol: 'UNI', price: { status: 'success' }, parameters: { reserves: null } },
-      'reserves that reverted are null, and the collateral is read in full beside them');
-    t.equal(all[3]!.totalCollateral.toString(), '4', 'what the market holds of it too');
+    ].sort(), `${algorithm}: each read is made once, and no token is asked its symbol`);
   }
 });
 
@@ -223,30 +161,29 @@ t.test('a summary holds the collateral the version describes that the Comet had 
   const earlier = collateralsAt(usdt, { numAssets: 14 });
   t.same((await earlier.collaterals).map(collateral => collateral.symbol), usdt.registry.market.collateralAssets.slice(0, 14).map(asset => asset.token.symbol),
     'a block before the last two were listed summarizes the first fourteen');
-  t.strictSame(earlier.reads.sort(), readsOf(usdt, indices(14)), 'and reads nothing of the others');
+  t.strictSame(earlier.reads.sort(), readsOf(indices(14)), 'and reads nothing of the others');
 
   const later = collateralsAt(usdt, { numAssets: 17 });
   t.equal((await later.collaterals).length, 16, 'a seventeenth the Comet listed after the import is left out');
-  t.strictSame(later.reads.sort(), readsOf(usdt, indices(16)), 'and never read');
+  t.strictSame(later.reads.sort(), readsOf(indices(16)), 'and never read');
 });
 
 /*
  * A Comet keeps an asset at its index, so a different asset there means the
  * version no longer describes the market (the chain drift check raises it).
  * What the Comet holds there is reported as the collateral that could not be
- * read, and is neither named after it, nor counted in the total, nor reported
- * with what the Comet keeps for it.
+ * read, and is neither named after it nor counted in the total.
  */
 t.test('an asset the Comet holds where the version describes another is reported, not valued', async t => {
   const STRANGER = '0x1111111111111111111111111111111111111111';
-  const answers: CollateralDetail[][] = [];
+  const answers: Collateral[][] = [];
   for (const algorithm of ALGORITHMS) {
     const { collaterals, reads } = collateralsAt(usdt, { numAssets: 16, assetAt: { 3: STRANGER } }, algorithm);
     answers.push(await collaterals);
-    t.strictSame(reads.sort(), [ 'assetInfo:3', ...readsOf(usdt, indices(16).filter(assetNumber => assetNumber !== 3)) ].sort(),
-      `${algorithm}: of the stranger, only the asset at its index is read — neither its total, its price nor its reserves`);
+    t.strictSame(reads.sort(), [ 'assetInfo:3', ...readsOf(indices(16).filter(assetNumber => assetNumber !== 3)) ].sort(),
+      `${algorithm}: of the stranger, only the asset at its index is read — neither its total nor its price`);
   }
-  const [ recursive, all ] = answers as [ CollateralDetail[], CollateralDetail[] ];
+  const [ recursive, all ] = answers as [ Collateral[], Collateral[] ];
   t.same(all, recursive, 'the working set and the recursive evaluator agree');
 
   t.match(all[3], {
@@ -254,8 +191,7 @@ t.test('an asset the Comet holds where the version describes another is reported
     symbol: 'UNI',
     price:  { status: 'error', message: `asset 3 of the Comet is ${STRANGER}, not the UNI the registry version describes` },
   }, 'the collateral the version describes there is reported as one that could not be read');
-  t.equal(all[3]!.parameters, null, 'what the Comet keeps for the stranger is not reported as the token\'s');
-  t.equal(all[3]!.totalCollateral.toString(), '0', 'nor what it holds of it');
+  t.equal(all[3]!.totalCollateral.toString(), '0', 'nothing of what the Comet holds there is reported as the token\'s');
   t.equal(collateralValue(all).toString(), String(2 * (136 - 4)), 'and the total leaves it out: indices 1 to 16 but 4, at two each');
 });
 
@@ -288,14 +224,12 @@ t.test('the seeded exceptions price wUSDM and pumpBTC where their Comet still re
       assetInfo:            stub(({ assetNumber }) => {
         const own = contract.registry.market.collateralAssets[assetNumber]!;
         return {
-          ...keptAt(assetNumber),
           asset:     checksumAddress(own.token.address),
           priceFeed: checksumAddress(feeds[assetNumber] ?? own.priceFeed.address),
           scale:     BigNumber.from(10).pow(own.token.decimals),
         };
       }),
       assetTotalCollateral: stub(() => BigFixnum.from({ value: 1 })),
-      collateralReserves:   stub(({ asset }) => reservesOf(asset)),
       getPrice:             stub(({ priceFeed }) => {
         asked.push(priceFeed.address.toLowerCase());
         return priceFeed.address.toLowerCase() === CONSTANT ? read(BigFixnum.from({ value: 1, decimals: 8 })) : read(one());
@@ -303,7 +237,7 @@ t.test('the seeded exceptions price wUSDM and pumpBTC where their Comet still re
     }, 'workingset');
     const collaterals = await evaluate(pull1({
       collateralDetails: { apiHost: '', nodeHost: '', nodeKey: '', network, contract, blockNumber },
-    })) as CollateralDetail[];
+    })) as Collateral[];
     // the price of a collateral written out, or why it could not be read
     const priceOf = (symbol: string) => {
       const { price } = collaterals.find(entry => entry.symbol === symbol)!;
