@@ -86,5 +86,19 @@ t.test(`/market/.../summary response format looks reasonable`, async t => {
   t.ok(/^\d+\.\d+$/.test(total_collateral_value));
   t.ok(BigInt(utilization) >= BigInt(0));
 
+  // and of what it adds: the Comet's integers, the reserves signed, and each collateral's price in USD
+  const { reserves, rate_model, collaterals } = responseJson as any;
+  t.ok(/^-?\d+$/.test(reserves));
+  for (const curve of [ rate_model.borrow, rate_model.supply ]) {
+    t.strictSame(Object.keys(curve), [ 'kink', 'base', 'slope_low', 'slope_high' ]);
+    t.ok(Object.values(curve).every(value => /^\d+$/.test(value as string)));
+  }
+  for (const collateral of collaterals) {
+    t.ok(/^\d+\.\d+$/.test(collateral.price_usd), `${collateral.symbol} price_usd`);
+    for (const field of [ 'total_supply', 'reserves', 'supply_cap', 'borrow_collateral_factor', 'liquidate_collateral_factor', 'liquidation_factor' ]) {
+      t.ok(/^\d+$/.test(collateral[field]), `${collateral.symbol} ${field}`);
+    }
+  }
+
   t.end();
 });

@@ -3,9 +3,9 @@ import * as Compute from "../../symbolic/computation.js";
 
 import * as KnownNetwork from "../../well-known/networks/network.js";
 
-import type { GetPrice, PriceRead } from "./get-price.js";
+import type { RegistryComet } from "../../model/comet-registry.js";
 
-import { Comet, StandaloneContract } from "../../well-known/contracts/types.js";
+import type { GetPrice, PriceRead } from "./get-price.js";
 
 type BaseUsdPrice = Compute.Spec<{
   name: "baseUsdPrice";
@@ -16,10 +16,29 @@ type BaseUsdPrice = Compute.Spec<{
     nodeKey: string;
     blockNumber: Eth.BlockNumber; // block at which to compute summary
     network: KnownNetwork.Name; // network on which market is deployed
-    contract: Eth.Contract<StandaloneContract<Comet>>; // comet contract for the market
+    contract: RegistryComet; // comet contract for the market, whose version states its quote
   };
   returns: PriceRead;
 }>;
+
+/*
+ * The feed that prices the base asset in USD. The registry states the unit
+ * a market's own feeds answer in: a market quoted in USD prices its base
+ * asset in USD through its own base feed, and one quoted in its base asset
+ * converts that unit through the USD feed the version names — the feed every
+ * value the market quotes is converted to USD with. The quote decides, never
+ * whether a feed is there; validation refuses a market quoted in its base
+ * asset without one (base-usd-feed-matches-quote).
+ */
+function usdPriceFeedOf(contract: RegistryComet): RegistryComet["base"]["priceFeed"] {
+  if (contract.registry.market.collateralValueQuote === "usd") {
+    return contract.base.priceFeed;
+  }
+  if (contract.base.usdPriceFeed === undefined) {
+    throw new Error(`invariant violated: ${contract.address} is quoted in its base asset without a USD feed`);
+  }
+  return contract.base.usdPriceFeed;
+}
 
 const { implement, pull1 } = Compute.Functor<BaseUsdPrice>({});
 const baseUsdPrice = implement({
@@ -34,7 +53,7 @@ const baseUsdPrice = implement({
         network,
         contract,
         blockNumber,
-        priceFeed: contract.base.usdPriceFeed ?? contract.base.priceFeed,
+        priceFeed: usdPriceFeedOf(contract),
       },
     }),
 });
