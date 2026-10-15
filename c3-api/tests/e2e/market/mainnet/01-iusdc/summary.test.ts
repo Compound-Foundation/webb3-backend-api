@@ -128,6 +128,13 @@ t.test(`/market/.../summary response format looks reasonable for a near-empty ma
     total_supply_value,
     total_collateral_value,
     utilization,
+    base_price,
+    deployment_key,
+    display_name,
+    base_asset_name,
+    is_wrapped_native,
+    is_default,
+    is_institutional,
   } = responseJson as any;
 
   t.equal(chain_id, 1, 'reports ethereum mainnet');
@@ -149,6 +156,13 @@ t.test(`/market/.../summary response format looks reasonable for a near-empty ma
   t.ok(/^\d+\.\d+$/.test(total_supply_value), 'total_supply_value is a decimal string');
   t.ok(/^\d+\.\d+$/.test(total_collateral_value), 'total_collateral_value is a decimal string');
   t.ok(BigInt(utilization) >= BigInt(0), 'utilization is non-negative');
+  t.ok(/^\d+\.\d+$/.test(base_price), 'base_price is a decimal string');
+  t.equal(typeof deployment_key, 'string', 'deployment_key is present');
+  t.equal(typeof display_name, 'string', 'display_name is present');
+  t.equal(typeof base_asset_name, 'string', 'base_asset_name is present');
+  t.equal(typeof is_wrapped_native, 'boolean', 'is_wrapped_native is present');
+  t.equal(typeof is_default, 'boolean', 'is_default is present');
+  t.equal(typeof is_institutional, 'boolean', 'is_institutional is present');
 
   t.end();
 });

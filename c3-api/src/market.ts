@@ -106,9 +106,8 @@ function reportUnreached(contract: RegistryComet, message: string): void {
 
 /*
  * A market of the summary with what the active registry version says of it,
- * as /registry/v1/active serves the market: the rewards contract and the
- * bulker beside its Comet, then what the website keys, names and lists the
- * market by. Nothing is read for them, so every market the summary answers
+ * as /registry/v1/active serves the market: what the website keys, names and
+ * lists the market by. Nothing is read for them, so every market the summary answers
  * has them, whatever its status, one the chain has not reached too. They are
  * added here, not cached with what was read: the cache keys leave the labels
  * out (catalog.ts, marketDigest), and a version that changes one is answered
@@ -121,14 +120,15 @@ function reportUnreached(contract: RegistryComet, message: string): void {
  * null, as the summary leaves out whatever it cannot give.
  */
 function described<Summary extends MarketIdentity>({ chainId, comet, ...summary }: Summary, contract: RegistryComet) {
-  const market = contract.registry.market;
-  const { rewards, bulker } = market.contracts;
+  const market  = contract.registry.market;
+  const rewards = contract.rewards?.contract.address;
+  const { bulker } = market.contracts;
   return {
     chainId,
     comet: {
       ...comet,
-      ...(rewards === null ? {} : { rewards: checksumAddress(rewards) }),
-      ...(bulker  === null ? {} : { bulker:  checksumAddress(bulker) }),
+      ...(rewards === undefined ? {} : { rewards }),
+      ...(bulker  === null      ? {} : { bulker: checksumAddress(bulker) }),
     },
     deploymentKey:   market.deploymentKey,
     displayName:     market.displayName,

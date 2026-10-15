@@ -193,8 +193,8 @@ registry version says of it, as `/registry/v1/active` serves the market.
 (`rewards`) and its bulker (`bulker`): the market's `contracts.rewards` and
 `contracts.bulker`. The rest comes right after `comet`, before `status`:
 
-- `deployment_key` (`deploymentKey`): the market's key in the version, such
-  as `usdc`
+- `deployment_key` (`deploymentKey`): the market's key in the version, unique
+  within its chain; with `chain_id` it names the market, such as `usdc`
 - `display_name` (`displayName`): its label, such as `USDC`, `ETH` for a
   WETH market, or `USDC.e` — what the rewards routes answer as
   `base_asset.symbol`
@@ -288,8 +288,8 @@ for the second, and still reports every field that does not need a price
 that failed: it leaves out `base_price`, `total_borrow_value` and
 `total_supply_value` where the first failed, and `base_usd_price` where the
 second did. The totals stay in the market's unit: on a market quoted in its
-base asset they are in ETH or BTC, and without `base_usd_price` nothing
-here converts them to USD. `total_collateral_value` leaves out each
+base asset they are in the unit its feeds answer in — ETH, wstETH or
+BTC — and without `base_usd_price` nothing here converts them to USD. `total_collateral_value` leaves out each
 collateral that is `error`, as in `partially`. A USDC market whose base
 feed reverts, and which the version gives no rewards contract or bulker:
 

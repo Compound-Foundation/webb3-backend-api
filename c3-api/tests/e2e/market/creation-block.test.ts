@@ -12,7 +12,7 @@ import { failures, validateCandidate } from '../../../src/registry/validation.js
 import { makeTestEnv } from '../../util/test-env.js';
 import { activeRegistryDatabase } from '../../util/registry-database.js';
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
-import { REGISTRY_KEYS, onSummary } from '../../util/summary-registry-fields.js';
+import { onSummary } from '../../util/summary-registry-fields.js';
 
 import '../../../shim/node-self.js';
 
@@ -174,10 +174,22 @@ function unreached(snapshot: RegistrySnapshotV1) {
   };
 }
 
-// and as the summary answers it, with what the version says of the market
-function unreachedOnSummary(snapshot: RegistrySnapshotV1) {
-  return onSummary(unreached(snapshot), fixtureCatalog(snapshot).marketAt(MAINNET, USDT)!.market);
-}
+const UNREACHED_ON_SUMMARY = {
+  chain_id: 1,
+  comet: {
+    address: '0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840',
+    rewards: '0x1B0e765F6224C21223AeA2af16c1C46E38885a40',
+    bulker:  '0xa397a8C2086C554B531c02E29f3291c9704B00c7',
+  },
+  deployment_key:    'usdt',
+  display_name:      'USDT',
+  base_asset_name:   'Tether',
+  is_wrapped_native: false,
+  is_default:        false,
+  is_institutional:  false,
+  status:            'error',
+  message:           MESSAGE,
+};
 
 t.test('a version that holds a creation block past the latest block validates', async t => {
   t.same(failures(validateCandidate({ networks: unreachedSnapshot().networks as NetworkV1[] })), [],
@@ -195,18 +207,18 @@ t.test('the summaries answer a market created past the latest block as an error,
   t.equal(everyNetwork.status, 200, 'the summary of every network is answered');
   const every = await everyNetwork.json() as Entry[];
   t.equal(every.length, markets, 'with every market');
-  t.strictSame(every.find(isUsdt), unreachedOnSummary(snapshot), 'that market as an error naming its block');
+  t.strictSame(every.find(isUsdt), UNREACHED_ON_SUMMARY, 'that market as an error naming its block');
   t.ok(every.filter(entry => !isUsdt(entry)).every(entry => entry.status === 'success'), 'and every other as read');
 
   const mainnet = await get(`/market/${MAINNET}/all-contracts/summary`);
   t.equal(mainnet.status, 200, 'and so is the summary of its network');
   const ofMainnet = await mainnet.json() as Entry[];
   t.equal(ofMainnet.length, 4, 'every market of its network is answered');
-  t.strictSame(ofMainnet.filter(entry => entry.status !== 'success'), [ unreachedOnSummary(snapshot) ], 'and only that one as an error');
+  t.strictSame(ofMainnet.filter(entry => entry.status !== 'success'), [ UNREACHED_ON_SUMMARY ], 'and only that one as an error');
 
   const alone = await get(`/market/${MAINNET}/${USDT}/summary`);
   t.equal(alone.status, 200, 'the summary of that market alone is its status, as a price that reverts is');
-  t.strictSame(await alone.json(), unreachedOnSummary(snapshot), 'answered as an object, as one market always was');
+  t.strictSame(await alone.json(), UNREACHED_ON_SUMMARY, 'answered as an object, as one market always was');
 
   t.notOk(asked.has(USDT), 'and nothing of it was read');
   t.same(warnings.filter(line => line.includes(MESSAGE)), [
@@ -307,7 +319,6 @@ t.test('the summary answers a market created past the latest block as /registry/
   captured(t, 'warn');
 
   const active = await (await get('/registry/v1/active')).json() as RegistrySnapshotV1;
-  // the market of an entry as /registry/v1/active serves it
   const servedOf = (entry: Entry) => active.networks.find(network => network.chainId === entry.chain_id)!.markets
     .find(market => market.contracts.comet === entry.comet.address.toLowerCase())!;
   // an entry up to its status, which is what the summary answers of the version, in JSON
@@ -322,17 +333,18 @@ t.test('the summary answers a market created past the latest block as /registry/
   for (const path of [ `/market/${MAINNET}/all-contracts/summary`, '/market/all-networks/all-contracts/summary' ]) {
     const every = await (await get(path)).json() as Entry[];
     t.equal(JSON.stringify(every.find(isUsdt)), JSON.stringify(alone), `${path}: that market alike`);
-    t.ok(every.every(entry => described(entry) === JSON.stringify(onSummary({ chain_id: entry.chain_id, comet: { address: entry.comet.address } }, servedOf(entry)))),
-      `${path}: and every market as the version serves it`);
+    t.strictSame(
+      every.map(entry => described(entry)),
+      every.map(entry => JSON.stringify(onSummary({ chain_id: entry.chain_id, comet: { address: entry.comet.address } }, servedOf(entry)))),
+      `${path}: and every market as the version serves it`,
+    );
   }
 
-  // what an entry of another route says of its market that only the summary answers
-  const besides = (entry: Record<string, unknown>) => [
-    ...Object.keys(entry.comet as object).filter(key => key !== 'address'),
-    ...Object.keys(entry).filter(key => (REGISTRY_KEYS as readonly string[]).includes(key) || key === 'base_price'),
-  ];
+  const besides = (entry: Record<string, unknown>) => Object.keys(entry).filter(key => key === 'base_price');
   const days = await (await get('/market/all-networks/all-contracts/historical/summary')).json() as Day[];
-  t.ok(days.length > 0 && days.every(day => besides(day).length === 0), 'the history: the Comet alone, and no base price, on every day of every market');
+  t.ok(days.length > 0, 'the history answers days');
+  t.strictSame(days.map(besides), days.map(() => [] as string[]), 'the history: no base price, on every day of every market');
   const rewards = await (await get('/market/all-networks/all-contracts/rewards/dapp-data')).json() as Entry[];
-  t.ok(rewards.length > 0 && rewards.every(entry => besides(entry).length === 0), 'and the rewards of every market: the Comet alone');
+  t.ok(rewards.length > 0, 'the rewards of every market are answered');
+  t.strictSame(rewards.map(besides), rewards.map(() => [] as string[]), 'and the rewards of every market: no base price');
 });

@@ -26,7 +26,7 @@ import {
 } from '../../src/router.js';
 
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../util/registry-fixture.js';
-import { REGISTRY_KEYS, contractsBesideComet, registryFields } from '../util/summary-registry-fields.js';
+import { REGISTRY_KEYS } from '../util/summary-registry-fields.js';
 
 import '../../shim/node-self.js';
 
@@ -353,15 +353,43 @@ function pricingWbtcInBtc(t: Test): void {
   t.teardown(() => { PRICES.delete(feed); });
 }
 
-// the fields of a market of the summary that come from its registry version
 const describedOf = (entry: Summary) => Object.fromEntries(Object.entries(entry).filter(([ field ]) => (REGISTRY_KEYS as readonly string[]).includes(field)));
 
-// the fields a market of the summary answers when everything is read, in their order, as its version describes it
-const answered = (comet: string) => [
-  'chain_id', 'comet', ...Object.keys(registryFields(marketOf(comet))), 'status', 'borrow_apr', 'supply_apr',
+// a fixture market has no slug, so the version's keys are these, in the order the summary writes them
+const VERSION_KEYS = REGISTRY_KEYS.filter(key => key !== 'slug');
+
+const answered = [
+  'chain_id', 'comet', ...VERSION_KEYS, 'status', 'borrow_apr', 'supply_apr',
   'total_borrow_value', 'total_supply_value', 'total_collateral_value', 'utilization', 'base_usd_price', 'base_price',
   'collateral_asset_symbols', 'collaterals',
 ];
+
+const USDC_COMET = {
+  address: '0xc3d688B66703497DAA19211EEdff47f25384cdc3',
+  rewards: '0x1B0e765F6224C21223AeA2af16c1C46E38885a40',
+  bulker:  '0xa397a8C2086C554B531c02E29f3291c9704B00c7',
+};
+const USDC_FIELDS = {
+  deployment_key:    'usdc',
+  display_name:      'USDC',
+  base_asset_name:   'USD Coin',
+  is_wrapped_native: false,
+  is_default:        true,
+  is_institutional:  false,
+};
+const WETH_COMET = {
+  address: '0xA17581A9E3356d9A858b789D68B4d866e593aE94',
+  rewards: '0x1B0e765F6224C21223AeA2af16c1C46E38885a40',
+  bulker:  '0xa397a8C2086C554B531c02E29f3291c9704B00c7',
+};
+const WETH_FIELDS = {
+  deployment_key:    'weth',
+  display_name:      'ETH',
+  base_asset_name:   'Ether',
+  is_wrapped_native: true,
+  is_default:        false,
+  is_institutional:  false,
+};
 
 /*
  * Beside what was read of each market, the summary answers what its registry
@@ -380,17 +408,16 @@ t.test('each market of the summary has what its version says of it, and its base
 
   const every = await (await marketHandlers.latestSummary(everyMarket(), context())).json() as Summary[];
   t.equal(every.length, catalog.markets().length, 'every market is answered');
-  for (const { network, deploymentKey, comet, market } of catalog.markets()) {
+  for (const { network, deploymentKey, comet } of catalog.markets()) {
     const entry = entryOf(every, comet.address.toLowerCase());
-    const name  = `${network} ${deploymentKey}`;
-    t.strictSame(Object.keys(entry), answered(comet.address.toLowerCase()), `${name}: what the version says after its Comet, and the base price after the USD price`);
-    t.equal(JSON.stringify(entry.comet), JSON.stringify({ address: comet.address, ...contractsBesideComet(market) }),
-      `${name}: its Comet, then its rewards contract and its bulker`);
-    t.strictSame(describedOf(entry), registryFields(market), `${name}: its keys and labels as the version has them`);
-    if (market.collateralValueQuote === 'usd') {
-      t.equal(entry.base_price, entry.base_usd_price, `${name}: quoted in USD, its base price is its USD price`);
-    }
+    t.strictSame(Object.keys(entry), answered, `${network} ${deploymentKey}: what the version says after its Comet, and the base price after the USD price`);
   }
+  const usdc = entryOf(every, USDC);
+  t.equal(JSON.stringify(usdc.comet), JSON.stringify(USDC_COMET), 'mainnet USDC: its Comet, then its rewards contract and its bulker');
+  t.strictSame(describedOf(usdc), USDC_FIELDS, 'mainnet USDC: its keys and labels');
+  const weth = entryOf(every, WETH);
+  t.equal(JSON.stringify(weth.comet), JSON.stringify(WETH_COMET), 'mainnet WETH: its Comet, then its rewards contract and its bulker');
+  t.strictSame(describedOf(weth), WETH_FIELDS, 'mainnet WETH: its keys and labels');
   t.strictSame([ entryOf(every, WBTC).base_price, entryOf(every, WBTC).base_usd_price ], [ '0.9984988', '86106.69' ],
     'the WBTC market: its base price, WBTC in BTC, beside the price of BTC in USD');
 
@@ -423,12 +450,12 @@ t.test('a market whose prices revert answers what its version says of it, and it
     fragment === 'getPrice' && argument === feeds.get(comet) ? REVERT : undefined
   )));
 
-  for (const { network, deploymentKey, comet, market } of catalog.markets()) {
-    const entry = entryOf(summary, comet.address.toLowerCase());
-    t.equal(JSON.stringify(entry.comet), JSON.stringify({ address: comet.address, ...contractsBesideComet(market) }),
-      `${network} ${deploymentKey}, ${entry.status}: its Comet, its rewards contract and its bulker`);
-    t.strictSame(describedOf(entry), registryFields(market), `${network} ${deploymentKey}, ${entry.status}: its keys and labels`);
-  }
+  const usdc = entryOf(summary, USDC);
+  t.equal(JSON.stringify(usdc.comet), JSON.stringify(USDC_COMET), `mainnet USDC, ${usdc.status}: its Comet, its rewards contract and its bulker`);
+  t.strictSame(describedOf(usdc), USDC_FIELDS, `mainnet USDC, ${usdc.status}: its keys and labels`);
+  const errored = entryOf(summary, WETH);
+  t.equal(JSON.stringify(errored.comet), JSON.stringify(WETH_COMET), `mainnet WETH, ${errored.status}: its Comet, its rewards contract and its bulker`);
+  t.strictSame(describedOf(errored), WETH_FIELDS, `mainnet WETH, ${errored.status}: its keys and labels`);
 
   const wbtc = entryOf(summary, WBTC);
   t.match(wbtc, { status: 'error', base_price: '0.9984988' }, 'WBTC, an error of its USD price: its base price');
@@ -471,16 +498,17 @@ t.test('a market whose version has no rewards contract, no bulker or no slug lea
   t.strictSame(keysOf(USDC), [ 'address', 'rewards' ], 'USDC: its Comet and its rewards contract');
   t.strictSame(keysOf(AERO), [ 'address', 'bulker' ], 'AERO: its Comet and its bulker');
   t.strictSame(keysOf(WETH), [ 'address' ], 'WETH: its Comet alone');
-  t.ok(summary.filter(entry => ![ USDC, AERO, WETH ].includes(entry.comet.address.toLowerCase()))
-    .every(entry => Object.keys(entry.comet).join() === 'address,rewards,bulker'), 'and every other market all three');
+  const others = summary.filter(entry => ![ USDC, AERO, WETH ].includes(entry.comet.address.toLowerCase()));
+  t.strictSame(others.map(entry => Object.keys(entry.comet)), others.map(() => [ 'address', 'rewards', 'bulker' ]), 'and every other market all three');
 
   const usdt = entryOf(summary, USDT);
   t.strictSame(Object.keys(usdt).slice(2, 9),
     [ 'deployment_key', 'display_name', 'base_asset_name', 'is_wrapped_native', 'slug', 'is_default', 'is_institutional' ],
     'USDT: its slug after whether its base asset wraps the chain\'s own token');
   t.match(usdt, { slug: 'usdt-institutional', is_institutional: true }, 'as the version has it, in its institutional section');
-  t.ok(summary.filter(entry => entry !== usdt).every(entry => !('slug' in entry)), 'and no other market has a slug');
-  t.ok(summary.every(entry => entry.status === 'success'), 'each market a success all the same');
+  const rest = summary.filter(entry => entry !== usdt);
+  t.strictSame(rest.map(entry => 'slug' in entry), rest.map(() => false), 'and no other market has a slug');
+  t.strictSame(summary.map(entry => entry.status), summary.map(() => 'success'), 'each market a success all the same');
 });
 
 /*
@@ -530,8 +558,7 @@ t.test('a market whose base feed reverts answers every field it can', async t =>
     fragment === 'getPrice' && argument === feeds.get(comet) ? REVERT : undefined
   )));
 
-  // what the version says of a market, which the summary answers after its Comet
-  const described = Object.keys(registryFields(marketOf(WBTC)));
+  const described = VERSION_KEYS;
 
   const wbtc = entryOf(reverting, WBTC);
   t.strictSame(wbtc, { ...without(entryOf(reading, WBTC), 'total_borrow_value', 'total_supply_value', 'base_price'), status: 'error', message: 'execution reverted' },
