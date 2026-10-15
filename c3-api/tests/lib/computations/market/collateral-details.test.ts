@@ -76,14 +76,14 @@ function collateralsAt(
   });
   const described = (assetNumber: number) => contract.registry.market.collateralAssets[assetNumber]?.token.address ?? `0x${'9'.repeat(40)}`;
   const { evaluate, pull1 } = evaluator({
-    collateralDetails:    market.collateralDetails,
+    versionedCollaterals:    market.versionedCollaterals,
     numAssets:            stub(() => chain.numAssets),
     assetInfo:            counted('assetInfo', ({ assetNumber }) => ({ asset: checksumAddress(chain.assetAt?.[assetNumber] ?? described(assetNumber)) })),
     assetTotalCollateral: counted('assetTotalCollateral', ({ assetNumber }) => BigFixnum.from({ value: assetNumber + 1 })),
     assetPrice:           counted('assetPrice', ({ assetNumber }) => chain.price?.(assetNumber) ?? read(BigFixnum.from({ value: 2 }))),
   }, algorithm);
   const collaterals = evaluate(pull1({
-    collateralDetails: { apiHost: '', nodeHost: '', nodeKey: '', network, contract, blockNumber },
+    versionedCollaterals: { apiHost: '', nodeHost: '', nodeKey: '', network, contract, blockNumber },
   })) as Promise<Collateral[]>;
   return { collaterals, reads };
 }
@@ -218,7 +218,7 @@ t.test('the seeded exceptions price wUSDM and pumpBTC where their Comet still re
   const pricedAt = async (contract: RegistryComet, feeds: Record<number, string>) => {
     const asked: string[] = [];
     const { evaluate, pull1 } = evaluator({
-      collateralDetails:    market.collateralDetails,
+      versionedCollaterals:    market.versionedCollaterals,
       assetPrice:           comet.assetPrice,
       numAssets:            stub(() => contract.registry.market.collateralAssets.length),
       assetInfo:            stub(({ assetNumber }) => {
@@ -236,7 +236,7 @@ t.test('the seeded exceptions price wUSDM and pumpBTC where their Comet still re
       }),
     }, 'workingset');
     const collaterals = await evaluate(pull1({
-      collateralDetails: { apiHost: '', nodeHost: '', nodeKey: '', network, contract, blockNumber },
+      versionedCollaterals: { apiHost: '', nodeHost: '', nodeKey: '', network, contract, blockNumber },
     })) as Collateral[];
     // the price of a collateral written out, or why it could not be read
     const priceOf = (symbol: string) => {

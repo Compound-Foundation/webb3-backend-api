@@ -25,7 +25,7 @@ import {
 } from '../../src/router.js';
 
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../util/registry-fixture.js';
-import { REGISTRY_KEYS, onSummary } from '../util/summary-registry-fields.js';
+import { REGISTRY_KEYS } from '../util/summary-registry-fields.js';
 
 import '../../shim/node-self.js';
 
@@ -154,9 +154,23 @@ function errorOf(address: string) {
   };
 }
 
-// as the summary answers it, with what the version says of the market
-function summaryErrorOf(address: string) {
-  return onSummary(errorOf(address), comet(MAINNET, address).registry.market);
+function wbtcSummaryError() {
+  return {
+    chain_id: 1,
+    comet: {
+      address: '0xe85Dc543813B8c2CFEaAc371517b925a166a9293',
+      rewards: '0x1B0e765F6224C21223AeA2af16c1C46E38885a40',
+      bulker:  '0xa397a8C2086C554B531c02E29f3291c9704B00c7',
+    },
+    deployment_key:    'wbtc',
+    display_name:      'WBTC',
+    base_asset_name:   'Wrapped BTC',
+    is_wrapped_native: false,
+    is_default:        false,
+    is_institutional:  false,
+    status:            'error',
+    message:           'execution reverted',
+  };
 }
 
 t.test('the summary of every market passes on the status of each', async t => {
@@ -168,7 +182,7 @@ t.test('the summary of every market passes on the status of each', async t => {
   t.equal(response.status, 200);
   const body = await response.json() as Entry[];
   t.equal(body.length, catalog.markets().length, 'no market is left out');
-  t.strictSame(body.find(entry => entry.comet.address.toLowerCase() === WBTC), summaryErrorOf(WBTC));
+  t.strictSame(body.find(entry => entry.comet.address.toLowerCase() === WBTC), wbtcSummaryError());
   t.equal(statuses(body)[WETH], 'partially');
   t.equal(statuses(body)[USDC], 'success');
 });
@@ -179,7 +193,7 @@ t.test('the summary of one market is its status', async t => {
     uninstantiated(answers([ WBTC ])),
   );
   t.equal(response.status, 200);
-  t.strictSame(await response.json(), summaryErrorOf(WBTC), 'answered as an object, as one market always was');
+  t.strictSame(await response.json(), wbtcSummaryError(), 'answered as an object, as one market always was');
 });
 
 t.test('history passes on the status of each day', async t => {
@@ -393,20 +407,25 @@ t.test('only the summary answers what the version says of a market in its Comet 
   const ALONE = [ [ 'address' ], [] ];
 
   const summary = await (await marketHandlers.latestSummary(routeData(AllNetworks, AllContracts), uninstantiated(answer))).json() as Entry[];
-  t.ok(summary.length > 0 && summary.every(entry => JSON.stringify(described(entry)) === JSON.stringify([
+  const SUMMARY = [
     [ 'address', 'rewards', 'bulker' ],
     [ 'deployment_key', 'display_name', 'base_asset_name', 'is_wrapped_native', 'is_default', 'is_institutional' ],
-  ])), 'the summary: the Comet, its rewards contract and its bulker, and the keys and labels of the version, of every market');
+  ];
+  t.ok(summary.length > 0, 'the summary answers markets');
+  t.strictSame(summary.map(described), summary.map(() => SUMMARY), 'the summary: the Comet, its rewards contract and its bulker, and the keys and labels of the version, of every market');
   t.equal(statuses(summary)[WBTC], 'error', 'WBTC\'s among them, which is an error');
 
   const days = await (await marketHandlers.historicalSummary(routeData(AllNetworks, AllContracts), instantiated(answer))).json() as Entry[];
-  t.ok(days.length > 0 && days.every(day => JSON.stringify(described(day)) === JSON.stringify(ALONE)), 'the history: the Comet alone, on every day');
+  t.ok(days.length > 0, 'the history answers days');
+  t.strictSame(days.map(described), days.map(() => ALONE), 'the history: the Comet alone, on every day');
   const markets = await (await marketHandlers.rewardsDappData(routeData(AllNetworks, AllContracts), uninstantiated(answer))).json() as Entry[];
-  t.ok(markets.length > 0 && markets.every(entry => JSON.stringify(described(entry)) === JSON.stringify(ALONE)), 'the rewards of every market: the Comet alone');
+  t.ok(markets.length > 0, 'the rewards of every market are answered');
+  t.strictSame(markets.map(described), markets.map(() => ALONE), 'the rewards of every market: the Comet alone');
   const one = await (await marketHandlers.latestRewardsSummary(routeData(MAINNET, comet(MAINNET, USDC)), uninstantiated(answer))).json() as Entry;
   t.strictSame(described(one)[1], [], 'the rewards summary of one market: none of the fields of the version');
   const owed = await (await accountRewardsSummary(account, instantiated(answer, BATCHED))).json() as Entry[];
-  t.ok(owed.length > 0 && owed.every(entry => JSON.stringify(described(entry)) === JSON.stringify(ALONE)), 'and the rewards of an account: the Comet alone');
+  t.ok(owed.length > 0, 'the rewards of an account are answered');
+  t.strictSame(owed.map(described), owed.map(() => ALONE), 'and the rewards of an account: the Comet alone');
 });
 
 /*

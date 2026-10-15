@@ -2,11 +2,9 @@ import type { MarketV1 } from '../../lib/model/comet-registry.js';
 import { checksumAddress } from '../../lib/model/comet-registry.js';
 
 /*
- * What the summary route says of a market beside what it reads, as the
- * registry version describes the market (src/market.ts), written as the
- * route answers it: the contracts it names beside the Comet, checksummed,
- * and the fields it puts right after `comet`, in their order. A contract or a
- * slug the version has none of is not there.
+ * A summary entry held against the market /registry/v1/active served: the
+ * same contracts and fields, in the order the summary writes them. A contract
+ * or a slug the version has none of is not there.
  */
 function contractsBesideComet(market: MarketV1): { rewards?: string, bulker?: string } {
   const { rewards, bulker } = market.contracts;
@@ -28,7 +26,6 @@ function registryFields(market: MarketV1) {
   };
 }
 
-// a market as another route answers it, as the summary answers it instead
 function onSummary<Entry extends { chain_id: number, comet: { address: string } }>({ chain_id, comet, ...rest }: Entry, market: MarketV1) {
   return { chain_id, comet: { ...comet, ...contractsBesideComet(market) }, ...registryFields(market), ...rest };
 }
@@ -38,7 +35,5 @@ const REGISTRY_KEYS = [ 'deployment_key', 'display_name', 'base_asset_name', 'is
 
 export {
   REGISTRY_KEYS,
-  contractsBesideComet,
   onSummary,
-  registryFields,
 };

@@ -14,14 +14,14 @@ import type {
 
 import type { BorrowApr } from './borrow-apr.js';
 import type { SupplyApr } from './supply-apr.js';
-import { type Collateral, collateralValue } from './collaterals.js';
-import type { CollateralDetails } from './collateral-details.js';
-import type { CollateralStatus, MarketIdentity, MarketSummary } from './market-summary.js';
+import { collateralValue } from './collaterals.js';
+import type { VersionedCollaterals } from './collateral-details.js';
+import { collateralStatusOf, type CollateralStatus, type MarketIdentity, type MarketSummary } from './market-summary.js';
 
 /*
  * The summary of a market at the latest block, as the summary route answers
  * it: what marketSummary reports, with its collateral as the registry version
- * describes it (collateral-details.ts).
+ * describes it (versionedCollaterals, collateral-details.ts).
  *
  * It is a computation of its own because a day of the history is the whole
  * of a marketSummary (market-day-summary.ts): a field, a read or a status
@@ -46,7 +46,7 @@ type Reported = {
   collaterals:            CollateralStatus[],
 };
 
-// what is made of the prices of the base asset: the totals at its base price, its USD price, and that base price
+// what is made of the prices of the base asset
 type Priced = {
   totalBorrowValue: string,
   totalSupplyValue: string,
@@ -64,7 +64,7 @@ type MarketLatestSummary = Compute.Spec<{
     TotalBorrow,
     TotalSupply,
     Utilization,
-    CollateralDetails,
+    VersionedCollaterals,
   ],
   expects: MarketSummary['expects'],
   returns: (
@@ -72,16 +72,6 @@ type MarketLatestSummary = Compute.Spec<{
     | MarketIdentity & PriceError & Reported & Partial<Priced>
   ),
 }>;
-
-function collateralSummary({ asset, symbol, price }: Collateral): CollateralStatus {
-  return {
-    address: asset,
-    symbol,
-    ...(price.status === 'success'
-      ? { status: 'success' as const }
-      : { status: 'error' as const, message: price.message }),
-  };
-}
 
 const { implement, pipe } = Compute.Functor<MarketLatestSummary>({});
 const marketLatestSummary = implement({
@@ -95,14 +85,14 @@ const marketLatestSummary = implement({
 
     return pipe([
       {
-        basePrice:         read,
-        baseUsdPrice:      read,
-        borrowApr:         read,
-        supplyApr:         read,
-        totalBorrow:       read,
-        totalSupply:       read,
-        utilization:       read,
-        collateralDetails: read,
+        basePrice:             read,
+        baseUsdPrice:          read,
+        borrowApr:             read,
+        supplyApr:             read,
+        totalBorrow:           read,
+        totalSupply:           read,
+        utilization:           read,
+        versionedCollaterals:  read,
       },
       ({
         basePrice,
@@ -112,7 +102,7 @@ const marketLatestSummary = implement({
         totalBorrow,
         totalSupply,
         utilization,
-        collateralDetails,
+        versionedCollaterals,
       }): MarketLatestSummary['returns'] => {
         const identity = {
           chainId,
@@ -120,7 +110,7 @@ const marketLatestSummary = implement({
             address: contract.address,
           },
         };
-        const collaterals = collateralDetails.map(collateralSummary);
+        const collaterals = versionedCollaterals.map(collateralStatusOf);
         const fields: Reported & Partial<Priced> = {
           borrowApr: borrowApr.toString(),
           supplyApr: supplyApr.toString(),
@@ -128,7 +118,7 @@ const marketLatestSummary = implement({
             totalBorrowValue: totalBorrow.mul(basePrice.price).toString(),
             totalSupplyValue: totalSupply.mul(basePrice.price).toString(),
           } : {}),
-          totalCollateralValue: collateralValue(collateralDetails).toString(),
+          totalCollateralValue: collateralValue(versionedCollaterals).toString(),
           utilization: utilization.toString(),
           ...(baseUsdPrice.status === 'success' ? { baseUsdPrice: baseUsdPrice.price.toString() } : {}),
           /*
@@ -139,7 +129,7 @@ const marketLatestSummary = implement({
            * answer in BTC, it is the price of BTC.
            */
           ...(basePrice.status    === 'success' ? { basePrice:    basePrice.price.toString() }    : {}),
-          collateralAssetSymbols: collateralDetails.map(({ symbol }) => symbol),
+          collateralAssetSymbols: versionedCollaterals.map(({ symbol }) => symbol),
           collaterals,
         };
         if (basePrice.status === 'error') {

@@ -75,6 +75,13 @@ t.test(`/market/.../summary response format looks reasonable`, async t => {
     total_supply_value,
     total_collateral_value,
     utilization,
+    base_price,
+    deployment_key,
+    display_name,
+    base_asset_name,
+    is_wrapped_native,
+    is_default,
+    is_institutional,
   } = responseJson as any;
 
   t.ok(typeof chain_id === 'number');
@@ -85,6 +92,13 @@ t.test(`/market/.../summary response format looks reasonable`, async t => {
   t.ok(/^\d+\.\d+$/.test(total_supply_value));
   t.ok(/^\d+\.\d+$/.test(total_collateral_value));
   t.ok(BigInt(utilization) >= BigInt(0));
+  t.ok(/^\d+\.\d+$/.test(base_price));
+  t.equal(typeof deployment_key, 'string');
+  t.equal(typeof display_name, 'string');
+  t.equal(typeof base_asset_name, 'string');
+  t.equal(typeof is_wrapped_native, 'boolean');
+  t.equal(typeof is_default, 'boolean');
+  t.equal(typeof is_institutional, 'boolean');
 
   t.end();
 });

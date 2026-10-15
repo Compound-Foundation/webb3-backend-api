@@ -18,7 +18,7 @@ import {
 
 import type { BorrowApr } from './borrow-apr.js';
 import type { SupplyApr } from './supply-apr.js';
-import { type Collaterals, collateralValue } from './collaterals.js';
+import { type Collateral, type Collaterals, collateralValue } from './collaterals.js';
 
 /*
  * How much of a market could be priced. Every read of a price goes through
@@ -82,6 +82,16 @@ type MarketSummary = Compute.Spec<{
       }
   ),
 }>;
+
+function collateralStatusOf({ asset, symbol, price }: Collateral): CollateralStatus {
+  return {
+    address: asset,
+    symbol,
+    ...(price.status === 'success'
+      ? { status: 'success' as const }
+      : { status: 'error' as const, message: price.message }),
+  };
+}
 
 const { implement, pipe } = Compute.Functor<MarketSummary>({});
 const marketSummary = implement({
@@ -150,13 +160,7 @@ const marketSummary = implement({
         if (baseUsdPrice.status === 'error') {
           return { ...identity, status: 'error', message: baseUsdPrice.message };
         }
-        const statuses = collaterals.map(({ asset, symbol, price }): CollateralStatus => ({
-          address: asset,
-          symbol,
-          ...(price.status === 'success'
-            ? { status: 'success' as const }
-            : { status: 'error' as const, message: price.message }),
-        }));
+        const statuses = collaterals.map(collateralStatusOf);
         return {
           ...identity,
           status: statuses.some(collateral => collateral.status === 'error') ? 'partially' : 'success',
@@ -182,5 +186,6 @@ export type {
 
 export {
   MarketSummary,
+  collateralStatusOf,
   marketSummary,
 };

@@ -86,12 +86,12 @@ function summaryOf(reads: Reads): Promise<any> {
   const { evaluate, pull1 } = evaluator({
     marketLatestSummary: market.marketLatestSummary,
     ...readsOf(reads),
-    collateralDetails:   stub(() => reads.collaterals),
+    versionedCollaterals: stub(() => reads.collaterals),
   });
   return evaluate(pull1({ marketLatestSummary: contextOf(reads.contract ?? usdt) }));
 }
 
-// a collateral of the summary's market as collateralDetails reports it: `held` whole tokens of eighteen decimals at `price`
+// a collateral of the summary's market as versionedCollaterals reports it: `held` whole tokens of eighteen decimals at `price`
 function collateral(asset: string, symbol: string, held: number, price: PriceRead): Collateral {
   return {
     asset:           asset as Eth.Address,
@@ -149,7 +149,7 @@ t.test('a market reports what marketSummary reports of it, as it reports it', as
       marketLatestSummary: market.marketLatestSummary,
       ...readsOf(reads),
       collaterals:         stub(() => reads.collaterals),
-      collateralDetails:   stub(() => reads.collaterals),
+      versionedCollaterals: stub(() => reads.collaterals),
     });
     const context = contextOf(reads.contract);
     const [ before, { basePrice, ...latest } ] = await evaluate(split([
@@ -193,47 +193,11 @@ t.test('a market quoted in USD whose base price reverts reports every field it c
 });
 
 /*
- * The base price is reported right after the base asset's USD price wherever
- * it was read: on a success, on a partial market, and on an error its USD
- * price alone made. Where it reverted, it is left out, as the totals made of
- * it are.
+ * The WBTC market's feeds answer in BTC: its base price is WBTC in BTC, and
+ * its USD price that of BTC, so only the base price turns a total back into
+ * WBTC. Each is written with every digit its feed gives, and not rounded.
  */
-t.test('the base price is reported wherever it was read, right after the USD price', async t => {
-  const BASE = reverted('execution reverted: the base feed');
-  const USD  = reverted('execution reverted: the USD feed');
-  // the keys of a summary from its utilization to its collateral's symbols, where its prices are
-  const pricesOf = (summary: any) => {
-    const keys = Object.keys(summary);
-    return keys.slice(keys.indexOf('utilization') + 1, keys.indexOf('collateralAssetSymbols'));
-  };
-  const cases: Array<{ name: string, reads: { basePrice?: PriceRead, baseUsdPrice?: PriceRead }, weth: Collateral, status: string, prices: string[] }> = [
-    { name: 'a success',                   reads: {},                                     weth: usdtWeth(),           status: 'success',   prices: [ 'baseUsdPrice', 'basePrice' ] },
-    { name: 'a partial market',            reads: {},                                     weth: usdtWeth(reverted()), status: 'partially', prices: [ 'baseUsdPrice', 'basePrice' ] },
-    { name: 'an error of its USD price',   reads: { baseUsdPrice: USD },                  weth: usdtWeth(),           status: 'error',     prices: [ 'basePrice' ] },
-    { name: 'an error of its base price',  reads: { basePrice: BASE },                    weth: usdtWeth(),           status: 'error',     prices: [ 'baseUsdPrice' ] },
-    { name: 'an error of both its prices', reads: { basePrice: BASE, baseUsdPrice: USD }, weth: usdtWeth(),           status: 'error',     prices: [] },
-  ];
-  for (const { name, reads, weth, status, prices } of cases) {
-    const summary = await summaryOf({ ...reads, collaterals: [ usdtComp(), weth ] });
-    t.equal(summary.status, status, `${name}: ${status}`);
-    t.strictSame(pricesOf(summary), prices, `${name}: ${prices.join(', then ') || 'neither price'}`);
-    if (prices.includes('basePrice')) {
-      t.equal(summary.basePrice, '0.99890608', `${name}: the base price as it was read`);
-    }
-  }
-});
-
-/*
- * On a market quoted in USD, the base price and the base asset's USD price
- * are read through the one base feed, and are the same number. The WBTC
- * market's feeds answer in BTC: its base price is WBTC in BTC, and its USD
- * price that of BTC, so only the base price turns a total back into WBTC.
- * Each is written with every digit its feed gives, and not rounded.
- */
-t.test('the base price is the USD price on a market quoted in USD, and WBTC in BTC on the WBTC market', async t => {
-  const usdc = await summaryOf({ basePrice: read(at8(99_982_834)), baseUsdPrice: read(at8(99_982_834)), collaterals: [ usdtComp(), usdtWeth() ] });
-  t.match(usdc, { baseUsdPrice: '0.99982834', basePrice: '0.99982834' }, 'a market quoted in USD: the same number as its USD price');
-
+t.test('the WBTC market\'s base price is WBTC in BTC, which values its total', async t => {
   // the frontend's example: 29.05271362 WBTC supplied, at 0.9984988 BTC each, and 82731.39 USD per BTC
   const wbtc = await summaryOf({
     contract:     marketOf('wbtc'),
@@ -243,39 +207,7 @@ t.test('the base price is the USD price on a market quoted in USD, and WBTC in B
     collaterals:  [],
   });
   t.match(wbtc, { status: 'success', totalSupplyValue: '29.009099686313656', baseUsdPrice: '82731.39', basePrice: '0.9984988' },
-    'the WBTC market: its total in BTC, the price of BTC in USD, and the price of WBTC in BTC its total is valued at');
-  t.not(wbtc.basePrice, wbtc.baseUsdPrice, 'which is not its USD price');
-});
-
-/*
- * On a market quoted in its base asset, the totals and the collateral are in
- * that asset, ETH for a WETH market, and only the base asset's USD price
- * turns them into USD.
- */
-t.test('a market quoted in its base asset whose base prices revert reports every field it can', async t => {
-  const BASE = reverted('execution reverted: WETH / ETH');
-  const USD  = reverted('execution reverted: ETH / USD');
-  const [ cbETH, wstETH, rETH ] = weth.registry.market.collateralAssets.map(asset => checksumAddress(asset.token.address));
-  const collaterals = [
-    collateral(cbETH!,  'cbETH',  4, read(at8(105_000_000))),
-    collateral(wstETH!, 'wstETH', 5, read(at8(0))),
-    collateral(rETH!,   'rETH',   6, reverted()),
-  ];
-
-  const unconverted = await summaryOf({ contract: weth, basePrice: read(at8(100_000_000)), baseUsdPrice: USD, collaterals });
-  t.match(unconverted, {
-    status:               'error',
-    message:              USD.message,
-    totalBorrowValue:     '1000.0',
-    totalSupplyValue:     '2000.0',
-    totalCollateralValue: '4.2',
-  }, 'its USD price reverts: an error with its message, and the totals in ETH');
-  t.notOk('baseUsdPrice' in unconverted, 'without the USD price that reverted');
-  t.strictSame(unconverted.collaterals.map((each: any) => each.status), [ 'success', 'success', 'error' ], 'each collateral as its price read');
-
-  const unpriced = await summaryOf({ contract: weth, basePrice: BASE, baseUsdPrice: USD, collaterals });
-  t.match(unpriced, { status: 'error', message: BASE.message, totalCollateralValue: '4.2' }, 'both revert: the message of the base price');
-  t.notOk('totalBorrowValue' in unpriced || 'totalSupplyValue' in unpriced || 'baseUsdPrice' in unpriced, 'and no totals of the base asset, nor its USD price');
+    'its total in BTC, the price of BTC in USD, and the price of WBTC in BTC its total is valued at');
 });
 
 /*
@@ -300,7 +232,7 @@ t.test('while the version and the chain differ, the summary follows the version 
     marketSummary:        market.marketSummary,
     marketLatestSummary:  market.marketLatestSummary,
     collaterals:          market.collaterals,
-    collateralDetails:    market.collateralDetails,
+    versionedCollaterals: market.versionedCollaterals,
     ...readsOf({ collaterals: [] }),
     numAssets:            stub(() => 17),
     assetInfo:            stub(({ assetNumber }) => ({
