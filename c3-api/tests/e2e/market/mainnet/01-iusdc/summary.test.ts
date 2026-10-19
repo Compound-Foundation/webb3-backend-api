@@ -5,11 +5,10 @@ import * as streamInto from 'node:stream/consumers';
 import { makeTestEnv } from '../../../../util/test-env.js';
 
 import type { MarketV1, RegistrySnapshotV1 } from '../../../../../lib/model/comet-registry.js';
-import { marketOverlay } from '../../../../../src/registry/bootstrap.js';
+import { marketOverlay, staticComets } from '../../../../../src/registry/bootstrap.js';
 import { catalogOf } from '../../../../../src/registry/catalog.js';
 import { enrichMarket, proxyTransport } from '../../../../../src/registry/enrichment.js';
 import { applyMarketOverlay, overlayFeedAddresses, parseMarketOverlay } from '../../../../../src/registry/overlay.js';
-import { staticComets } from '../../../../../src/registry/shadow.js';
 import { gitBlobSha } from '../../../../../src/registry/source/github.js';
 import { parseDeploymentPath, parseRoot } from '../../../../../src/registry/source/roots.js';
 import * as KnownNetwork from '../../../../../lib/well-known/networks/network.js';

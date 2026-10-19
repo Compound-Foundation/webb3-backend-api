@@ -339,10 +339,9 @@ curl -X POST .../registry/v1/admin/versions/$VERSION/proposal/apply \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"reason": "first registry version", "digest": "<digest>"}'
 
-# 4. validate, compare with the constants, activate. The first activation
-#    expects nothing to be on; a later one names the version that is
+# 4. validate, then activate. The first activation expects nothing to be on;
+#    a later one names the version that is
 curl -X POST .../registry/v1/admin/versions/$VERSION/validate ...
-curl         .../registry/v1/admin/versions/$VERSION/shadow ...
 curl -X POST .../registry/v1/admin/versions/$VERSION/activate ... \
   -d '{"reason": "first registry version", "expectedActiveVersionId": null}'
 ```
@@ -404,22 +403,6 @@ curl -X POST .../registry/v1/admin/versions/$VERSION/validate ...
 A new attempt at the same commit inherits what was reviewed for the attempts
 before it, so a candidate that ended invalid does not mean reviewing it all
 again.
-
-Two diagnostics are worth knowing:
-
-```sh
-# what the active version says against what the static constants still say
-curl -H "Authorization: Bearer $TOKEN" .../registry/v1/admin/shadow
-# the same for a validated candidate, before activating it
-curl -H "Authorization: Bearer $TOKEN" .../registry/v1/admin/versions/$ID/shadow
-```
-
-A bootstrapped version does not agree with the constants entirely, because
-the constants are out of date in places the chain is not: placeholder reward
-configurations, feeds the markets have since moved off, renamed tokens. The
-runbook lists every difference to expect and why
-([Known differences](./REGISTRY_RUNBOOK.md#known-differences)); anything beyond
-them is worth reading before activating.
 
 # Testing
 

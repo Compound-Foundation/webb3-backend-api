@@ -1790,54 +1790,12 @@ release, another version — answers `409` with its current digest in
 all of it or none, and answers the same way, with the `digest` beside it.
 Only an importing version is writable.
 
-## `GET /registry/v1/admin/shadow`
-### `GET /registry/v1/admin/versions/{version_id}/shadow`
-### description:
-
-What the active version — or a validated candidate, before activating it —
-says against what the static constants in the Worker still say. `agrees` is
-the one flag a check can read; `differences` names every field the two answer
-differently, and `onlyInStatic` / `onlyInRegistry` the markets only one of
-them describes.
-
-`disabledInRegistry` names the markets the constants describe and the
-version holds but switches off. They are neither a difference nor a gap — an
-operator decided not to serve them — so `agrees` does not count them, and a
-disabled market's fields are not compared: its known differences leave
-`differences` with it. A market listed here that is meant to be served is a
-review to fix, however few differences the report shows.
-
-```json
-{
-  "agrees": false,
-  "shadow": {
-    "versionId": "8f1e0f3c-3b7a-4e8f-9a1b-1f0f0b9a2c44",
-    "checksum": "1bd74ebe...",
-    "networks": [ "ethereum-mainnet", "polygon-mainnet", "..." ],
-    "staticMarkets": 29,
-    "registryMarkets": 29,
-    "onlyInStatic": [],
-    "onlyInRegistry": [],
-    "disabledInRegistry": [],
-    "differences": [
-      {
-        "scope": "1/wbtc",
-        "field": "baseAsset.priceFeed",
-        "static": "0xf4030086522a5beea4988f8ca5b36dbc97bee88c",
-        "registry": "0xfdfd9c85ad200c506cf9e21f1fd8dd01932fbb23"
-      }
-    ]
-  }
-}
-```
-
 ## `GET /registry/v1/admin/versions/{version_id}/changes`
 ### description:
 
 What a version changes against the version that is on: the networks and
 markets it adds or drops, and every fact and decision of the others that
-differs. It is what to read before switching a newer version on, where the
-shadow comparison only measures against the static constants.
+differs. It is what to read before switching a newer version on.
 
 It answers for a candidate that is still importing as well, because that is
 when a market the source has added is described: such a market is listed

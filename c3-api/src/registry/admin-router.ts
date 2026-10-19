@@ -28,7 +28,6 @@ import {
   getNetworkOverlay,
   getProposal,
   getProposalReview,
-  getShadow,
   getSyncRun,
   getVersionDetail,
   getVersions,
@@ -76,11 +75,9 @@ const ROUTES = [
   { pattern: /^\/registry\/v1\/admin\/sync$/,                                                  method: 'POST', handler: 'sync',           family: 'sync' },
   { pattern: /^\/registry\/v1\/admin\/sync-runs\/([^/]+)$/,                                    method: 'GET',  handler: 'syncRun',        family: 'read' },
   { pattern: /^\/registry\/v1\/admin\/sync-runs\/([^/]+)\/cancel$/,                            method: 'POST', handler: 'cancelSyncRun',  family: 'sync' },
-  { pattern: /^\/registry\/v1\/admin\/shadow$/,                                                method: 'GET',  handler: 'shadow',         family: 'read' },
   { pattern: /^\/registry\/v1\/admin\/status$/,                                                method: 'GET',  handler: 'status',         family: 'read' },
   { pattern: /^\/registry\/v1\/admin\/versions$/,                                              method: 'GET',  handler: 'versions',       family: 'read' },
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)$/,                                     method: 'GET',  handler: 'version',        family: 'read' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/shadow$/,                             method: 'GET',  handler: 'shadow',         family: 'read' },
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/changes$/,                            method: 'GET',  handler: 'changes',        family: 'read' },
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/validate$/,                           method: 'POST', handler: 'validate',       family: 'validate' },
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/activate$/,                           method: 'POST', handler: 'activate',       family: 'activate' },
@@ -511,9 +508,6 @@ async function routeAdmin(
       return await getMarketOverlay(context, versionId!, chainIdOf(second!), third!);
     case 'changes':
       return await getChanges(context, versionId!);
-    case 'shadow':
-      // without a captured id the route is /admin/shadow: the active version
-      return await getShadow(context, versionId);
     case 'validate':
       /*
        * Validation decides nothing: it checks the stored candidate and records

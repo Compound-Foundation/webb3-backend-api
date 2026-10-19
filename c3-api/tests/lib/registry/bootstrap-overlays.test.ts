@@ -5,7 +5,7 @@ import * as Eth from '../../../lib/eth-constants.js';
 import type { Generated, Note } from '../../../src/registry/bootstrap.js';
 import { bundleOf, marketOverlay, networkOverlay, reviewDocument } from '../../../src/registry/bootstrap.js';
 import { parseMarketOverlay, parseNetworkOverlay } from '../../../src/registry/overlay.js';
-import { staticComets } from '../../../src/registry/shadow.js';
+import { staticComets } from '../../../src/registry/bootstrap.js';
 
 /*
  * What the bootstrap script proposes for the first version of a registry.
@@ -325,6 +325,19 @@ t.test('every market proposal is one the admin route accepts', async t => {
       );
     }
   }
+});
+
+/*
+ * The constants index each Comet under several alias keys and write many in
+ * mixed case; the proposal finds the Comet of an imported market by its
+ * address, which the registry stores lowercased.
+ */
+t.test('the static Comets are read by lowercased address, across every alias the constants index', async t => {
+  const usdt   = '0x3afdc9bca9213a35503b077a6072f3d0d5ab0840';
+  const comets = staticComets('ethereum-mainnet');
+
+  t.ok(comets.has(usdt), 'a Comet the constants write in mixed case is keyed by its lowercased address');
+  t.equal(comets.get(usdt)!.displayName, 'cUSDTv3', 'and is the contract the constants hold');
 });
 
 /*

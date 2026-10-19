@@ -40,8 +40,8 @@ import type { WellKnownContractsByNetworkAddress } from './well-known/contracts/
  * The Comet entries among them are no longer the runtime market registry.
  * Markets, their tokens, and their feeds are resolved from the activated
  * registry version through the request catalog; what remains here is used to
- * name governance targets and to compare the two sources while both exist
- * (src/registry/shadow.ts).
+ * name governance targets and to propose the first version of a registry
+ * (src/registry/bootstrap.ts).
  */
 
 const wellKnownContractsByNetwork: WellKnownContractsByNetworkAddress = {

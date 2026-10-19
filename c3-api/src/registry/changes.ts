@@ -6,15 +6,11 @@ import { isServed } from './catalog.js';
 /*
  * What a version changes against the one that is on.
  *
- * The shadow comparison measures a version against the static constants,
- * which is what moving an environment onto the registry needs and what a
- * routine update does not: a market the constants never described is only a
- * name there, and a change to a known market is measured against constants
- * that are out of date anyway. Before switching a newer version on, the
- * question is what switching changes — which markets it adds or drops, and
- * which of their facts and decisions differ from what is served now. A market
- * the version adds is reported whole, with everything its import read from
- * the source and the chain, because describing it starts from those facts.
+ * Before switching a newer version on, the question is what switching
+ * changes — which markets it adds or drops, and which of their facts and
+ * decisions differ from what is served now. A market the version adds is
+ * reported whole, with everything its import read from the source and the
+ * chain, because describing it starts from those facts.
  *
  * Values are compared field by field on flattened paths, so a change reads as
  * `baseAsset.priceFeed.address` rather than as two market documents to tell
