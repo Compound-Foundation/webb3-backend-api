@@ -476,6 +476,21 @@ type ActivationResultV1 = {
   registryVersion:   VersionRefV1,
 };
 
+/*
+ * One switch of the active version, as the history of a version lists it. It
+ * names both versions as the activate answer does, so the version to go back
+ * to is read from either under the same name.
+ */
+type ActivationRecordV1 = {
+  id:                string,
+  action:            ActivationAction,
+  previousVersionId: string | null,
+  targetVersionId:   string,
+  actor:             string,
+  reason:            string,
+  createdAt:         string,
+};
+
 type ValidationCheckV1 = {
   name:     string,
   scope:    string,
@@ -526,6 +541,7 @@ type RegistryComet = Contract<StandaloneContract<Comet>> & { registry: RegistryA
 
 export type {
   ActivationAction,
+  ActivationRecordV1,
   ActivationResultV1,
   Address,
   AssetDisplayOverrideV1,

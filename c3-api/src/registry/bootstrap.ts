@@ -846,5 +846,5 @@ function bundleOf(generated: Generated): {
 }
 
 
-export type { CometContract, Generated, MarketProposal, NetworkProposal, Note };
+export type { Generated, MarketProposal, NetworkProposal, Note };
 export { bundleOf, digestOf, marketOverlay, networkOverlay, proposalFor, reviewDocument, staticComets };

@@ -17,8 +17,12 @@ import '../../shim/node-self.js';
  * evaluated, and every other one evaluates in the mainnet storage. No query
  * string moves a request off the cache every other request fills.
  *
- * The historical summary, the latest summary and the rewards data each
- * decide it themselves, by that rule.
+ * The router decides it for every market route, by that rule.
+ *
+ * Every market endpoint evaluates batched, on the working-set evaluator,
+ * whatever the environment sets (ROUTE_EVALUATOR_FLAGS): a cold read of
+ * every market would otherwise spend a subrequest on each call to the node
+ * (README, "Workers Plan").
  */
 const USDC = '0xc3d688b66703497daa19211eedff47f25384cdc3';
 
@@ -31,10 +35,12 @@ t.test('a market route evaluates in the mainnet storage, and a request for testn
   console.error = () => {};
   t.teardown(() => { console.error = error; });
 
-  // the storage each evaluator was made for; an evaluator that is asked anything fails, as there is no node
+  // the storage each evaluator was made for, and its flags; an evaluator that is asked anything fails, as there is no node
   const environments: string[] = [];
-  const instantiate = ((networkEnv: string) => {
+  const flagsMade: Flags.SomeFlags[] = [];
+  const instantiate = ((networkEnv: string, overrides: { flags?: Flags.SomeFlags } = {}) => {
     environments.push(networkEnv);
+    flagsMade.push(overrides.flags ?? {});
     const unanswered = () => { throw new Error('there is no node in this test'); };
     return { evaluate: unanswered, pull1: () => null, pipe1: () => null, split: () => null, value: () => null };
   }) as unknown as Parameters<typeof route>[2];
@@ -45,6 +51,7 @@ t.test('a market route evaluates in the mainnet storage, and a request for testn
   };
   const storageOf = async (path: string): Promise<string[]> => {
     environments.length = 0;
+    flagsMade.length    = 0;
     await route(new Request(`https://api.test.local${path}`), context, instantiate);
     return [ ...environments ];
   };
@@ -61,5 +68,19 @@ t.test('a market route evaluates in the mainnet storage, and a request for testn
       `${endpoint}: and a parameter of another name moves nothing`);
     t.same(await storageOf(`/market/ethereum-mainnet/${USDC}/${endpoint}?testnets=include`), [ 'mainnet' ],
       `${endpoint}: one network is evaluated in the storage of that network`);
+  }
+
+  t.match(context.flags, { batchingEnabled: false, evaluatorAlgorithm: 'recursive' }, 'an environment that sets neither');
+  // the rewards summary names one market; the others are read for every network
+  for (const path of [
+    '/market/all-networks/all-contracts/summary',
+    '/market/all-networks/all-contracts/historical/summary',
+    '/market/all-networks/all-contracts/rewards/dapp-data',
+    `/market/ethereum-mainnet/${USDC}/rewards/summary`,
+  ]) {
+    const storage = await storageOf(path);
+    t.ok(storage.length > 0 && storage.every(environment => environment === 'mainnet'), `${path}: evaluates in the mainnet storage`);
+    t.match(flagsMade, flagsMade.map(() => Flags.ROUTE_EVALUATOR_FLAGS),
+      `${path}: every evaluator it makes batched, on the working-set evaluator, whatever the environment sets`);
   }
 });

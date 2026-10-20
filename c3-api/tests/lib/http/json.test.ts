@@ -69,7 +69,7 @@ t.test('a body within the limit is read whole, in however many chunks it comes',
 /*
  * A media type is compared in any case (RFC 9110), and JSON is
  * application/json or a +json type: a type that merely ends in "json" is not
- * JSON.
+ * JSON, and neither is a +json suffix without a type and a name before it.
  */
 t.test('a body is JSON when its media type is, in any case', async t => {
   const BODY = '{"reason":"typed"}';
@@ -83,7 +83,7 @@ t.test('a body is JSON when its media type is, in any case', async t => {
   t.same(await readJsonObject(sent({}, new Blob([ BODY ]))), { reason: 'typed' },
     'and so is a body that names no type');
 
-  for (const type of [ 'application/foojson', 'text/json', 'application/x-json', 'text/plain' ]) {
+  for (const type of [ 'application/foojson', 'text/json', 'application/x-json', 'text/plain', 'foo+json', '+json', 'application/+json' ]) {
     await t.rejects(readJsonObject(sent({ 'Content-Type': type })),
       { code: 'BAD_REQUEST', status: 400, message: 'the request body must be JSON' }, `${type} is refused`);
   }
