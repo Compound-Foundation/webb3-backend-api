@@ -21,7 +21,6 @@ import {
   type AccountRouteData,
   type Context,
   type MarketRouteData,
-  type UninstantiatedContext,
 } from '../../src/router.js';
 
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../util/registry-fixture.js';
@@ -116,29 +115,18 @@ function routeData(network: MarketRouteData['network'], contract: MarketRouteDat
   return { apiHost: '', nodeHost: '', nodeKey: '', network, contract, catalog, queryParams: new URLSearchParams() };
 }
 
-// as the router hands a handler that makes its own evaluator, with the flags it asks for
+// as the router hands a market handler the evaluator it made, with the route's flags
 function uninstantiated(answer: Answer) {
-  const made: Array<ReturnType<typeof evaluatorOf>> = [];
-  const context = {
-    // a local run, whose history samples one day
-    flags: { ...flags, environment: 'local' },
-    instantiateEvaluator: (_: string, overrides: { flags?: Flags.SomeFlags } = {}) => {
-      const evaluator = evaluatorOf(answer, overrides.flags);
-      made.push(evaluator);
-      return evaluator;
-    },
-    evaluations: () => made.reduce((total, evaluator) => total + evaluator.evaluations, 0),
-  };
-  return context as unknown as UninstantiatedContext & { evaluations(): number };
+  const evaluator = evaluatorOf(answer, Flags.ROUTE_EVALUATOR_FLAGS);
+  // a local run, whose history samples one day
+  const context = { flags: { ...flags, environment: 'local' }, evaluator, evaluations: () => evaluator.evaluations };
+  return context as unknown as Context & { evaluations(): number };
 }
 
 // as the router hands a handler an evaluator it made: with the request's flags, and those it sets for the route
-function instantiated(answer: Answer, overrides: Flags.SomeFlags = {}): Context {
+function instantiated(answer: Answer, overrides: Flags.SomeFlags): Context {
   return { flags: { ...flags, environment: 'local' }, evaluator: evaluatorOf(answer, overrides) } as unknown as Context;
 }
-
-// what the router sets for account rewards (router.ts)
-const BATCHED = { batchingEnabled: true, evaluatorAlgorithm: 'workingset' } as const;
 
 type Entry = { chain_id: number, comet: { address: string }, status: string, message?: string };
 
@@ -278,7 +266,7 @@ t.test('the rewards summary reads the reward feed its version states', async t =
 t.test('the rewards of an account format only the markets that were valued', async t => {
   const response = await accountRewardsSummary(
     { apiHost: '', nodeHost: '', nodeKey: '', account: ACCOUNT, catalog },
-    instantiated(answers([ WBTC ]), BATCHED),
+    instantiated(answers([ WBTC ]), Flags.ROUTE_EVALUATOR_FLAGS),
   );
 
   t.equal(response.status, 200);
@@ -314,7 +302,7 @@ t.test('a node that fails one market still fails the list', async t => {
     [ 'the summary of every network', () => marketHandlers.latestSummary(routeData(AllNetworks, AllContracts), uninstantiated(failing)) ],
     [ 'the rewards of a network',     () => marketHandlers.rewardsDappData(routeData(MAINNET, AllContracts), uninstantiated(failing)) ],
     [ 'the history of a network',     () => marketHandlers.historicalSummary(routeData(MAINNET, AllContracts), uninstantiated(failing)) ],
-    [ 'the rewards of an account',    () => accountRewardsSummary(account, instantiated(failing, BATCHED)) ],
+    [ 'the rewards of an account',    () => accountRewardsSummary(account, instantiated(failing, Flags.ROUTE_EVALUATOR_FLAGS)) ],
   ] as const) {
     await t.rejects(answered(), /the node did not serve usdc/, what);
   }
@@ -363,7 +351,7 @@ t.test('the rewards of an account answer a market the chain has not reached as a
 
   const response = await accountRewardsSummary(
     { apiHost: '', nodeHost: '', nodeKey: '', account: ACCOUNT, catalog: createdAt(created, [ USDT, AERO ]) },
-    instantiated(answer, BATCHED),
+    instantiated(answer, Flags.ROUTE_EVALUATOR_FLAGS),
   );
 
   t.equal(response.status, 200);
@@ -399,7 +387,7 @@ t.test('the rewards of an account answer a market the chain has not reached as a
 
   const response = await accountRewardsSummary(
     { apiHost: '', nodeHost: '', nodeKey: '', account: ACCOUNT, catalog: createdAt(created, [ USDT ]) },
-    instantiated(answer, BATCHED),
+    instantiated(answer, Flags.ROUTE_EVALUATOR_FLAGS),
   );
 
   t.equal(response.status, 200);
@@ -449,7 +437,7 @@ t.test('only the summary answers what the version says of a market in its Comet 
   t.strictSame(markets.map(described), markets.map(() => ALONE), 'the rewards of every market: the Comet alone');
   const one = await (await marketHandlers.latestRewardsSummary(routeData(MAINNET, comet(MAINNET, USDC)), uninstantiated(answer))).json() as Entry;
   t.strictSame(described(one)[1], [], 'the rewards summary of one market: none of the fields of the version');
-  const owed = await (await accountRewardsSummary(account, instantiated(answer, BATCHED))).json() as Entry[];
+  const owed = await (await accountRewardsSummary(account, instantiated(answer, Flags.ROUTE_EVALUATOR_FLAGS))).json() as Entry[];
   t.ok(owed.length > 0, 'the rewards of an account are answered');
   t.strictSame(owed.map(described), owed.map(() => ALONE), 'and the rewards of an account: the Comet alone');
 });

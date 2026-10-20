@@ -1,6 +1,7 @@
 import * as Eth      from '../lib/eth-constants.js';
 import * as Fallible from '../lib/fallible/fallible.js';
 import * as jsonRpc  from '../lib/json-rpc.js';
+import { ROUTE_EVALUATOR_FLAGS } from '../lib/flags.js';
 
 import * as KnownNetwork  from '../lib/well-known/networks/network.js';
 import * as ContractUtils from '../lib/well-known/contracts/utils.js';
@@ -48,13 +49,6 @@ interface Context extends Evaluator.Context {
   evaluator: Evaluator.Implementation<Scope>;
   // the id the entrypoint gave the request, which its error answer and the log line about it carry
   requestId?: string;
-}
-
-/*
- * An UninstantiatedContext lets a handler instantiate its own evaluator.
- */
-interface UninstantiatedContext extends Evaluator.Context {
-  instantiateEvaluator: Evaluator.InstantiateFn<Scope>;
 }
 
 /*
@@ -337,8 +331,7 @@ async function unsafeRoute(
             {
               flags: {
                 ...context.flags,
-                batchingEnabled: true,
-                evaluatorAlgorithm: 'workingset',
+                ...ROUTE_EVALUATOR_FLAGS,
               },
             }
           ),
@@ -447,9 +440,14 @@ async function unsafeRoute(
       queryParams: url.searchParams,
       catalog,
     };
-    // every market handler makes its own evaluator, with the flags its reads need
-    const handler = handlerMappings[resourceApi][strippedEndpointSuffix];
-    return handler(data, { ...context, instantiateEvaluator });
+    /*
+     * One evaluator for whichever market route answers: in the mainnet
+     * storage, as no market route reaches a testnet, and with
+     * ROUTE_EVALUATOR_FLAGS, whatever the environment sets.
+     */
+    const evaluator = instantiateEvaluator('mainnet', { flags: { ...context.flags, ...ROUTE_EVALUATOR_FLAGS } });
+    const handler   = handlerMappings[resourceApi][strippedEndpointSuffix];
+    return handler(data, { ...context, evaluator });
   }
 
   const maybeWellKnownContract = (() => {
@@ -513,7 +511,6 @@ export {
 
 export type {
   Context,
-  UninstantiatedContext,
   // route data types
   V2RouteData,
   MarketRouteData,

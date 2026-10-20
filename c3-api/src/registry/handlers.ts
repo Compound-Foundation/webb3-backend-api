@@ -139,10 +139,10 @@ async function snapshotResponse(
    */
   const stale   = staleFor !== undefined && staleFor !== null;
   const headers = {
-    ...registryHeaders(ref),
     'ETag':          etag,
-    'Cache-Control': stale ? 'no-store' : `public, max-age=${maxAge}`,
-    ...(stale ? { 'X-Registry-Stale': String(staleFor) } : {}),
+    'Cache-Control': `public, max-age=${maxAge}`,
+    // which a stale answer replaces with no-store, beside its age
+    ...registryHeaders(ref, staleFor),
   };
   /*
    * A stale answer is never confirmed: a 304 tells a client the copy it

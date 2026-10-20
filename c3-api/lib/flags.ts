@@ -55,6 +55,17 @@ const defaults: ((_: SomeFlags) => FullFlags) = ({
 });
 
 /*
+ * What a route that reads many markets at once evaluates them with, whatever
+ * the environment sets: a request to the node is a subrequest, of which an
+ * invocation has a budget (README, "Workers Plan"), so the reads of each round
+ * go in one batch per network, which the working-set evaluator gathers.
+ */
+const ROUTE_EVALUATOR_FLAGS = {
+  batchingEnabled:    true,
+  evaluatorAlgorithm: 'workingset',
+} as const satisfies SomeFlags;
+
+/*
  * environment variable flag parsers
  */
 
@@ -188,6 +199,7 @@ export type {
 };
 
 export {
+  ROUTE_EVALUATOR_FLAGS,
   parse,
   defaults,
   parseWithDefaults,

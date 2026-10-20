@@ -120,13 +120,7 @@ function requestCatalog(env: Env, debug?: CacheDeps['debug']): RequestCatalog {
  */
 function catalogHeaders(catalog: Catalog, staleFor: number | null = null): Record<string, string> {
   return {
-    ...registryHeaders({ id: catalog.versionId, checksum: catalog.checksum }),
-    /*
-     * An answer computed from a version the database could not confirm says
-     * so and may not be stored — by a browser, a proxy or anything else. The
-     * two travel together, so a caller cannot set one and forget the other.
-     */
-    ...(staleFor === null ? {} : { 'X-Registry-Stale': String(staleFor), 'Cache-Control': 'no-store' }),
+    ...registryHeaders({ id: catalog.versionId, checksum: catalog.checksum }, staleFor),
   };
 }
 

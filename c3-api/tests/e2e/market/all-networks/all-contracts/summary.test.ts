@@ -48,6 +48,11 @@ t.test(`/market/all-networks/all-contracts/summary`, async (t) => {
     `http://${nodeHost}/market/all-networks/all-contracts/summary`
   );
   const response = await C3Api.fetch(request, testEnv);
+  // a node provider that did not answer is a 503 and its error, not a summary of another shape
+  if (response.status !== 200) {
+    t.fail(`the route answered ${response.status}: ${await response.text()}`);
+    return;
+  }
   t.ok(response.body);
   // non-null assert (!) is safe because of the t.ok(response.body) above.
   const responseJson = (await streamInto.json(response.body! as any)) as any[];

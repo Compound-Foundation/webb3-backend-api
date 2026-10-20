@@ -1,5 +1,6 @@
 import {
   ActivationAction,
+  ActivationRecordV1,
   ActivationResultV1,
   Address,
   CONTRACT_ROLES,
@@ -1057,17 +1058,14 @@ async function readValidationSummary(db: D1Database, versionId: string): Promise
 async function readActivationHistory(
   db: D1Database,
   versionId: string,
-): Promise<Array<{
-  id: string, action: string, previousVersionId: string | null, targetVersionId: string,
-  actor: string, reason: string, createdAt: string,
-}>> {
+): Promise<ActivationRecordV1[]> {
   const { results } = await db.prepare(
     `SELECT id, action, previous_version_id, registry_version_id, actor, reason, created_at
      FROM registry_activations
      WHERE registry_version_id = ?1 OR previous_version_id = ?1
      ORDER BY created_at DESC, rowid DESC`
   ).bind(versionId).all<{
-    id: string, action: string, previous_version_id: string | null, registry_version_id: string,
+    id: string, action: ActivationAction, previous_version_id: string | null, registry_version_id: string,
     actor: string, reason: string, created_at: string,
   }>();
   return (results ?? []).map(row => ({
