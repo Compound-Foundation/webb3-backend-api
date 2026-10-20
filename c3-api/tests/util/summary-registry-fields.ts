@@ -1,11 +1,6 @@
 import type { MarketV1 } from '../../lib/model/comet-registry.js';
 import { checksumAddress } from '../../lib/model/comet-registry.js';
 
-/*
- * A summary entry held against the market /registry/v1/active served: the
- * same contracts and fields, in the order the summary writes them. A contract
- * or a slug the version has none of is not there.
- */
 function contractsBesideComet(market: MarketV1): { rewards?: string, bulker?: string } {
   const { rewards, bulker } = market.contracts;
   return {
@@ -26,6 +21,10 @@ function registryFields(market: MarketV1) {
   };
 }
 
+/*
+ * A summary entry held against the market /registry/v1/active served: the
+ * same contracts and fields, in the order the summary writes them.
+ */
 function onSummary<Entry extends { chain_id: number, comet: { address: string } }>({ chain_id, comet, ...rest }: Entry, market: MarketV1) {
   return { chain_id, comet: { ...comet, ...contractsBesideComet(market) }, ...registryFields(market), ...rest };
 }

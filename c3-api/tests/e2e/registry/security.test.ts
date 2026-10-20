@@ -48,6 +48,7 @@ t.test('the token is what the routes are behind, and nothing else', async t => {
     [ 'an empty token',   { 'Authorization': 'Bearer ' } ],
     [ 'the token hash',   { 'Authorization': `Bearer ${await sha256Hex(ADMIN_TOKEN)}` } ],
     [ 'a prefix of it',   { 'Authorization': `Bearer ${ADMIN_TOKEN.slice(0, -1)}` } ],
+    [ 'more after it',    { 'Authorization': `Bearer ${ADMIN_TOKEN} garbage` } ],
   ];
   for (const [ name, headers ] of cases) {
     const response = await server.fetch('/registry/v1/admin/status', headers === undefined ? {} : { headers });
@@ -59,6 +60,9 @@ t.test('the token is what the routes are behind, and nothing else', async t => {
 
   t.equal((await server.fetch('/registry/v1/admin/status', { headers: auth })).status, 200,
     'the token itself is accepted');
+  const spaced = { 'Authorization': `bearer   ${ADMIN_TOKEN}` };
+  t.equal((await server.fetch('/registry/v1/admin/status', { headers: spaced })).status, 200,
+    'and so is it after the scheme in any case and more than one space');
 });
 
 t.test('an administrative body is bounded', async t => {

@@ -22,7 +22,6 @@ import {
   readActiveVersionId,
   readMarket,
   readNetworkOverlay,
-  readRegistrySnapshot,
   readSnapshot,
   readUnreviewed,
   readValidationSummary,
@@ -34,7 +33,6 @@ import { isServed, servedNetworks } from './catalog.js';
 import { bundleOf, digestOf, proposalFor, reviewDocument } from './bootstrap.js';
 import type { Generated } from './bootstrap.js';
 import { orderNetworks, overlayDigest, overlayOfMarket, parseMarketOverlay } from './overlay.js';
-import { compareWithStatic } from './shadow.js';
 import { replaceOverlays, validateStoredVersion } from './admin.js';
 import type { CreationReader, FeedReader } from './admin.js';
 import { cancelRun } from './sync.js';
@@ -114,10 +112,6 @@ function etagOf({ id, checksum }: VersionRef, representation: string): string {
   return `"v${SCHEMA_VERSION}-r${REPRESENTATION_REVISION}-${representation}-${id}-${checksum}"`;
 }
 
-function versionHeaders(snapshot: RegistrySnapshotV1): Record<string, string> {
-  return registryHeaders(snapshot.registryVersion);
-}
-
 function versionRef(snapshot: RegistrySnapshotV1): VersionRef {
   return { id: snapshot.registryVersion.id, checksum: snapshot.registryVersion.checksum };
 }
@@ -189,24 +183,6 @@ async function activeSnapshot(context: RegistryContext): Promise<CachedSnapshot>
     throw new ApiError('REGISTRY_NOT_ACTIVE', `No active registry snapshot is available`);
   }
   return active;
-}
-
-/*
- * The active snapshot for an administrative read, which may not be an older
- * one. A public read that answers from the cache during a database outage
- * says so in its headers and is useful anyway; an operator comparing a
- * candidate against "what is on", or deciding what to activate, would be
- * comparing against a version that is no longer the answer.
- */
-async function freshActiveSnapshot(context: RegistryContext): Promise<RegistrySnapshotV1> {
-  const active = await activeSnapshot(context);
-  if (active.staleFor !== null) {
-    throw new ApiError(
-      'UPSTREAM_UNAVAILABLE',
-      `the database could not be read, and an administrative answer may not come from the cache`,
-    );
-  }
-  return active.snapshot;
 }
 
 function networkOf(snapshot: RegistrySnapshotV1, chainId: number): NetworkV1 {
@@ -510,43 +486,12 @@ async function cancelSyncRun(context: RegistryContext, syncRunId: string, reason
 }
 
 /*
- * The shadow comparison: a version against the static constants this API
- * still serves from.
- *
- * Without a version id it answers for the active one, which is what a
- * scheduled check watches; with an id it answers for a validated candidate,
- * which is what an operator reads before activating it. A candidate that has
- * not been validated has no snapshot to compare, so it is not addressable
- * here.
- */
-async function getShadow(context: RegistryContext, versionId: string | undefined): Promise<Response> {
-  const snapshot = versionId === undefined
-    ? await freshActiveSnapshot(context)
-    : await readRegistrySnapshot(context.db, versionId);
-  if (snapshot === null) {
-    throw new ApiError('NOT_FOUND', `no validated registry version with that id`);
-  }
-
-  const shadow = compareWithStatic(snapshot);
-  return jsonResponse({
-    /*
-     * One flag an operator or a check can read without interpreting the
-     * report: the two sources describe the same markets with the same values.
-     */
-    agrees: shadow.differences.length === 0
-         && shadow.onlyInStatic.length === 0
-         && shadow.onlyInRegistry.length === 0,
-    shadow,
-  }, { headers: versionHeaders(snapshot) });
-}
-
-/*
  * What a version changes against the version that is on: the markets it adds
  * or drops, and every fact and decision of the others that differs.
  *
- * Unlike the shadow comparison it answers for a candidate that is still
- * importing, because that is when an operator describes a market the source
- * has added, and the facts the import read for it are where that starts.
+ * It answers for a candidate that is still importing as well, because that is
+ * when an operator describes a market the source has added, and the facts the
+ * import read for it are where that starts.
  * Without a version that is on, everything the version holds is added.
  */
 async function getChanges(context: RegistryContext, versionId: string): Promise<Response> {
@@ -783,7 +728,6 @@ export {
   getProposal,
   getProposalReview,
   getNetworks,
-  getShadow,
   getSyncRun,
   getVersion,
   getVersions,

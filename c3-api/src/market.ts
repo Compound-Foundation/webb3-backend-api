@@ -21,13 +21,8 @@ import {
   AllNetworks,
   AllContracts,
   type MarketRouteData,
-  type Context               as RouterContext,
   type UninstantiatedContext as UninstantiatedRouterContext,
 } from './router.js';
-
-interface Context
-  extends RouterContext
-{}
 
 type Dependencies = (
   | evm.Evm
@@ -107,28 +102,28 @@ function reportUnreached(contract: RegistryComet, message: string): void {
 /*
  * A market of the summary with what the active registry version says of it,
  * as /registry/v1/active serves the market: what the website keys, names and
- * lists the market by. Nothing is read for them, so every market the summary answers
- * has them, whatever its status, one the chain has not reached too. They are
- * added here, not cached with what was read: the cache keys leave the labels
- * out (catalog.ts, marketDigest), and a version that changes one is answered
- * at once. Every other route names the Comet by its address alone, and only
- * the rewards routes answer some of the rest, in fields of their own: the
- * rewards contract and the labels (market-rewards.ts).
+ * lists the market by. Nothing is read for them, so every market the summary
+ * answers has them, whatever its status, one the chain has not reached too.
+ * They are added here, not cached with what was read: the cache keys leave
+ * the labels out (catalog.ts, marketDigest), and a version that changes one
+ * is answered at once. Every other route names the Comet by its address
+ * alone, and only the rewards routes answer some of the rest, in fields of
+ * their own: the rewards contract and the labels (market-rewards.ts).
  *
  * An address is checksummed, as the Comet's is, where the version stores it
  * lowercase. A contract or a slug the version has none of is left out, never
  * null, as the summary leaves out whatever it cannot give.
  */
 function described<Summary extends MarketIdentity>({ chainId, comet, ...summary }: Summary, contract: RegistryComet) {
-  const market  = contract.registry.market;
-  const rewards = contract.rewards?.contract.address;
+  const market         = contract.registry.market;
+  const rewardsAddress = contract.rewards?.contract.address;
   const { bulker } = market.contracts;
   return {
     chainId,
     comet: {
       ...comet,
-      ...(rewards === undefined ? {} : { rewards }),
-      ...(bulker  === null      ? {} : { bulker: checksumAddress(bulker) }),
+      ...(rewardsAddress === undefined ? {} : { rewards: rewardsAddress }),
+      ...(bulker         === null      ? {} : { bulker: checksumAddress(bulker) }),
     },
     deploymentKey:   market.deploymentKey,
     displayName:     market.displayName,
@@ -198,14 +193,13 @@ async function latestSummary(
     })
   );
 
+  /*
+   * A list in every form, one market's too: a network's markets are the
+   * active version's, and an answer that became an object at one market
+   * would change its shape with an activation.
+   */
   const flattedSummary = summary.flat();
-
-  // This keeps backwards compatibility
-  if (flattedSummary.length === 1) {
-    return new Response(JSON.stringify(flattedSummary[0]))
-  } else {
-    return new Response(JSON.stringify(flattedSummary));
-  }
+  return new Response(JSON.stringify(flattedSummary));
 }
 
 async function latestRewardsSummary(
@@ -273,7 +267,7 @@ async function latestRewardsSummary(
 
 async function historicalSummary(
   { apiHost, nodeHost, nodeKey, network, contract, catalog }: MarketRouteData,
-  context: Context,
+  context: UninstantiatedRouterContext,
 ): Promise<Response> {
   const selectedNetworks = networksOf(network);
 
@@ -285,7 +279,27 @@ async function historicalSummary(
   } else if(context.flags.environment && context.flags.environment === 'stage') {
     desiredDaysBack = 2;
   }
-  const { evaluate, pull1 } = context.evaluator;
+
+  /*
+   * The days of a market are one evaluation, and every round of its reads
+   * reaches the node as one batch: three calls to the node provider proxy
+   * per market — one more where a feed the version remaps to reverts —
+   * beside one per network for its latest block. Unbatched, every read would
+   * be a call of its own, thousands for a market's 30 days, and a cold
+   * history of every market would run past the 10,000 subrequests an
+   * invocation has (README, "Workers Plan").
+   *
+   * Markets stay separate evaluations, where the summary evaluates a whole
+   * network as one: a batch holds the days of one market, some 1,500 reads
+   * for the largest, which the node provider proxy sends on in pieces of 100.
+   */
+  const { evaluate, pull1 } = context.instantiateEvaluator('mainnet', {
+    flags: {
+      ...context.flags,
+      batchingEnabled: true,
+      evaluatorAlgorithm: 'workingset',
+    },
+  });
 
   /*
    * Backfill by presuming the 1st sample extrapolates back into the past

@@ -35,21 +35,22 @@ const LATEST = { number: 30_000_000, timestamp: 1_790_000_000 };
 
 const MAINNET = 'ethereum-mainnet';
 const USDC    = '0xc3d688b66703497daa19211eedff47f25384cdc3';
+const WETH    = '0xa17581a9e3356d9a858b789d68b4d866e593ae94';
 const USDT    = '0x3afdc9bca9213a35503b077a6072f3d0d5ab0840';
 const WBTC    = '0xe85dc543813b8c2cfeaac371517b925a166a9293';
 
-// ten million blocks past the latest, as the reviewer's version held for Arbitrum's USDT market
+// as the reviewer's version held for Arbitrum's USDT market
 const UNREACHED = LATEST.number + 10_000_000;
 const MESSAGE   = `creationBlock ${UNREACHED} is past the latest block, ${LATEST.number}`;
 
-// the fixture with mainnet's USDT market created past the latest block
-function unreachedSnapshot(): RegistrySnapshotV1 {
+// the fixture with a market of mainnet created past the latest block, USDT's unless `comet` names another
+function unreachedSnapshot(comet = USDT): RegistrySnapshotV1 {
   const fixture = loadRegistrySnapshotFixture();
   return {
     ...fixture,
     networks: fixture.networks.map(network => network.chainId !== 1 ? network : {
       ...network,
-      markets: network.markets.map(market => market.contracts.comet !== USDT ? market : { ...market, creationBlock: UNREACHED }),
+      markets: network.markets.map(market => market.contracts.comet !== comet ? market : { ...market, creationBlock: UNREACHED }),
     }),
   };
 }
@@ -200,8 +201,8 @@ t.test('the summaries answer a market created past the latest block as an error,
   const snapshot = unreachedSnapshot();
   const get      = await workerOf(t, snapshot);
   const asked    = serving(t, snapshot);
-  const warnings = captured(t, 'warn');
   const markets  = fixtureCatalog(snapshot).markets().length;
+  captured(t, 'warn');
 
   const everyNetwork = await get('/market/all-networks/all-contracts/summary');
   t.equal(everyNetwork.status, 200, 'the summary of every network is answered');
@@ -218,12 +219,31 @@ t.test('the summaries answer a market created past the latest block as an error,
 
   const alone = await get(`/market/${MAINNET}/${USDT}/summary`);
   t.equal(alone.status, 200, 'the summary of that market alone is its status, as a price that reverts is');
-  t.strictSame(await alone.json(), UNREACHED_ON_SUMMARY, 'answered as an object, as one market always was');
+  t.strictSame(await alone.json(), [ UNREACHED_ON_SUMMARY ], 'answered as a list of one, as every form of the summary is');
 
   t.notOk(asked.has(USDT), 'and nothing of it was read');
+});
+
+/*
+ * An isolate names a market the chain has not reached once a minute
+ * (reportUnreached, market.ts), and every test of this file runs in the same
+ * one, so this test leaves WETH unreached, which no other test does: none
+ * before it can have named that market already.
+ */
+t.test('the log names a market created past the latest block once, however many summaries answer it', async t => {
+  const snapshot = unreachedSnapshot(WETH);
+  const get      = await workerOf(t, snapshot);
+  const warnings = captured(t, 'warn');
+  serving(t, snapshot);
+
+  for (const path of [ '/market/all-networks/all-contracts/summary', `/market/${MAINNET}/all-contracts/summary`, `/market/${MAINNET}/${WETH}/summary` ]) {
+    const entries = await (await get(path)).json() as Entry[];
+    t.equal(entries.find(entry => entry.comet.address.toLowerCase() === WETH)?.status, 'error', `${path} answers it as an error`);
+  }
+  const { address } = fixtureCatalog(snapshot).marketAt(MAINNET, WETH)!.comet;
   t.same(warnings.filter(line => line.includes(MESSAGE)), [
-    `creation block not reached: ${unreached(snapshot).comet.address} on ${MAINNET}: ${MESSAGE}`,
-  ], 'while the log names it once, however many routes answered it');
+    `creation block not reached: ${address} on ${MAINNET}: ${MESSAGE}`,
+  ], 'while the log names it once');
 });
 
 /*
@@ -327,7 +347,7 @@ t.test('the summary answers a market created past the latest block as /registry/
     return JSON.stringify(Object.fromEntries(fields.slice(0, fields.findIndex(([ key ]) => key === 'status'))));
   };
 
-  const alone = await (await get(`/market/${MAINNET}/${USDT}/summary`)).json() as Entry;
+  const [ alone ] = await (await get(`/market/${MAINNET}/${USDT}/summary`)).json() as [ Entry ];
   t.equal(JSON.stringify(alone), JSON.stringify(onSummary(unreached(snapshot), servedOf(alone))),
     'the summary of that market: its Comet, its rewards contract and its bulker, then its keys and labels, as the version serves them, then its error');
   for (const path of [ `/market/${MAINNET}/all-contracts/summary`, '/market/all-networks/all-contracts/summary' ]) {

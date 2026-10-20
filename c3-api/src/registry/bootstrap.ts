@@ -1,5 +1,6 @@
 import * as Eth          from '../../lib/eth-constants.js';
 import * as KnownNetwork from '../../lib/well-known/networks/network.js';
+import { Comet, Contract, StandaloneContract } from '../../lib/well-known/contracts/types.js';
 
 import type {
   Address,
@@ -11,8 +12,6 @@ import { canonicalJson } from '../../lib/canonical-json.js';
 import { sha256Hex } from '../../lib/hash.js';
 
 import type { MarketOverlay, NetworkOverlay, OverlayPriceException } from './overlay.js';
-import { staticComets } from './shadow.js';
-import type { CometContract } from './shadow.js';
 
 
 /*
@@ -34,6 +33,8 @@ import type { CometContract } from './shadow.js';
  * and applied by its digest, so what is applied is exactly what was read.
  */
 type NetworkName = KnownNetwork.Name;
+
+type CometContract = Contract<StandaloneContract<Comet>>;
 
 /*
  * Why one value is what it is, where the general rules the review document
@@ -406,6 +407,22 @@ const NETWORK_NAMES: Partial<Record<NetworkName, string>> = {
 
 // the market the application opens when nothing else is selected
 const DEFAULT_MARKET = { network: 'ethereum-mainnet' as NetworkName, deploymentKey: 'usdc' };
+
+/*
+ * The static Comets of one network, keyed by lowercased address. The
+ * constants index each Comet under several alias keys, so the address is what
+ * finds the Comet of a market the candidate imported.
+ */
+function staticComets(network: NetworkName): Map<string, CometContract> {
+  const contracts = Eth.wellKnownContractsByNetwork[network]?.['Comet'] ?? {};
+  const comets    = new Map<string, CometContract>();
+  for (const candidate of Object.values(contracts) as Contract[]) {
+    if (Comet.is(candidate)) {
+      comets.set(candidate.address.toLowerCase(), candidate as CometContract);
+    }
+  }
+  return comets;
+}
 
 function staticFeed(network: NetworkName, key: string): Address | null {
   const feed = (Eth.wellKnownContractsByNetwork[network] as any)?.['PriceFeed']?.[key];
@@ -829,5 +846,5 @@ function bundleOf(generated: Generated): {
 }
 
 
-export type { Generated, MarketProposal, NetworkProposal, Note };
-export { bundleOf, digestOf, marketOverlay, networkOverlay, proposalFor, reviewDocument };
+export type { CometContract, Generated, MarketProposal, NetworkProposal, Note };
+export { bundleOf, digestOf, marketOverlay, networkOverlay, proposalFor, reviewDocument, staticComets };

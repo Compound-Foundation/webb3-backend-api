@@ -1,6 +1,8 @@
 import t from 'tap';
 import { readFileSync } from 'node:fs';
 
+import { parseDeploymentPath } from '../../../src/registry/source/roots.js';
+
 /*
  * Contract freeze for RegistrySnapshotV1, the body of GET /registry/v1/active.
  *
@@ -25,6 +27,8 @@ const UUID     = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 const SHA1     = /^[0-9a-f]{40}$/;
 const SHA256   = /^[0-9a-f]{64}$/;
 const SLUG     = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
+// a deployment key is the name of its directory in the source, which roots.ts reads with `.` and `_`: `usdc.e`, `institutional_usdc`
+const DEPLOY   = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 const REPO     = /^[a-z0-9-]+\/[a-z0-9._-]+$/;
 const UINT     = /^[0-9]+$/;
 
@@ -211,7 +215,7 @@ t.test('markets are typed, with ids unique across the snapshot', async t => {
   markets.forEach(({ market, where }) => {
     if (!exactKeys(problems, market, MARKET_KEYS, where)) return;
     checkPattern(problems, market.id, UUID, `${where}.id`);
-    checkPattern(problems, market.deploymentKey, SLUG, `${where}.deploymentKey`);
+    checkPattern(problems, market.deploymentKey, DEPLOY, `${where}.deploymentKey`);
     checkText(problems, market.displayName, `${where}.displayName`);
     if (market.contractName !== null) checkText(problems, market.contractName, `${where}.contractName`);
     if (market.slug !== null) checkPattern(problems, market.slug, /^[a-z0-9][a-z0-9.-]{0,63}$/, `${where}.slug`);
@@ -235,6 +239,17 @@ t.test('markets are typed, with ids unique across the snapshot', async t => {
   const ids = markets.map(({ market }) => market.id);
   if (new Set(ids).size !== ids.length) problems.push('markets: id must be unique across the snapshot');
   t.same(problems, []);
+});
+
+/*
+ * The frozen fixture names no deployment with a `.` or a `_`, as the source
+ * can: the names the source fixture lists hold the pattern to what the
+ * registry imports.
+ */
+t.test('a deployment key is any name the source gives a deployment', async t => {
+  const { tree } = JSON.parse(readFileSync('./tests/fixtures/registry/source/tree.json', 'utf8')) as { tree: { path: string }[] };
+  const keys = tree.map(({ path }) => parseDeploymentPath(path).deploymentKey);
+  t.same(keys.filter(key => !DEPLOY.test(key)), [], `the pattern of a market's deploymentKey takes ${keys.join(', ')}`);
 });
 
 t.test('base, reward, and collateral assets are typed', async t => {

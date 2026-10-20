@@ -65,3 +65,26 @@ t.test('a body within the limit is read whole, in however many chunks it comes',
   } as RequestInit);
   t.same(await readJsonObject(split), { reason: 'split across chunks' }, 'and JSON is parsed from all of them');
 });
+
+/*
+ * A media type is compared in any case (RFC 9110), and JSON is
+ * application/json or a +json type: a type that merely ends in "json" is not
+ * JSON.
+ */
+t.test('a body is JSON when its media type is, in any case', async t => {
+  const BODY = '{"reason":"typed"}';
+  const sent = (headers: Record<string, string>, body: string | Blob = BODY) =>
+    new Request('https://api.test.local/registry/v1/admin/sync', { method: 'POST', headers, body });
+
+  for (const type of [ 'application/json', 'Application/JSON; charset=UTF-8', 'APPLICATION/JSON', 'application/merge-patch+json' ]) {
+    t.same(await readJsonObject(sent({ 'Content-Type': type })), { reason: 'typed' }, `${type} is read`);
+  }
+  // a blob without a type, unlike a string, is sent without a Content-Type
+  t.same(await readJsonObject(sent({}, new Blob([ BODY ]))), { reason: 'typed' },
+    'and so is a body that names no type');
+
+  for (const type of [ 'application/foojson', 'text/json', 'application/x-json', 'text/plain' ]) {
+    await t.rejects(readJsonObject(sent({ 'Content-Type': type })),
+      { code: 'BAD_REQUEST', status: 400, message: 'the request body must be JSON' }, `${type} is refused`);
+  }
+});
