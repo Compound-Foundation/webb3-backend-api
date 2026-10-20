@@ -55,8 +55,14 @@ async function readJsonObject(
   request: Request,
   { maxBytes = MAX_BODY_BYTES }: { maxBytes?: number } = {},
 ): Promise<Record<string, unknown>> {
+  /*
+   * A media type is compared in any case (RFC 9110). JSON is application/json
+   * or a type with the +json suffix (RFC 6839), and a body without a type is
+   * read as JSON too.
+   */
   const contentType = request.headers.get('content-type') ?? '';
-  if (contentType !== '' && !contentType.split(';')[0]!.trim().endsWith('json')) {
+  const mediaType   = contentType.split(';')[0]!.trim().toLowerCase();
+  if (contentType !== '' && mediaType !== 'application/json' && !mediaType.endsWith('+json')) {
     throw new ApiError('BAD_REQUEST', `the request body must be JSON`);
   }
 

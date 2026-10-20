@@ -116,7 +116,7 @@ t.test(`/market/.../summary response format looks reasonable for a near-empty ma
   const response = await C3Api.fetch(request, testEnv);
   t.ok(response.body);
   // non-null assert (!) is safe because of the t.ok(response.body) above.
-  const responseJson = await streamInto.json(response.body! as any);
+  const [ responseJson ] = await streamInto.json(response.body! as any) as unknown[];
 
   const {
     chain_id,

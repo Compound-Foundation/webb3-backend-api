@@ -30,13 +30,19 @@ function unauthorized(message: string, challenge: string): ApiError {
   return new ApiError('UNAUTHORIZED', message, undefined, { 'WWW-Authenticate': challenge });
 }
 
+/*
+ * The credentials as RFC 6750 writes them: the scheme, in any case, one space
+ * or more, and the token, with nothing after it. Headers.get has already
+ * dropped the whitespace around the value.
+ */
+const BEARER = /^bearer +(\S+)$/i;
+
 function bearerToken(request: Request): string {
-  const header = request.headers.get('authorization') ?? '';
-  const [ scheme, token ] = header.split(' ');
-  if (scheme?.toLowerCase() !== 'bearer' || token === undefined || token.length === 0) {
+  const match = BEARER.exec(request.headers.get('authorization') ?? '');
+  if (match === null) {
     throw unauthorized(`a bearer token is required`, 'Bearer');
   }
-  return token;
+  return match[1]!;
 }
 
 /*

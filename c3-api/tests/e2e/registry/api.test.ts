@@ -255,6 +255,46 @@ t.test('the convenience reads serve the same objects as the snapshot', async t =
 });
 
 /*
+ * Whether chain 999 or a market is known depends on the version that
+ * answered, so a public read that fails after the version was read names it,
+ * as a legacy route's failure does. An answer given before any version was
+ * read names none.
+ */
+t.test('a public read that fails after the version was read names the version', async t => {
+  const db        = await freshDatabase();
+  const versionId = await seedValidated(db);
+  await server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'activate' }));
+
+  for (const [ path, status ] of [
+    [ '/registry/v1/networks/999/markets', 404 ],
+    [ `/registry/v1/networks/1/markets/0x${'9'.repeat(40)}`, 404 ],
+    [ '/registry/v1/networks/01/markets', 400 ],
+    [ '/registry/v1/networks/1/markets/0x1234', 400 ],
+  ] as const) {
+    const refused = await server.fetch(path);
+    t.equal(refused.status, status, `${path} is refused`);
+    t.equal(refused.headers.get('x-registry-version'), versionId, 'naming the version that refused it');
+    t.equal(refused.headers.get('x-registry-checksum'), snapshot.registryVersion.checksum);
+    t.match(refused.headers.get('access-control-expose-headers'), /X-Registry-Version, X-Registry-Checksum/,
+      'where a browser can read it');
+    t.equal(refused.headers.get('x-registry-stale'), null, 'as the version that is on');
+  }
+
+  const auth = { headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` } };
+  for (const [ path, init, status, what ] of [
+    [ `/registry/v1/versions/${randomUUID()}`, {}, 404, 'a version nobody validated' ],
+    [ '/registry/v1/unknown', {}, 404, 'an unknown path' ],
+    [ '/registry/v1/active', { method: 'POST' }, 405, 'a method the route does not take' ],
+    [ `/registry/v1/admin/versions/${randomUUID()}`, auth, 404, 'an administrative read' ],
+  ] as const) {
+    const refused = await server.fetch(path, init);
+    t.equal(refused.status, status, `${what} is refused`);
+    t.equal(refused.headers.get('x-registry-version'), null, 'naming no version');
+    t.equal(refused.headers.get('x-registry-checksum'), null);
+  }
+});
+
+/*
  * A disabled market is part of the stored version and visible to an operator,
  * but no public read may offer one: the market route refuses it and the
  * request catalog does not materialize it, so listing it would advertise
@@ -461,6 +501,25 @@ t.test('activation and rollback are idempotent and audited', async t => {
     `SELECT action FROM registry_activations ORDER BY rowid`
   ).all<{ action: string }>();
   t.same((history.results ?? []).map(row => row.action), [ 'activate', 'activate', 'rollback' ], 'every change is audited once');
+
+  const movesOf = async (versionId: string) => {
+    const detail = await server.fetch(`/registry/v1/admin/versions/${versionId}`, {
+      headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` },
+    });
+    const { activations } = await detail.json() as {
+      activations: Array<{ action: string, previousVersionId: string | null, targetVersionId: string }>,
+    };
+    return activations.map(({ action, previousVersionId, targetVersionId }) => ({ action, previousVersionId, targetVersionId }));
+  };
+  t.same(await movesOf(second), [
+    { action: 'rollback', previousVersionId: second, targetVersionId: first },
+    { action: 'activate', previousVersionId: first,  targetVersionId: second },
+  ], 'the move that switched a version off names the version it switched on');
+  t.same(await movesOf(first), [
+    { action: 'rollback', previousVersionId: second, targetVersionId: first },
+    { action: 'activate', previousVersionId: first,  targetVersionId: second },
+    { action: 'activate', previousVersionId: null,   targetVersionId: first },
+  ], 'and the history of the version that is on, newest first, names what each move switched on');
 });
 
 /*

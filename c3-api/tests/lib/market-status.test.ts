@@ -120,7 +120,8 @@ function routeData(network: MarketRouteData['network'], contract: MarketRouteDat
 function uninstantiated(answer: Answer) {
   const made: Array<ReturnType<typeof evaluatorOf>> = [];
   const context = {
-    flags,
+    // a local run, whose history samples one day
+    flags: { ...flags, environment: 'local' },
     instantiateEvaluator: (_: string, overrides: { flags?: Flags.SomeFlags } = {}) => {
       const evaluator = evaluatorOf(answer, overrides.flags);
       made.push(evaluator);
@@ -193,13 +194,40 @@ t.test('the summary of one market is its status', async t => {
     uninstantiated(answers([ WBTC ])),
   );
   t.equal(response.status, 200);
-  t.strictSame(await response.json(), wbtcSummaryError(), 'answered as an object, as one market always was');
+  t.strictSame(await response.json(), [ wbtcSummaryError() ], 'answered as a list of one, as every form of the summary is');
+});
+
+/*
+ * The summary of a network or of every network is a list however many
+ * markets it holds: the active version decides how many there are, so one
+ * that leaves a single market changes its length, and nothing else.
+ */
+t.test('the summary answers a list in every form, of one market or of none', async t => {
+  const summaryOf = async (data: MarketRouteData) => (await marketHandlers.latestSummary(data, uninstantiated(answers([])))).json();
+  const cometsOf  = (body: unknown) => Array.isArray(body) ? body.map((entry: Entry) => entry.comet.address.toLowerCase()) : body;
+
+  t.strictSame(cometsOf(await summaryOf(routeData('base-mainnet', AllContracts))), [ AERO ], 'Base, where the version serves one market: a list of it');
+  t.strictSame(await summaryOf(routeData('arbitrum-mainnet', AllContracts)), [], 'Arbitrum, where it serves none: an empty list');
+
+  // a version that serves mainnet's USDC market alone
+  const fixture = loadRegistrySnapshotFixture();
+  const alone   = fixtureCatalog({
+    ...fixture,
+    networks: fixture.networks.map(network => ({
+      ...network,
+      markets: network.markets.map(market => market.contracts.comet === USDC ? market : { ...market, status: 'disabled' as const }),
+    })),
+  });
+  for (const network of [ MAINNET, AllNetworks ] as const) {
+    t.strictSame(cometsOf(await summaryOf({ ...routeData(network, AllContracts), catalog: alone })), [ USDC ],
+      `${network}, under a version that serves one market: a list of it`);
+  }
 });
 
 t.test('history passes on the status of each day', async t => {
   const response = await marketHandlers.historicalSummary(
     routeData(MAINNET, AllContracts),
-    instantiated(answers([ WBTC ])),
+    uninstantiated(answers([ WBTC ])),
   );
   t.equal(response.status, 200);
   const body = await response.json() as Array<Entry & { timestamp: number }>;
@@ -285,7 +313,7 @@ t.test('a node that fails one market still fails the list', async t => {
     [ 'the summary of a network',     () => marketHandlers.latestSummary(routeData(MAINNET, AllContracts), uninstantiated(failing)) ],
     [ 'the summary of every network', () => marketHandlers.latestSummary(routeData(AllNetworks, AllContracts), uninstantiated(failing)) ],
     [ 'the rewards of a network',     () => marketHandlers.rewardsDappData(routeData(MAINNET, AllContracts), uninstantiated(failing)) ],
-    [ 'the history of a network',     () => marketHandlers.historicalSummary(routeData(MAINNET, AllContracts), instantiated(failing)) ],
+    [ 'the history of a network',     () => marketHandlers.historicalSummary(routeData(MAINNET, AllContracts), uninstantiated(failing)) ],
     [ 'the rewards of an account',    () => accountRewardsSummary(account, instantiated(failing, BATCHED)) ],
   ] as const) {
     await t.rejects(answered(), /the node did not serve usdc/, what);
@@ -294,7 +322,6 @@ t.test('a node that fails one market still fails the list', async t => {
 
 const USDT = '0x3afdc9bca9213a35503b077a6072f3d0d5ab0840';
 
-// the fixture with the markets of `comets` created at `block`
 function createdAt(block: number, comets: string[]) {
   const fixture = loadRegistrySnapshotFixture();
   return fixtureCatalog({
@@ -363,7 +390,6 @@ t.test('the rewards of an account answer a market the chain has not reached as a
   quiet(t);
   const created = LATEST.number + 1;
   const nothing = { rewardConfig: { rewardToken: '0x0000000000000000000000000000000000000000' } };
-  // the contract pays nothing for USDT and WBTC, and the others as usual
   const answer: Answer = (name, context) => {
     const answered = answers([])(name, context);
     return name !== 'getRewardConfigsSleuth' ? answered : (answered as unknown[]).map((config, index) => (
@@ -415,7 +441,7 @@ t.test('only the summary answers what the version says of a market in its Comet 
   t.strictSame(summary.map(described), summary.map(() => SUMMARY), 'the summary: the Comet, its rewards contract and its bulker, and the keys and labels of the version, of every market');
   t.equal(statuses(summary)[WBTC], 'error', 'WBTC\'s among them, which is an error');
 
-  const days = await (await marketHandlers.historicalSummary(routeData(AllNetworks, AllContracts), instantiated(answer))).json() as Entry[];
+  const days = await (await marketHandlers.historicalSummary(routeData(AllNetworks, AllContracts), uninstantiated(answer))).json() as Entry[];
   t.ok(days.length > 0, 'the history answers days');
   t.strictSame(days.map(described), days.map(() => ALONE), 'the history: the Comet alone, on every day');
   const markets = await (await marketHandlers.rewardsDappData(routeData(AllNetworks, AllContracts), uninstantiated(answer))).json() as Entry[];
@@ -438,6 +464,6 @@ t.test('a market is read once the chain reaches its creation block', async t => 
   const summary = await marketHandlers.latestSummary(reached, uninstantiated(answers([])));
   t.equal(statuses(await summary.json())[USDT], 'success', 'the summary reads it');
 
-  const history = await marketHandlers.historicalSummary(reached, instantiated(answers([])));
+  const history = await marketHandlers.historicalSummary(reached, uninstantiated(answers([])));
   t.equal(statuses(await history.json())[USDT], 'success', 'and so does the history');
 });

@@ -15,7 +15,10 @@ const TOKEN = 'registry-admin-token-for-tests';
 const HASH  = await sha256(TOKEN);
 
 async function refusalOf(tokenHash: string | undefined, token?: string): Promise<ApiError | null> {
-  const headers: Record<string, string> = token === undefined ? {} : { 'Authorization': `Bearer ${token}` };
+  return refusalWith(tokenHash, token === undefined ? {} : { 'Authorization': `Bearer ${token}` });
+}
+
+async function refusalWith(tokenHash: string | undefined, headers: Record<string, string>): Promise<ApiError | null> {
   try {
     await authenticateAdmin(new Request('https://api.test.local/registry/v1/admin/status', { headers }), tokenHash);
     return null;
@@ -68,4 +71,32 @@ t.test('an environment without a hash is closed', async t => {
 t.test('a token stored in place of its hash matches no token, itself included', async t => {
   const token = 'ab'.repeat(32);
   t.match(await refusalOf(token, token), { status: 401, code: 'UNAUTHORIZED' });
+});
+
+/*
+ * The header as RFC 6750 writes it: the scheme in any case, one space or
+ * more, and the token. Anything after the token is not a part to ignore: the
+ * header is refused as one that carries no token.
+ */
+t.test('the token is the one word after the scheme and its spaces', async t => {
+  for (const [ header, what ] of [
+    [ `Bearer  ${TOKEN}`, 'after two spaces' ],
+    [ `bEaReR ${TOKEN}`, 'after the scheme in any case' ],
+    [ ` Bearer ${TOKEN} `, 'with whitespace around the header' ],
+  ] as const) {
+    t.equal(await refusalWith(HASH, { 'Authorization': header }), null, `the token is accepted ${what}`);
+  }
+  for (const [ header, what ] of [
+    [ `Bearer ${TOKEN} garbage`, 'a word after the token' ],
+    [ `Bearer ${TOKEN} ${TOKEN}`, 'the token twice' ],
+    [ `Bearer\t${TOKEN}`, 'a tab after the scheme' ],
+    [ `Bearer${TOKEN}`, 'no space after the scheme' ],
+  ] as const) {
+    t.match(await refusalWith(HASH, { 'Authorization': header }), {
+      status:  401,
+      code:    'UNAUTHORIZED',
+      message: 'a bearer token is required',
+      headers: { 'WWW-Authenticate': 'Bearer' },
+    }, `${what} is refused as no token`);
+  }
 });

@@ -473,6 +473,11 @@ market it is. Show both to a developer, and switch back to the version before
 market at fault is switched off in a new attempt instead (step 1 of
 [Describing a new market](#describing-a-new-market)).
 
+One error is no market's: `Too many subrequests` in that log line says the
+request ran out of the subrequests an invocation has
+([README.md](./README.md#workers-plan)). Switch nothing off or back for it;
+show it to a developer.
+
 ## When the source changes
 
 Nothing needs doing to pick up a new commit. The scheduled job looks for one
@@ -1046,9 +1051,26 @@ step 3 of [A market that changed on chain](#3-see-what-it-changes-and-switch-it-
 says.
 
 The id is the version to go **back to**, which must have been validated. It
-is the `previousVersionId` in the answer of the activation you are undoing,
-and it is also in the activation history that
-`GET /registry/v1/admin/versions/<the version that is on>` lists.
+is the `previousVersionId` in the answer of the activation you are undoing.
+The history of the version that is on has it too:
+
+```sh
+curl -s "$API/registry/v1/admin/versions/<the version that is on>" -H "Authorization: Bearer $TOKEN" \
+  | jq '.version.id as $on | first(.activations[] | select(.targetVersionId == $on)) | .previousVersionId'
+```
+
+Postman:
+
+```http
+GET {{API}}/registry/v1/admin/versions/<the version that is on>
+Authorization: Bearer {{TOKEN}}
+```
+
+`activations` lists the moves that switched the version on or off, newest
+first. The first one whose `targetVersionId` is the version that is on is the
+move that switched it on, and its `previousVersionId` is the version to go
+back to. `null` there means nothing was on before it: there is nothing to go
+back to.
 
 ## Keeping an eye on it
 
@@ -1085,7 +1107,7 @@ When `alerts` is not empty, each name says what to do:
 | `last-sync-failed` | The last import ended `failed`. `sync.lastRun.lastError` says how: `validation failed` is a draft that failed a check, and `cancelled by <actor>: <reason>` a run somebody cancelled. A root that fails does not fail the run, and neither do the checks of a run held for review — the first import of an environment, or one with `holdForReview`: it completes, its draft left open | After `validation failed`, read the draft's checks: `GET /registry/v1/admin/versions/<sync.lastRun.registryVersionId>` lists them under `validation.checks`, failed first, with their `details`. If `all-roots-imported` is among them, the run gave roots up: `GET /registry/v1/admin/sync-runs/<sync.lastRun.id>` lists them with `status` `failed`, and why in each `lastError`. Fix that — most often the node provider proxy — and the scheduled job tries the commit again, or force a new attempt. Otherwise `commit-rejected` is raised as well: follow it. After a cancel, import again as `sync-stalled` says |
 | `sync-failing` | The import that is running keeps failing: the last root it tried failed, or an invocation has failed since before trying one, and the roots left failed have spent two attempts or more between them — two roots once, or one root twice. A single failure does not raise it. `sync.lastRun.lastError` says why, once an invocation has recorded it | Read its run: `GET /registry/v1/admin/sync-runs/<id>` lists each root with why it failed and the `attempts` it has spent. `SOURCE_REQUEST_FAILED` and `CHAIN_REQUEST_FAILED` are GitHub or the node provider proxy not answering: fix the proxy, or wait for GitHub, and the next hourly invocation carries on. Until then an invocation that imports nothing spends an attempt of each root it tries, and a root is given up after five, whatever failed it. `the invocation importing this root did not finish` is an invocation stopped in the middle of that root — a deploy, or a Worker past its time or CPU: the next one tries it again, and if one market keeps stopping it, the worker's logs say what did. Until the next one records it, such a root is still `processing`, under a `leaseExpiresAt` already past, and the run's `lastError` is still that of the attempt before it — `null` if that one succeeded. `the database did not answer` is D1 failing under that root — restarted, overloaded or cut off. A restart or an overload spends the attempt all the same, and the next invocation tries the root again; if it keeps coming back, check the database's health. The worker's log line `registry root failed` has what D1 said, as it has the whole of a fault, which a root records as `an unexpected error interrupted the import`. Anything else is the root itself. A `lastError` that no root of the run carries — `OVERLAY_INVALID` naming a `version …`, or `an unexpected error interrupted the import` — is an invocation that failed before it tried a root: see `sync-stalled`, which the status raises as well once nothing has moved for two hours |
 | `sync-stalled` | A run says it is running, but nobody is continuing it: the hourly trigger is not firing, or every invocation fails before it imports a market | Read why in `sync.lastRun.lastError`; where it is `null`, the worker's log line `registry sync failed` names the service that did not answer — GitHub, the node provider proxy or the database — and once it answers, the hourly import resumes the run by itself. A `lastError` that comes back the same every hour does not pass: cancel the run — `POST /registry/v1/admin/sync-runs/<sync.lastRun.id>/cancel` with `{"reason": "…"}` — fix what it names, then import again with `{"forceNewAttempt": true, "reason": "…"}` (step 1 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)). That attempt is of the commit the tracked ref names now: if the source has moved on since the run started — the cancel's answer names the run's `sourceCommitSha` — it imports the newer commit and leaves the run's draft open. To keep what was reviewed on that draft, send the run's `sourceCommitSha` with `forceNewAttempt` instead; otherwise close the draft as the row on a draft of an older commit in [When something goes wrong](#when-something-goes-wrong) says. Cancelling does not help with two of them, which a new attempt meets the same way. `an unexpected error interrupted the import` is a fault, which the log has whole as `registry sync failed unexpectedly`: see `INTERNAL` in [When something goes wrong](#when-something-goes-wrong). `OVERLAY_INVALID` naming a `version …` is a decision that version stores, the one on or an earlier attempt of the commit, which this release no longer takes: a developer's to fix, in a release. Once either is fixed, the hourly import resumes the run by itself |
-| `sync-overdue` | The source has not been checked for more than two days | The hourly trigger is not firing, or every invocation fails before it records a check: a failed one is a failed Cron in the dashboard's Cron events, and the worker's log line `registry sync failed` says why |
+| `sync-overdue` | The source has not been checked for more than two days, or never: a fresh environment raises it beside `no-active-version` until its first import records a check | On a fresh environment, nothing: the first import clears it, whether the hourly job starts it or you do ([the first bring-up](#bringing-an-environment-up-for-the-first-time)). Otherwise the hourly trigger is not firing, or every invocation fails before it records a check: a failed one is a failed Cron in the dashboard's Cron events, and the worker's log line `registry sync failed` says why |
 | `snapshot-not-cached` | The active version is not in the cache | Harmless by itself — the next request refills it. If it persists, the KV namespace is misconfigured for this environment |
 | `cache-unreadable` | The KV namespace itself did not answer | Check the `kv_registry` binding of this environment: until it answers there is no cache, and no older version to fall back on if the database fails |
 

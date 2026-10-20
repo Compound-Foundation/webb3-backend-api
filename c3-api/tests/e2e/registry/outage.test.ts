@@ -148,6 +148,14 @@ t.test('a database that stops answering is answered from the version it last nam
   t.match(market.headers.get('x-registry-stale'), /^\d+$/, 'and says so the same way');
   t.equal(market.headers.get('cache-control'), 'no-store');
 
+  for (const path of [ '/registry/v1/networks/999/markets', `/registry/v1/networks/1/markets/${UNKNOWN}` ]) {
+    const refused = await get(env, path);
+    t.equal(refused.status, 404, `${path} is refused against the same version`);
+    t.equal(refused.headers.get('x-registry-version'), registry.versionId);
+    t.match(refused.headers.get('x-registry-stale'), /^\d+$/, 'and says so the same way');
+    t.equal(refused.headers.get('cache-control'), 'no-store');
+  }
+
   /*
    * Every answer is a success, so the log is what tells an operator about the
    * outage: as an error, but once a minute rather than once a request.
@@ -158,6 +166,6 @@ t.test('a database that stops answering is answered from the version it last nam
   t.same(
     logs.filter(line => line.includes('registry database unreachable')),
     [ 'error: registry database unreachable; answering from the version it last named' ],
-    'the outage is logged as an error once for the fourteen answers it was met by',
+    'the outage is logged as an error once for the sixteen answers it was met by',
   );
 });

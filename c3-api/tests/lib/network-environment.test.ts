@@ -17,8 +17,8 @@ import '../../shim/node-self.js';
  * evaluated, and every other one evaluates in the mainnet storage. No query
  * string moves a request off the cache every other request fills.
  *
- * The router decides the storage for the historical summary, and the latest
- * summary and the rewards data decide it themselves; all three by that rule.
+ * The historical summary, the latest summary and the rewards data each
+ * decide it themselves, by that rule.
  */
 const USDC = '0xc3d688b66703497daa19211eedff47f25384cdc3';
 

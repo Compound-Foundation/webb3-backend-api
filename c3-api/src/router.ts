@@ -447,16 +447,9 @@ async function unsafeRoute(
       queryParams: url.searchParams,
       catalog,
     };
-    if (false
-      || strippedEndpointSuffix === 'rewards/dapp-data'
-      || strippedEndpointSuffix === 'rewards/summary'
-      || strippedEndpointSuffix === 'summary'
-    ) {
-      const handler = handlerMappings[resourceApi][strippedEndpointSuffix];
-      return handler(data, { ...context, instantiateEvaluator });
-    }
+    // every market handler makes its own evaluator, with the flags its reads need
     const handler = handlerMappings[resourceApi][strippedEndpointSuffix];
-    return handler(data, { ...context, evaluator: instantiateEvaluator(networkEnvironment) });
+    return handler(data, { ...context, instantiateEvaluator });
   }
 
   const maybeWellKnownContract = (() => {

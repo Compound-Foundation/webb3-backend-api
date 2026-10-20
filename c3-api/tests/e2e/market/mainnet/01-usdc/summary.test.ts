@@ -56,8 +56,8 @@ t.test(`/market/.../summary response format looks reasonable`, async t => {
   const response = await C3Api.fetch(request, testEnv);
   t.ok(response.body);
   // non-null assert (!) is safe because of the t.ok(response.body) above.
-  const responseJson = await streamInto.json(response.body! as any);
-  /*                         ^^^^^^^^^^
+  const [ responseJson ] = await streamInto.json(response.body! as any) as unknown[];
+  /*                             ^^^^^^^^^^
    * Node.js has an original built-in concept of 'streams' which predates
    * the WebStreams standard used by Cloudflare workers (and other modern
    * JavaScript-based runtimes). The 'node:stream/consumers' library
