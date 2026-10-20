@@ -1,11 +1,7 @@
-import t, { Test } from 'tap';
-
-import { Interface, type FunctionFragment } from '@ethersproject/abi';
-import { BigNumber as EthersBigNumber } from '@ethersproject/bignumber';
+import t from 'tap';
 
 import * as Debug    from '../../lib/debug-log.js';
 import * as Flags    from '../../lib/flags.js';
-import * as jsonRpc  from '../../lib/json-rpc.js';
 import { BigNumber } from '../../lib/bignumber.js';
 import { BigFixnum } from '../../lib/bigfixnum.js';
 
@@ -23,10 +19,12 @@ import * as marketHandlers from '../../src/market.js';
 import {
   AllContracts,
   AllNetworks,
+  type Context,
   type MarketRouteData,
-  type UninstantiatedContext,
 } from '../../src/router.js';
 
+import { consoleLines } from '../util/console.js';
+import { type Call, type Read, fakeNode, serve } from '../util/fake-node.js';
 import { MemoryKv } from '../util/kv.js';
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../util/registry-fixture.js';
 
@@ -42,9 +40,13 @@ import '../../shim/node-self.js';
  *
  * The handler is handed what production hands it: the flags of an
  * environment that sets none of its own, which neither batch nor evaluate by
- * working set, the computations with the index bias production has
- * (entrypoint.ts), and a cache laid out as the worker lays it out, memory
- * before KV.
+ * working set, and the evaluator the router makes over them, which does both
+ * (ROUTE_EVALUATOR_FLAGS), over the computations with the index bias
+ * production has (entrypoint.ts) and a cache laid out as the worker lays it
+ * out, memory before KV.
+ *
+ * How a read the node failed fails the history is tested with the summary's
+ * (market-summary-batching.test.ts).
  */
 const flags = Flags.parseWithDefaults(process.env);
 const debug = Debug.MakeLogger([]).configure(process.env);
@@ -60,104 +62,37 @@ const catalog  = fixtureCatalog(snapshot);
 
 const LATEST = { number: 30_000_000, timestamp: 1_790_000_000 };
 const USDC   = '0xc3d688b66703497daa19211eedff47f25384cdc3';
-const WBTC   = '0xe85dc543813b8c2cfeaac371517b925a166a9293';
 const AERO   = '0x784efeb622244d2348d4f2522f8860b96fbece89';
-
-const COMET = new Interface([
-  'function numAssets() view returns (uint8)',
-  'function getAssetInfo(uint8) view returns (tuple(uint8 offset, address asset, address priceFeed, uint64 scale, uint64 borrowCollateralFactor, uint64 liquidateCollateralFactor, uint64 liquidationFactor, uint128 supplyCap))',
-  'function baseTokenPriceFeed() view returns (address)',
-  'function getPrice(address) view returns (uint256)',
-  'function totalSupply() view returns (uint256)',
-  'function totalBorrow() view returns (uint256)',
-  'function getUtilization() returns (uint256)',
-  'function getSupplyRate(uint) returns (uint)',
-  'function getBorrowRate(uint) returns (uint)',
-  'function totalsCollateral(address) view returns (uint128)',
-  'function symbol() view returns (string)',
-]);
-
-type Call = { id: number, method: string, params: any[] };
-
-/*
- * The error the node answers a read with instead of its value, if any, by
- * the contract called, the function, its argument where it takes one, and
- * the block. Addresses are lowercase.
- */
-type Fault = (read: { contract: string, name: string, argument: string | undefined, block: number }) => { code: number, message: string, data?: string } | undefined;
-
-const REVERT = { code: 3, message: 'execution reverted', data: '0x' };
 
 // the registry version's description of a Comet's market
 const marketOf = (address: string) => catalog.markets().find(entry => entry.comet.address.toLowerCase() === address)!.comet.registry.market;
 
+// the reads the fake node answers as the fixture describes each Comet (fake-node.ts)
+const DESCRIBED = new Set([ 'numAssets', 'getAssetInfo', 'baseTokenPriceFeed', 'symbol' ]);
+
 /*
- * A node at LATEST that answers what each Comet is made of as the fixture
- * describes it, and every other read with a value of its own, made of the
- * contract, the call and the block: a value answered for another read, or on
- * another day, changes what the history answers. It records every request it
- * receives: its network and its calls.
+ * The node of the fixture at LATEST, which answers what each Comet is made
+ * of as the fixture describes it, and every other read with a value of its
+ * own, made of the contract, the call and the block: a value answered for
+ * another read, or on another day, changes what the history answers. A read
+ * `reverts` names reverts instead.
  */
-function fakeNode(fault: Fault = () => undefined) {
-  const markets = new Map(snapshot.networks.flatMap(network => network.markets.map(entry => (
-    [ entry.contracts.comet!.toLowerCase(), entry ] as const
-  ))));
-  const symbols = new Map(snapshot.networks.flatMap(network => network.markets.flatMap(entry => (
-    entry.collateralAssets.map(asset => [ asset.token.address.toLowerCase(), asset.token.symbol ] as const)
-  ))));
-  const requests: Array<{ network: string, calls: Call[] }> = [];
-
-  const answer = ({ id, method, params }: Call) => {
-    if (method === 'eth_getBlockByNumber') {
-      return { jsonrpc: '2.0', id, result: { number: `0x${LATEST.number.toString(16)}`, timestamp: `0x${LATEST.timestamp.toString(16)}`, transactions: [] } };
-    }
-    const [ { to, data }, tag ] = params;
-    const contract = to.toLowerCase();
-    const fragment = COMET.getFunction(data.slice(0, 10)) as FunctionFragment;
-    const argument: string | undefined = COMET.decodeFunctionData(fragment, data)[0]?.toString().toLowerCase();
-    const error = fault({ contract, name: fragment.name, argument, block: Number.parseInt(tag, 16) });
-    if (error !== undefined) {
-      return { jsonrpc: '2.0', id, error };
-    }
-    const entry = markets.get(contract);
-    const values = ((): unknown[] => {
-      switch (fragment.name) {
-        case 'numAssets':          return [ entry!.collateralAssets.length ];
-        case 'getAssetInfo': {
-          const asset = entry!.collateralAssets[Number(argument)]!;
-          return [ [ asset.assetIndex, asset.token.address, asset.priceFeed.address, EthersBigNumber.from(10).pow(asset.token.decimals), 0, 0, 0, 0 ] ];
-        }
-        case 'baseTokenPriceFeed': return [ entry!.baseAsset.priceFeed.address ];
-        case 'symbol':             return [ symbols.get(contract) ?? 'TKN' ];
-        default: {
-          let hash = 0;
-          for (const character of `${contract}|${data}|${tag}`) {
-            hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
-          }
-          return [ EthersBigNumber.from(10).pow(6).mul(1 + hash % 997) ];
-        }
+function nodeOf(reverts: (read: Read) => boolean = () => false) {
+  return fakeNode(snapshot, LATEST, {
+    answer: read => {
+      if (reverts(read)) {
+        return 'revert';
       }
-    })();
-    return { jsonrpc: '2.0', id, result: COMET.encodeFunctionResult(fragment, values) };
-  };
-
-  const fetch = async (input: string | Request, init?: RequestInit) => {
-    const request = new Request(input, init);
-    const network = new URL(request.url).pathname.split('/')[1]!;
-    const body = await request.json() as Call | Call[];
-    const calls = body instanceof Array ? body : [ body ];
-    requests.push({ network, calls });
-    const responses = calls.map(answer);
-    return new Response(JSON.stringify(body instanceof Array ? responses : responses[0]));
-  };
-  return { fetch, requests };
-}
-
-// puts `node` in place of the global fetch for the length of a test
-function serving(t: Test, node: Pick<ReturnType<typeof fakeNode>, 'fetch'>) {
-  const fetchBefore = globalThis.fetch;
-  globalThis.fetch = node.fetch as typeof globalThis.fetch;
-  t.teardown(() => { globalThis.fetch = fetchBefore; });
+      if (DESCRIBED.has(read.name)) {
+        return undefined;
+      }
+      let hash = 0;
+      for (const character of `${read.comet}|${read.name}|${read.argument}|${read.block}`) {
+        hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+      }
+      return [ 1_000_000 * (1 + hash % 997) ];
+    },
+  });
 }
 
 function everyMarket(from: Catalog = catalog): MarketRouteData {
@@ -165,14 +100,12 @@ function everyMarket(from: Catalog = catalog): MarketRouteData {
 }
 
 /*
- * What the router hands the history, in `environment`, over a KV of its own
- * that counts what it is asked. Every evaluation the handler starts is kept
- * in `evaluations`: a history that one market fails answers without waiting
- * for the others, and a test waits for them, so none of them asks a node
- * after it ends. `recursive` evaluates as the route did before it batched,
- * whatever flags the handler asks for.
+ * What the router hands the history in production: the evaluator it makes
+ * for a market route, over a KV of its own that counts what it is asked.
+ * `recursive` evaluates as the route did before it batched, whatever flags
+ * the router sets.
  */
-function contextOf({ environment = PRODUCTION.environment, recursive = false }: { environment?: Flags.FullFlags['environment'], recursive?: boolean } = {}) {
+function contextOf({ recursive = false }: { recursive?: boolean } = {}) {
   const kv      = MemoryKv({});
   const asked   = { get: 0, put: 0 };
   const counted = new Proxy(kv, {
@@ -187,58 +120,31 @@ function contextOf({ environment = PRODUCTION.environment, recursive = false }: 
       return value;
     },
   });
-  const cache = Cache.Layers.of([ new Cache.Memory({}, revivers), new Cache.WorkersKv(counted, revivers) ]);
-  const evaluations: Promise<unknown>[] = [];
-  const context = {
-    flags: { ...PRODUCTION, environment },
-    instantiateEvaluator: (_: string, overrides: { flags?: Flags.SomeFlags } = {}) => {
-      const evaluator = Evaluator.instantiate(computations as any, {
-        cache,
-        debug,
-        flags: {
-          ...PRODUCTION,
-          environment,
-          ...overrides.flags,
-          ...(recursive ? { batchingEnabled: false, evaluatorAlgorithm: 'recursive' } as const : {}),
-        },
-      });
-      // a handler takes evaluate off the evaluator, so the evaluations are kept where it reads it
-      const evaluate = evaluator.evaluate;
-      evaluator.evaluate = (redex => {
-        const evaluation = evaluate(redex);
-        evaluations.push(evaluation);
-        return evaluation;
-      }) as typeof evaluate;
-      return evaluator;
+  const cache     = Cache.Layers.of([ new Cache.Memory({}, revivers), new Cache.WorkersKv(counted, revivers) ]);
+  const evaluator = Evaluator.instantiate(computations as any, {
+    cache,
+    debug,
+    flags: {
+      ...PRODUCTION,
+      ...Flags.ROUTE_EVALUATOR_FLAGS,
+      ...(recursive ? { batchingEnabled: false, evaluatorAlgorithm: 'recursive' } as const : {}),
     },
-  } as unknown as UninstantiatedContext;
+  });
+  const context = { flags: PRODUCTION, evaluator } as unknown as Context;
   // what the history left in KV, by key
   const stored = async () => {
     const { keys } = await kv.list();
     return Object.fromEntries(await Promise.all(keys.map(async ({ name }) => [ name, await kv.get(name) ] as const)));
   };
-  return { context, asked, evaluations, stored };
-}
-
-// how the history of every market failed, once every evaluation it started has ended
-async function failureOf(t: Test, node: Pick<ReturnType<typeof fakeNode>, 'fetch'>): Promise<unknown> {
-  serving(t, node);
-  // a failure needs no more than a day to show: the history of a local run
-  const { context, evaluations } = contextOf({ environment: 'local' });
-  const failure = await marketHandlers.historicalSummary(everyMarket(), context).then(
-    () => null,
-    (error: unknown) => error,
-  );
-  await Promise.allSettled(evaluations);
-  return failure;
+  return { context, asked, stored };
 }
 
 const networks = [ ...new Set(catalog.markets().map(entry => entry.network)) ];
 const comets   = new Set(catalog.markets().map(entry => entry.comet.address.toLowerCase()));
 
 t.test('a cold history of every market makes three node requests per market and one per network', async t => {
-  const node = fakeNode();
-  serving(t, node);
+  const node = nodeOf();
+  serve(t, node);
   const { context, asked } = contextOf();
 
   const response = await marketHandlers.historicalSummary(everyMarket(), context);
@@ -277,9 +183,7 @@ t.test('a cold history of every market makes three node requests per market and 
  * that reverts makes a day `partially` or `error`.
  */
 t.test('the history answers every day as the recursive evaluator does, and keeps it under the same keys', async t => {
-  const warn = console.warn;
-  console.warn = () => {};
-  t.teardown(() => { console.warn = warn; });
+  consoleLines(t, [ 'warn' ]);
 
   const usdc  = marketOf(USDC);
   const feeds = {
@@ -308,13 +212,11 @@ t.test('the history answers every day as the recursive evaluator does, and keeps
     [ feeds.wbtc,  LATEST.number - 5 * 7_200 ],
     [ feeds.aero,  LATEST.number - 20 * 43_200 ],
   ]);
-  const reverting: Fault = ({ name, argument, block }) => (
-    name === 'getPrice' && block < (revertsBefore.get(argument!) ?? 0) ? REVERT : undefined
-  );
+  const reverting = ({ name, argument, block }: Read) => name === 'getPrice' && block < (revertsBefore.get(argument!) ?? 0);
 
   const historyOf = async (recursive: boolean) => {
-    const node = fakeNode(reverting);
-    serving(t, node);
+    const node = nodeOf(reverting);
+    serve(t, node);
     const { context, stored } = contextOf({ recursive });
     const response = await marketHandlers.historicalSummary(everyMarket(fixtureCatalog(remapped)), context);
     t.equal(response.status, 200, recursive ? 'the recursive evaluator answers' : 'the history answers');
@@ -332,41 +234,4 @@ t.test('the history answers every day as the recursive evaluator does, and keeps
   t.ok(Object.keys(batched.stored).length > 0, 'which it keeps in KV');
   t.strictSame([ ...new Set((JSON.parse(batched.body) as Array<{ status: string }>).map(day => day.status)) ].sort(),
     [ 'error', 'partially', 'success' ], 'over days of every status');
-});
-
-/*
- * A history reads each market in a request of its own, which the node
- * provider proxy can fail alone: the history fails as a request the node did
- * not serve, which a route answers 503 with the seconds the proxy asked to
- * wait, as it does when the node answers one read of a market with an error.
- */
-t.test('a market whose reads the node did not serve fails the history, as a request the node did not serve', async t => {
-  const node = fakeNode();
-  const failure = await failureOf(t, {
-    fetch: async (input: string | Request, init?: RequestInit) => {
-      const request = new Request(input, init);
-      const calls   = [ await request.clone().json() as Call | Call[] ].flat();
-      return calls.some(call => call.params[0]?.to?.toLowerCase() === WBTC)
-        ? new Response('upstream error', { status: 503, headers: { 'Retry-After': '5' } })
-        : node.fetch(request);
-    },
-  });
-  t.ok(jsonRpc.isNotServed(failure), 'the request of one market failed');
-  t.same([ (failure as jsonRpc.NotServed).status, (failure as jsonRpc.NotServed).retryAfter ], [ 503, 5 ],
-    'with the status the proxy answered, and the seconds it asked to wait, for a route to pass on');
-  t.ok(node.requests.some(({ calls }) => calls.some(call => call.method === 'eth_call')), 'while the other markets were read');
-
-  const read = await failureOf(t, fakeNode(({ contract, name }) => (
-    contract === WBTC && name === 'totalSupply' ? { code: -32000, message: 'header not found' } : undefined
-  )));
-  t.match((read as Error | null)?.message, /header not found/);
-  t.ok(jsonRpc.isNotServed(read), 'and so did one read of it');
-});
-
-t.test('a read of one market that reverts fails the history, as a fault', async t => {
-  const failure = await failureOf(t, fakeNode(({ contract, name }) => (
-    contract === WBTC && name === 'totalSupply' ? REVERT : undefined
-  )));
-  t.match((failure as Error | null)?.message, /execution reverted/);
-  t.notOk(jsonRpc.isNotServed(failure), 'not as a request the node did not serve: a route answers it 500');
 });

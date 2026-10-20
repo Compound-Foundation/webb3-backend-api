@@ -51,6 +51,12 @@ async function boundedText(request: Request, maxBytes: number): Promise<string> 
   return DECODER.decode(bytes);
 }
 
+/*
+ * A media type with the +json suffix (RFC 6839): a type and a subtype, each a
+ * token (RFC 9110), with a name in the subtype before the suffix.
+ */
+const JSON_SUFFIXED = /^[\w!#$%&'*+.^`|~-]+\/[\w!#$%&'*+.^`|~-]+\+json$/;
+
 async function readJsonObject(
   request: Request,
   { maxBytes = MAX_BODY_BYTES }: { maxBytes?: number } = {},
@@ -62,7 +68,7 @@ async function readJsonObject(
    */
   const contentType = request.headers.get('content-type') ?? '';
   const mediaType   = contentType.split(';')[0]!.trim().toLowerCase();
-  if (contentType !== '' && mediaType !== 'application/json' && !mediaType.endsWith('+json')) {
+  if (contentType !== '' && mediaType !== 'application/json' && !JSON_SUFFIXED.test(mediaType)) {
     throw new ApiError('BAD_REQUEST', `the request body must be JSON`);
   }
 

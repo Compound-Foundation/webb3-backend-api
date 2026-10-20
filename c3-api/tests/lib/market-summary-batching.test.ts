@@ -1,8 +1,5 @@
 import t, { Test } from 'tap';
 
-import { Interface, type FunctionFragment } from '@ethersproject/abi';
-import { BigNumber as EthersBigNumber } from '@ethersproject/bignumber';
-
 import * as Debug    from '../../lib/debug-log.js';
 import * as Flags    from '../../lib/flags.js';
 import * as jsonRpc  from '../../lib/json-rpc.js';
@@ -21,10 +18,12 @@ import * as marketHandlers from '../../src/market.js';
 import {
   AllContracts,
   AllNetworks,
+  type Context,
   type MarketRouteData,
-  type UninstantiatedContext,
 } from '../../src/router.js';
 
+import { consoleLines } from '../util/console.js';
+import { type Call, type FakeNode, fakeNode, serve } from '../util/fake-node.js';
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../util/registry-fixture.js';
 import { REGISTRY_KEYS } from '../util/summary-registry-fields.js';
 
@@ -43,8 +42,8 @@ import '../../shim/node-self.js';
  *
  * It is also where one market's read failing at the node meets the real
  * computations: a price feed that reverts is that market's answer, and a call
- * the node did not serve fails the summary, as does a request the node
- * provider failed, both as a request the node did not serve.
+ * the node did not serve fails the summary and the history, as does a request
+ * the node provider failed, both as a request the node did not serve.
  */
 const flags = Flags.parseWithDefaults(process.env);
 const debug = Debug.MakeLogger([]).configure(process.env);
@@ -55,29 +54,6 @@ const catalog  = fixtureCatalog(snapshot);
 const LATEST = { number: 30_000_000, timestamp: 1_790_000_000 };
 const USDC   = '0xc3d688b66703497daa19211eedff47f25384cdc3';
 const WBTC   = '0xe85dc543813b8c2cfeaac371517b925a166a9293';
-
-const COMET = new Interface([
-  'function numAssets() view returns (uint8)',
-  'function getAssetInfo(uint8) view returns (tuple(uint8 offset, address asset, address priceFeed, uint64 scale, uint64 borrowCollateralFactor, uint64 liquidateCollateralFactor, uint64 liquidationFactor, uint128 supplyCap))',
-  'function baseTokenPriceFeed() view returns (address)',
-  'function getPrice(address) view returns (uint256)',
-  'function totalSupply() view returns (uint256)',
-  'function totalBorrow() view returns (uint256)',
-  'function getUtilization() returns (uint256)',
-  'function getSupplyRate(uint) returns (uint)',
-  'function getBorrowRate(uint) returns (uint)',
-  'function totalsCollateral(address) view returns (uint128)',
-  'function symbol() view returns (string)',
-  // the rewards of a market
-  'function baseBorrowMin() view returns (uint)',
-  'function baseMinForRewards() view returns (uint256)',
-  'function baseTrackingSupplySpeed() view returns (uint256)',
-  'function baseTrackingBorrowSpeed() view returns (uint256)',
-  'function trackingIndexScale() view returns (uint256)',
-  'function totalsBasic() view returns (tuple(uint64 baseSupplyIndex, uint64 baseBorrowIndex, uint64 trackingSupplyIndex, uint64 trackingBorrowIndex, uint104 totalSupplyBase, uint104 totalBorrowBase, uint40 lastAccrualTime, uint8 pauseFlags))',
-]);
-
-type Call = { id: number, method: string, params: any[] };
 
 /*
  * The error the node answers a call to a Comet with instead of its result,
@@ -99,67 +75,14 @@ const PRICES = new Map<string, number>([
 ]);
 
 /*
- * A node that answers the summary's reads from the fixture snapshot, and
- * records every request it receives: its network and its calls.
+ * The node of the fixture at LATEST, which answers the prices above and, in
+ * place of a call's result, the error `fault` answers it with.
  */
-function fakeNode(fault: Fault = () => undefined) {
-  const markets = new Map(snapshot.networks.flatMap(network => network.markets.map(entry => (
-    [ entry.contracts.comet!.toLowerCase(), entry ] as const
-  ))));
-  const symbols = new Map(snapshot.networks.flatMap(network => network.markets.flatMap(entry => (
-    entry.collateralAssets.map(asset => [ asset.token.address.toLowerCase(), asset.token.symbol ] as const)
-  ))));
-  const requests: Array<{ network: string, calls: Call[] }> = [];
-
-  const answer = ({ id, method, params }: Call) => {
-    if (method === 'eth_getBlockByNumber') {
-      return { jsonrpc: '2.0', id, result: { number: `0x${LATEST.number.toString(16)}`, timestamp: `0x${LATEST.timestamp.toString(16)}`, transactions: [] } };
-    }
-    const [ { to, data } ] = params;
-    const fragment = COMET.getFunction(data.slice(0, 10)) as FunctionFragment;
-    const argument: string | undefined = COMET.decodeFunctionData(fragment, data)[0]?.toString().toLowerCase();
-    const error = fault(to.toLowerCase(), fragment.name, argument);
-    if (error !== undefined) {
-      return { jsonrpc: '2.0', id, error };
-    }
-    const entry = markets.get(to.toLowerCase());
-    const values = ((): unknown[] => {
-      switch (fragment.name) {
-        case 'numAssets':          return [ entry!.collateralAssets.length ];
-        case 'getAssetInfo': {
-          const asset = entry!.collateralAssets[Number(argument)]!;
-          return [ [ asset.assetIndex, asset.token.address, asset.priceFeed.address, EthersBigNumber.from(10).pow(asset.token.decimals), 0, 0, 0, 0 ] ];
-        }
-        case 'baseTokenPriceFeed': return [ entry!.baseAsset.priceFeed.address ];
-        case 'getPrice':           return [ PRICES.get(argument!) ?? EthersBigNumber.from(10).pow(8) ];
-        case 'symbol':             return [ symbols.get(to.toLowerCase()) ?? 'TKN' ];
-        case 'totalsBasic': {
-          const [ index, base ] = [ EthersBigNumber.from(10).pow(15), EthersBigNumber.from(10).pow(12) ];
-          return [ [ index, index, 0, 0, base, base, LATEST.timestamp, 0 ] ];
-        }
-        default:                   return [ EthersBigNumber.from(10).pow(8) ];
-      }
-    })();
-    return { jsonrpc: '2.0', id, result: COMET.encodeFunctionResult(fragment, values) };
-  };
-
-  const fetch = async (input: string | Request, init?: RequestInit) => {
-    const request = new Request(input, init);
-    const network = new URL(request.url).pathname.split('/')[1]!;
-    const body = await request.json() as Call | Call[];
-    const calls = body instanceof Array ? body : [ body ];
-    requests.push({ network, calls });
-    const responses = calls.map(answer);
-    return new Response(JSON.stringify(body instanceof Array ? responses : responses[0]));
-  };
-  return { fetch, requests };
-}
-
-// puts `node` in place of the global fetch for the length of a test
-function serving(t: Test, node: ReturnType<typeof fakeNode>) {
-  const fetchBefore = globalThis.fetch;
-  globalThis.fetch = node.fetch as typeof globalThis.fetch;
-  t.teardown(() => { globalThis.fetch = fetchBefore; });
+function nodeOf(fault: Fault = () => undefined): FakeNode {
+  return fakeNode(snapshot, LATEST, {
+    answer: ({ comet, name, argument }) => fault(comet, name, argument)
+      ?? (name === 'getPrice' && PRICES.has(argument!) ? [ PRICES.get(argument!) ] : undefined),
+  });
 }
 
 function everyMarket(): MarketRouteData {
@@ -167,37 +90,33 @@ function everyMarket(): MarketRouteData {
 }
 
 /*
- * What the router hands a handler that makes its own evaluator. Every
- * evaluation the handler starts is kept in `evaluations`: a summary that one
- * network fails answers without waiting for the others, and a test waits for
- * them, so none of them asks a node after it ends.
+ * What the router hands a market handler: the evaluator it makes for the
+ * route, with ROUTE_EVALUATOR_FLAGS. Every evaluation the handler starts is
+ * kept in `evaluations`: a summary that one network fails, or a history that
+ * one market fails, answers without waiting for the others, and a test waits
+ * for them, so none of them asks a node after it ends.
  */
-function context(evaluations: Promise<unknown>[] = []): UninstantiatedContext {
-  const cache = new MemoryCache({}, [ BigFixnum.JsonReviver, BigNumber.JsonReviver ]);
-  return {
-    flags,
-    instantiateEvaluator: (_: string, overrides: { flags?: Flags.SomeFlags } = {}) => {
-      const evaluator = Evaluator.instantiate(
-        { ...evm, ...comet, ...market, ...rewards } as any,
-        { cache, debug, flags: { ...flags, ...overrides.flags } },
-      );
-      // a handler takes evaluate off the evaluator, so the evaluations are kept where it reads it
-      const evaluate = evaluator.evaluate;
-      evaluator.evaluate = (redex => {
-        const evaluation = evaluate(redex);
-        evaluations.push(evaluation);
-        return evaluation;
-      }) as typeof evaluate;
-      return evaluator;
-    },
-  } as unknown as UninstantiatedContext;
+function context(evaluations: Promise<unknown>[] = []): Context {
+  const cache     = new MemoryCache({}, [ BigFixnum.JsonReviver, BigNumber.JsonReviver ]);
+  const evaluator = Evaluator.instantiate(
+    { ...evm, ...comet, ...market, ...rewards } as any,
+    { cache, debug, flags: { ...flags, ...Flags.ROUTE_EVALUATOR_FLAGS } },
+  );
+  // a handler takes evaluate off the evaluator, so the evaluations are kept where it reads it
+  const evaluate = evaluator.evaluate;
+  evaluator.evaluate = (redex => {
+    const evaluation = evaluate(redex);
+    evaluations.push(evaluation);
+    return evaluation;
+  }) as typeof evaluate;
+  return { flags, evaluator } as unknown as Context;
 }
 
-// how the summary of every market failed, once every evaluation it started has ended
-async function failureOf(node: ReturnType<typeof fakeNode>, t: Test): Promise<unknown> {
-  serving(t, node);
+// how `handler` failed over every market, once every evaluation it started has ended
+async function failureOf(node: FakeNode, t: Test, handler: typeof marketHandlers.latestSummary): Promise<unknown> {
+  serve(t, node);
   const evaluations: Promise<unknown>[] = [];
-  const failure = await marketHandlers.latestSummary(everyMarket(), context(evaluations)).then(
+  const failure = await handler(everyMarket(), context(evaluations)).then(
     () => null,
     (error: unknown) => error,
   );
@@ -206,8 +125,8 @@ async function failureOf(node: ReturnType<typeof fakeNode>, t: Test): Promise<un
 }
 
 t.test('the summary of every market makes four node requests per network', async t => {
-  const node = fakeNode();
-  serving(t, node);
+  const node = nodeOf();
+  serve(t, node);
 
   const response = await marketHandlers.latestSummary(everyMarket(), context());
   const body = await response.json() as Array<{ status: string }>;
@@ -237,8 +156,8 @@ t.test('the summary of every market makes four node requests per network', async
  * requests as Base, which has no such market.
  */
 t.test('the rewards of every market convert a reward price to USD in no round of its own', async t => {
-  const node = fakeNode();
-  serving(t, node);
+  const node = nodeOf();
+  serve(t, node);
 
   const response = await marketHandlers.rewardsDappData(everyMarket(), context());
   const body = await response.json() as Array<{ status: string }>;
@@ -267,7 +186,7 @@ t.test('the rewards of every market convert a reward price to USD in no round of
 });
 
 t.test('a price feed that reverts is one market\'s error, and the rest are answered', async t => {
-  serving(t, fakeNode((comet, fragment) => (
+  serve(t, nodeOf((comet, fragment) => (
     comet === WBTC && fragment === 'getPrice' ? { code: 3, message: 'execution reverted', data: '0x' } : undefined
   )));
   const response = await marketHandlers.latestSummary(everyMarket(), context());
@@ -281,36 +200,51 @@ t.test('a price feed that reverts is one market\'s error, and the rest are answe
   );
 });
 
-t.test('a call the node did not serve for one market fails the summary', async t => {
-  const failure = await failureOf(fakeNode((comet, fragment) => (
-    comet === WBTC && fragment === 'totalSupply' ? { code: -32000, message: 'header not found' } : undefined
-  )), t);
-  t.match((failure as Error | null)?.message, /header not found/);
-  t.ok(jsonRpc.isNotServed(failure), 'as a call the node did not serve, which a route answers 503');
-});
-
 /*
  * The node provider proxy fails a request outright when no provider served
- * its calls: 503, and how long to wait before asking again. One network's
- * failing so fails the summary of every network.
+ * its calls: 503, and how long to wait before asking again. The summary reads
+ * a network in a request a round, and the history each market in requests of
+ * its own; either way, a request with one market's calls that the proxy
+ * failed so, or one call the node did not serve, fails every market, as a
+ * request the node did not serve, which a route answers 503 with the seconds
+ * the proxy asked to wait. A read that reverts, where it is no price, fails
+ * every market as a fault, which a route answers 500.
  */
-t.test('a request the node provider failed for one network fails the summary', async t => {
-  const node = fakeNode();
-  const down = 'base-mainnet';
-  const failure = await failureOf({
-    ...node,
-    fetch: async (input: string | Request, init?: RequestInit) => {
-      const request = new Request(input, init);
-      return new URL(request.url).pathname.split('/')[1] === down
-        ? new Response('upstream error', { status: 503, headers: { 'Retry-After': '5' } })
-        : node.fetch(request);
-    },
-  }, t);
-  t.ok(jsonRpc.isNotServed(failure), 'as a request the node did not serve');
-  t.same([ (failure as jsonRpc.NotServed).status, (failure as jsonRpc.NotServed).retryAfter ], [ 503, 5 ],
-    'with the status the proxy answered, and the seconds it asked to wait, for a route to pass on');
-  t.ok(node.requests.some(request => request.network !== down), 'while the other networks were read');
-});
+const FAILING = [ [ 'the summary', marketHandlers.latestSummary ], [ 'the history', marketHandlers.historicalSummary ] ] as const;
+
+for (const [ route, handler ] of FAILING) {
+  t.test(`${route}: a market whose request or call the node did not serve fails every market, as a request the node did not serve`, async t => {
+    const node    = nodeOf();
+    const failure = await failureOf({
+      ...node,
+      fetch: async (input: string | Request, init?: RequestInit) => {
+        const request = new Request(input, init);
+        const calls   = [ await request.clone().json() as Call | Call[] ].flat();
+        return calls.some(call => call.params[0]?.to?.toLowerCase() === WBTC)
+          ? new Response('upstream error', { status: 503, headers: { 'Retry-After': '5' } })
+          : node.fetch(request);
+      },
+    }, t, handler);
+    t.ok(jsonRpc.isNotServed(failure), 'a request of WBTC\'s market failed');
+    t.same([ (failure as jsonRpc.NotServed).status, (failure as jsonRpc.NotServed).retryAfter ], [ 503, 5 ],
+      'with the status the proxy answered, and the seconds it asked to wait, for a route to pass on');
+    t.ok(node.requests.some(({ calls }) => calls.some(call => call.method === 'eth_call')), 'while the other markets were read');
+
+    const read = await failureOf(nodeOf((comet, fragment) => (
+      comet === WBTC && fragment === 'totalSupply' ? { code: -32000, message: 'header not found' } : undefined
+    )), t, handler);
+    t.match((read as Error | null)?.message, /header not found/);
+    t.ok(jsonRpc.isNotServed(read), 'and so did one call of it');
+  });
+
+  t.test(`${route}: a read of one market that reverts fails every market, as a fault`, async t => {
+    const failure = await failureOf(nodeOf((comet, fragment) => (
+      comet === WBTC && fragment === 'totalSupply' ? { code: 3, message: 'execution reverted', data: '0x' } : undefined
+    )), t, handler);
+    t.match((failure as Error | null)?.message, /execution reverted/);
+    t.notOk(jsonRpc.isNotServed(failure), 'not as a request the node did not serve: a route answers it 500');
+  });
+}
 
 // a market of the summary as the route answers it, in JSON
 type Summary = {
@@ -319,8 +253,8 @@ type Summary = {
 };
 
 // the summary of every market, as the route answers it from `node`
-async function summaryFrom(t: Test, node: ReturnType<typeof fakeNode>): Promise<Summary[]> {
-  serving(t, node);
+async function summaryFrom(t: Test, node: FakeNode): Promise<Summary[]> {
+  serve(t, node);
   const response = await marketHandlers.latestSummary(everyMarket(), context());
   t.equal(response.status, 200, 'the summary is answered');
   return await response.json() as Summary[];
@@ -330,13 +264,6 @@ const entryOf = (summary: Summary[], comet: string) => summary.find(entry => ent
 const without = (entry: object, ...fields: string[]) => Object.fromEntries(Object.entries(entry).filter(([ field ]) => !fields.includes(field)));
 
 const REVERT = { code: 3, message: 'execution reverted', data: '0x' };
-
-// the warnings the summary logs while a test runs, kept out of its output
-function captureWarnings(t: Test): void {
-  const warn = console.warn;
-  console.warn = () => {};
-  t.teardown(() => { console.warn = warn; });
-}
 
 const USDT = '0x3afdc9bca9213a35503b077a6072f3d0d5ab0840';
 const WETH = '0xa17581a9e3356d9a858b789d68b4d866e593ae94';
@@ -402,8 +329,8 @@ const WETH_FIELDS = {
  * market alike.
  */
 t.test('each market of the summary has what its version says of it, and its base price, in every form', async t => {
-  const node = fakeNode();
-  serving(t, node);
+  const node = nodeOf();
+  serve(t, node);
   pricingWbtcInBtc(t);
 
   const every = await (await marketHandlers.latestSummary(everyMarket(), context())).json() as Summary[];
@@ -438,7 +365,7 @@ t.test('each market of the summary has what its version says of it, and its base
  * was read: on a partial market, and on an error its USD price alone made.
  */
 t.test('a market whose prices revert answers what its version says of it, and its base price where it was read', async t => {
-  captureWarnings(t);
+  consoleLines(t, [ 'warn' ]);
   pricingWbtcInBtc(t);
   // the feed that reverts on each of three markets
   const feeds = new Map<string, string>([
@@ -446,7 +373,7 @@ t.test('a market whose prices revert answers what its version says of it, and it
     [ WETH, marketOf(WETH).baseAsset.priceFeed.address ],            // its base feed: its base price fails
     [ USDC, marketOf(USDC).collateralAssets[0]!.priceFeed.address ], // COMP / USD: one of its collaterals fails
   ]);
-  const summary = await summaryFrom(t, fakeNode((comet, fragment, argument) => (
+  const summary = await summaryFrom(t, nodeOf((comet, fragment, argument) => (
     fragment === 'getPrice' && argument === feeds.get(comet) ? REVERT : undefined
   )));
 
@@ -489,7 +416,7 @@ t.test('a market whose version has no rewards contract, no bulker or no slug lea
       })),
     })),
   };
-  serving(t, fakeNode());
+  serve(t, nodeOf());
   const response = await marketHandlers.latestSummary({ ...everyMarket(), catalog: fixtureCatalog(version) }, context());
   t.equal(response.status, 200, 'the summary is answered');
   const summary = await response.json() as Summary[];
@@ -517,8 +444,8 @@ t.test('a market whose version has no rewards contract, no bulker or no slug lea
  * only a label is answered at once, from the summary already cached.
  */
 t.test('a version that changes only a label is answered at once, from the summary already cached', async t => {
-  const node = fakeNode();
-  serving(t, node);
+  const node = nodeOf();
+  serve(t, node);
   const cached = context();
   const before = await (await marketHandlers.latestSummary(everyMarket(), cached)).json() as Summary[];
 
@@ -551,10 +478,11 @@ t.test('a version that changes only a label is answered at once, from the summar
  * all but its totals and both its prices.
  */
 t.test('a market whose base feed reverts answers every field it can', async t => {
-  const reading = await summaryFrom(t, fakeNode());
-  captureWarnings(t);
+  const reading = await summaryFrom(t, nodeOf());
+  // the warnings the summary logs, kept out of the test's output
+  consoleLines(t, [ 'warn' ]);
   const feeds = new Map([ WBTC, USDC ].map(comet => [ comet, marketOf(comet).baseAsset.priceFeed.address ]));
-  const reverting = await summaryFrom(t, fakeNode((comet, fragment, argument) => (
+  const reverting = await summaryFrom(t, nodeOf((comet, fragment, argument) => (
     fragment === 'getPrice' && argument === feeds.get(comet) ? REVERT : undefined
   )));
 
