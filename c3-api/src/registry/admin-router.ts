@@ -20,14 +20,11 @@ import {
 } from './admin.js';
 import {
   RegistryContext,
-  applyProposal,
   cancelSyncRun,
   chainIdOf,
   getChanges,
   getMarketOverlay,
   getNetworkOverlay,
-  getProposal,
-  getProposalReview,
   getSyncRun,
   getVersionDetail,
   getVersions,
@@ -87,9 +84,6 @@ const ROUTES = [
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/markets\/([^/]+)\/([^/]+)\/overlay$/, method: 'PUT',  handler: 'marketOverlay',  family: 'overlay' },
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/markets\/([^/]+)\/([^/]+)\/overlay$/, method: 'GET',  handler: 'readMarketOverlay', family: 'read' },
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/overlays$/,                            method: 'PUT',  handler: 'overlays',       family: 'overlay' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/proposal$/,                           method: 'GET',  handler: 'proposal',       family: 'read' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/proposal\/review$/,                   method: 'GET',  handler: 'proposalReview', family: 'read' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/proposal\/apply$/,                    method: 'POST', handler: 'applyProposal',  family: 'overlay' },
 ] as const;
 
 const MAX_REASON = 1000;
@@ -401,9 +395,9 @@ function expectedDigestsOf(body: Record<string, unknown>, documents: string[]): 
  * against, and the one reason every audit event of the request is stored
  * with.
  *
- * A key spells its chain id the one way a path does (chainIdOf), which is
- * how the proposal's bundle writes it, so a key names its scope as written:
- * no two keys of one document review the same network or market.
+ * A key spells its chain id the one way a path does (chainIdOf), so a key
+ * names its scope as written: no two keys of one document review the same
+ * network or market.
  */
 function overlayDocuments(body: Record<string, unknown>, versionId: string, actor: string): OverlayDocuments {
   requireExactKeys(body, [ 'reason', 'networks', 'markets', 'expectedDigests' ]);
@@ -490,18 +484,6 @@ async function routeAdmin(
       return await getVersions(context, new URL(request.url).searchParams);
     case 'version':
       return await getVersionDetail(context, versionId!);
-    case 'proposal':
-      return await getProposal(context, versionId!);
-    case 'proposalReview':
-      return await getProposalReview(context, versionId!);
-    case 'applyProposal': {
-      requireExactKeys(body, [ 'reason', 'digest' ]);
-      const reason = requireReason(body);
-      if (typeof(body.digest) !== 'string' || !/^[0-9a-f]{16}$/.test(body.digest)) {
-        throw new ApiError('BAD_REQUEST', `digest must be the 16 hex characters the proposal's review names`);
-      }
-      return await applyProposal(context, versionId!, { digest: body.digest, reason }, feedReader(env), creationReader(env));
-    }
     case 'readNetworkOverlay':
       return await getNetworkOverlay(context, versionId!, chainIdOf(second!));
     case 'readMarketOverlay':

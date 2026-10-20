@@ -5,7 +5,6 @@ import * as streamInto from 'node:stream/consumers';
 import { makeTestEnv } from '../../../../util/test-env.js';
 
 import type { MarketV1, RegistrySnapshotV1 } from '../../../../../lib/model/comet-registry.js';
-import { marketOverlay, staticComets } from '../../../../../src/registry/bootstrap.js';
 import { catalogOf } from '../../../../../src/registry/catalog.js';
 import { enrichMarket, proxyTransport } from '../../../../../src/registry/enrichment.js';
 import { applyMarketOverlay, overlayFeedAddresses, parseMarketOverlay } from '../../../../../src/registry/overlay.js';
@@ -21,6 +20,7 @@ import C3Api, { Env } from '../../../../../entrypoint.js';
 import { setupTestEnvVars } from '../../../../util/setupTestEnvVars.js';
 import { activeRegistryDatabase } from '../../../../util/registry-database.js';
 import { loadRegistrySnapshotFixture } from '../../../../util/registry-fixture.js';
+import { readSeed } from '../../../../util/registry-seed.js';
 
 /* tests are running in node.js, so we need to shim in the 'self' object
  * that workers scripts depend upon.
@@ -45,16 +45,14 @@ const ROOT      = readFileSync('./tests/fixtures/registry/source/roots/mainnet-i
  * The institutional USDC market, as importing its root describes it: the
  * contracts its roots.json names, among them a configurator and a rewards
  * contract of its own; its assets as the chain answers for them, read live
- * like everything else in this test; and the decisions the bootstrap review
- * proposes for it, from the creation block of its deployment to rewards it
- * has none of. The frozen fixture does not carry it, and this test is about
- * what a near-empty market reports, not about the fixture.
+ * like everything else in this test; and the decisions the checked-in seed
+ * makes for it, from the creation block of its deployment to rewards it has
+ * none of. The frozen fixture does not carry it, and this test is about what
+ * a near-empty market reports, not about the fixture.
  */
 async function institutionalUsdc(): Promise<MarketV1> {
   const root   = await parseRoot(parseDeploymentPath(ROOT_PATH), ROOT, await gitBlobSha(ROOT));
-  const review = parseMarketOverlay(
-    marketOverlay('ethereum-mainnet', root.deploymentKey, staticComets('ethereum-mainnet').get(CIUSDCV3), []),
-  );
+  const review = parseMarketOverlay(readSeed().markets['1/institutional_usdc'], 'markets.1/institutional_usdc');
   const chain = proxyTransport({
     apiHost:  apiHost,
     nodeHost: nodeHost,

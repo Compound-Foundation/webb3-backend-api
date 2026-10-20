@@ -278,9 +278,9 @@ t.test('the route takes a directory and nothing else', async t => {
   }
 
   /*
-   * A key spells its chain id as a path does, which is how the proposal's
-   * bundle writes it, so no two keys of a document name the same scope: a
-   * chain id written another way is refused as no chain id at all.
+   * A key spells its chain id as a path does, so no two keys of a document
+   * name the same scope: a chain id written another way is refused as no
+   * chain id at all.
    */
   for (const [ what, body, key ] of [
     [ 'a network key',  { reason: 'x', networks: { '0x1': overlayOfNetwork(mainnet) } }, '0x1' ],

@@ -78,10 +78,11 @@ jq 'del(.markets["1/usdt"], .expectedDigests["1/usdt"])' seed.json > seed.next.j
 
 ## Changing it
 
-By a pull request, as code is changed. A value here is a decision the
-environment will serve, so the pull request says why it changes. An
-environment that is already up does not read the file again: there, the same
-decision is made in a held draft with the overlay routes.
+By hand, in a pull request, as code is changed: nothing generates the file
+any more ([Where it came from](#where-it-came-from)). A value here is a
+decision the environment will serve, so the pull request says why it
+changes. An environment that is already up does not read the file again:
+there, the same decision is made in a held draft with the overlay routes.
 
 - Every document is complete, in the form the overlay parsers store it: keys
   in their order and lists sorted by address, as `GET …/overlay` answers. So
@@ -153,20 +154,30 @@ Where a value departs from those rules, or they need saying for one market:
 ## Where it came from
 
 Frozen on 2026-10-20, offline, from the proposal `src/registry/bootstrap.ts`
-made at dev `56d75ffc2ba36d83c5ca0454c24defa8fdcd133a` — the `bundle` of
-`GET …/versions/{id}/proposal` — for a first import of develop's markets: the
-31 that `GET /market/all-networks/all-contracts/summary` listed on develop
-that day, without its two test markets, `1/usdc-test-collateral-revert` and
+made at dev `56d75ffc2ba36d83c5ca0454c24defa8fdcd133a` — what its route
+answered under `bundle` — for a first import of develop's markets: the 31
+that `GET /market/all-networks/all-contracts/summary` listed on develop that
+day, without its two test markets, `1/usdc-test-collateral-revert` and
 `1/usdc-test-base-revert`, which no other source has. The proposal's digest
-is `4897101575bb1d21`, and it left nothing to decide.
+was `4897101575bb1d21`, and it left nothing to decide.
 
 From that bundle, the file differs in three ways, none of which changes a
 decision: every document is as the overlay parsers return it, which reorders
 the lists of five network documents (1, 137, 5000, 42161 and 534352) and
-changes no overlay digest; `reason` is fixed text, where the proposal names
-its source and commit, and the digest leaves the reason out; and
+changes no overlay digest; `reason` is fixed text, where the proposal named
+its source and commit, and its digest left the reason out; and
 `expectedDigests` is `null` for every document. It departs from the proposal
 in no decision.
+
+The script that froze it is kept outside the repository; the pull request
+that checked the file in gives its command. It builds the file from that
+proposal, so it runs only on a tree that has `src/registry/bootstrap.ts`. It
+last ran at `fb34295`, the commit that checked the file in, and gave this
+file byte for byte. At that commit,
+`tests/lib/registry/seed-from-bootstrap.test.ts` held the file to the
+proposal after parsing. `bootstrap.ts` and the proposal routes were removed
+after that commit, so the file is now changed by hand
+([Changing it](#changing-it)).
 
 Develop's summary serves the 29 markets with the same labels: 174 of 174
 values — display name, base asset name, wrapped native, slug, default,

@@ -387,10 +387,7 @@ would refuse; [the preflight](./REGISTRY_RUNBOOK.md#the-preflight) holds it
 against the real chain before an environment depends on it. Once a version is
 active, the registry is where the decisions live, and a later version
 inherits them: the file is not sent again, and a decision is changed with the
-overlay routes. The proposal routes — `GET …/proposal`, `…/proposal/review`
-and `POST …/proposal/apply` — still answer, built from the static constants
-by `src/registry/bootstrap.ts`, which the file was frozen from, until the next
-change removes them with it; a bring-up sends the file.
+overlay routes.
 
 ### A market the source adds later
 

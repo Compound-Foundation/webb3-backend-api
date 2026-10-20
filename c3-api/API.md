@@ -1750,16 +1750,13 @@ Many overlays in one request: the way a new environment is reviewed, where
 every network and market the first import wrote needs its decisions at once.
 A first bring-up sends the checked-in seed,
 [`c3-api/registry/seed/production.json`](./registry/seed/README.md), as this
-body ([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#3-send-the-seed)), and
-`GET /versions/{version_id}/proposal` still answers with such a body under
-`bundle`.
+body ([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#3-send-the-seed)).
 
 Network overlays are keyed by chain id and market overlays by
 `chainId/deploymentKey`, the chain id written as a path writes it (`1`, never
-`01`), which is how the proposal's bundle writes it; each is the same
-complete document the one-scope routes take, decided the same way, and
-`reason` is stored with every audit event the request records. Up to 100
-overlays, in a body of up to 512 KiB.
+`01`); each is the same complete document the one-scope routes take, decided
+the same way, and `reason` is stored with every audit event the request
+records. Up to 100 overlays, in a body of up to 512 KiB.
 
 The request is applied all at once or not at all. Every document is parsed
 and every network and market it names is found before anything is written,
@@ -1829,48 +1826,6 @@ and is refused by a draft somebody has reviewed.
   "unreviewed": { "networks": [], "markets": [] }
 }
 ```
-
-## `GET /registry/v1/admin/versions/{version_id}/proposal`
-### `GET /registry/v1/admin/versions/{version_id}/proposal/review`
-### description:
-
-What the release serving the request proposes as the first review of a
-version: for every market the version imported that the static constants
-describe, the decisions the API already acts on, and for every network, its
-name, presentation and price exceptions. A market the constants do not
-describe is not proposed; it is listed under `needsDecision`, and stays
-switched off until it is described with the market overlay route.
-
-The proposal is for an environment's first version only. Once any version
-has been activated, the decisions live in the registry and every draft
-inherits them, so applying the constants' values over a draft would undo
-what was reviewed since: the proposal routes, `apply` included, answer
-`409` from then on, and a draft is reviewed with the overlay routes.
-
-`/proposal` answers with the proposal as data: its `digest`, what it leaves
-undecided, and under `bundle` the body `PUT /versions/{version_id}/overlays`
-takes. `/proposal/review` answers with the same proposal as a document to read
-(`text/markdown`), naming the digest to apply it by. Neither changes anything.
-
-```json
-{
-  "versionId": "d9698ddd-ab86-46bc-a412-c71df7d20414",
-  "digest": "3f9a1c0e7b2d4a61",
-  "needsDecision": [],
-  "bundle": { "reason": "bootstrap: derived from the static constants against Compound-Foundation/comet@a34d9b571c83", "networks": { "...": "..." }, "markets": { "...": "..." } }
-}
-```
-
-## `POST /registry/v1/admin/versions/{version_id}/proposal/apply`
-### description:
-
-Applies the proposal by its digest: `{"reason": "...", "digest": "<16 hex>"}`.
-The proposal is built again and written only if it still has that digest, so
-what is applied is exactly what was read; one that changed since — another
-release, another version — answers `409` with its current digest in
-`details`. The write is the one `PUT /versions/{version_id}/overlays` makes,
-all of it or none, and answers the same way, with the `digest` beside it.
-Only an importing version is writable.
 
 ## `GET /registry/v1/admin/versions/{version_id}/changes`
 ### description:
