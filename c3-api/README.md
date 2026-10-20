@@ -323,10 +323,12 @@ unreviewed markets could only end invalid.
 There are ten networks and twenty-nine markets to review, and every value is
 one this API already acts on: the static constants name the markets and their
 feeds, the branches the registry replaced decided their capabilities, quote
-units and price exceptions, and the frontend lists them under its labels. The
-Worker proposes those decisions for the markets the candidate imported
-(`src/registry/bootstrap.ts`), so the review is reading a document rather
-than typing, and nothing runs outside the environment:
+units and price exceptions, and the frontend lists them under its labels.
+Those decisions are checked in as the body of `PUT /versions/{id}/overlays`,
+[`registry/seed/production.json`](./registry/seed/README.md), with each
+market's Comet beside it in `production.comets.json`. The operator checks
+that the candidate holds the seed's markets and sends the file, and nothing
+runs outside the environment but the requests:
 
 ```sh
 # 1. import the whole source in one request. The run ends "heldForReview";
@@ -334,13 +336,15 @@ than typing, and nothing runs outside the environment:
 curl -X POST .../registry/v1/admin/sync -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{}'
 
-# 2. read what this release proposes for that candidate, and its digest
-curl .../registry/v1/admin/versions/$VERSION/proposal/review -H "Authorization: Bearer $TOKEN"
+# 2. check that the candidate holds every market of the seed, under the Comet
+#    production.comets.json names for it
+curl .../registry/v1/admin/versions/$VERSION/changes -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.markets.added[] | "\(.scope) \(.market.contracts.comet)"'
 
-# 3. apply exactly what was read, by its digest: every decision, one transaction
-curl -X POST .../registry/v1/admin/versions/$VERSION/proposal/apply \
+# 3. send the seed: every decision, one transaction
+curl -X PUT .../registry/v1/admin/versions/$VERSION/overlays \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"reason": "first registry version", "digest": "<digest>"}'
+  --data-binary @registry/seed/production.json
 
 # 4. validate, then activate. The first activation expects nothing to be on;
 #    a later one names the version that is
@@ -355,33 +359,38 @@ which is what the steady state needs. Either way each root is attempted at
 most once per request, so a node provider that is briefly down costs one
 attempt of each root, not all five.
 
-The proposal is built from the candidate's own markets by the release serving
-the request, so it cannot describe another set of markets than the one it is
-applied to, and a release deployed to stage and then to production proposes
-the same decisions for the same commit. `apply` builds it again and writes it
-only if it still has the digest the operator read; the write goes through the
-same route as `PUT /versions/{id}/overlays` — every document parsed and every
-row it names found before anything is written, and one D1 transaction.
-Applying the same digest again is safe: it answers `changed: false`.
+[The file's README](./registry/seed/README.md) says where each kind of value
+came from, and why a value departs from its rule where one does. The quote
+units were read from the chain rather than the constants, which are wrong
+about them in places; labels and presentation data — asset display overrides
+and unwrapped collateral pairs — existed nowhere but the frontend, and were
+copied once from it at a named commit. Nothing in this API reads the
+presentation, but the first version already serves it, and the frontend stops
+being where it is decided.
 
-The review puts every proposed decision in a table — names, status, the
-default market, creation blocks, capabilities, quote units, USD and reward
-feeds, price exceptions, presentation — says where each kind of value came
-from, and lists apart what no source could answer. A market the constants do
-not describe is not proposed at all: it stays switched off until it is
-described with the market overlay route. The quote units are read from the
-chain rather than the constants, which are wrong about them in places.
-Labels and presentation data — asset display overrides and unwrapped
-collateral pairs — exist nowhere but the frontend, so they are copied once
-from it at a named commit. Nothing in this API reads the presentation, but
-the first version already serves it, and the frontend stops being where it is
-decided.
+Each document is complete, in the form the registry stores it, which is how
+`GET …/overlay` answers. The `PUT` writes all of them or none, in one D1
+transaction, after every document is parsed, every network and market it
+names is found, and the chain has confirmed what only the chain can: each
+creation block, by the Comet's code at that block and none at the block
+before, and the scale of each feed the candidate does not know yet. A market
+of the candidate the file does not describe stays switched off and
+unreviewed, and is described with the market overlay route; a market of the
+file the candidate does not hold refuses the whole file, which step 2 shows
+first. `expectedDigests` is `null` for every document, so the file is taken
+only by a candidate nobody has reviewed: sent again, or to a draft that
+inherited decisions, it is refused with `409`.
 
-A correction belongs in the tables of `src/registry/bootstrap.ts`: the release
-that carries it proposes it. Once a version is active, the registry is where
-the decisions live, and a later version inherits them: the proposal routes
-answer `409` from then on, because applying the constants' values to a draft
-would undo what was reviewed since.
+A correction to the file is a pull request, which
+`tests/lib/registry/seed.test.ts` holds to what the route and validation
+would refuse; [the preflight](./REGISTRY_RUNBOOK.md#the-preflight) holds it
+against the real chain before an environment depends on it. Once a version is
+active, the registry is where the decisions live, and a later version
+inherits them: the file is not sent again, and a decision is changed with the
+overlay routes. The proposal routes — `GET …/proposal`, `…/proposal/review`
+and `POST …/proposal/apply` — still answer, built from the static constants
+by `src/registry/bootstrap.ts`, which the file was frozen from, until the next
+change removes them with it; a bring-up sends the file.
 
 ### A market the source adds later
 

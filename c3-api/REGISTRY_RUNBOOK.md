@@ -37,9 +37,16 @@ change at all, and after it, one command switches back.
   npx wrangler secret put COMET_GITHUB_TOKEN --env production
   ```
 
+- [The preflight](#the-preflight) has passed on the commit being deployed,
+  and in an environment that already serves users, the window it measured is
+  announced (the note below).
+
 Nothing runs on your machine but the requests: the Worker being deployed
-imports the source, proposes the decisions and applies them. For the terminal
-commands:
+imports the source, and checks the decisions you send it against the source
+and the chain. Those decisions are the seed of the commit being deployed,
+[`c3-api/registry/seed/production.json`](./registry/seed/README.md), so run
+the terminal commands from the root of a checkout of that commit, with `jq`
+installed, after:
 
 ```sh
 export API=https://v3-api-stage.compound.xyz        # the environment you work on
@@ -62,10 +69,21 @@ then the headers, then the body. To use them:
 
 > **An environment that already serves users.** The market, account and
 > history routes read their markets from the registry and answer `503` while
-> no version is active. Do not let the release that reads from the registry go
-> live in such an environment before a version is active there. Once it is
-> live, a client that pages transaction history with a cursor it was given
-> before is told to start over, once (`409 REGISTRY_VERSION_CHANGED`).
+> no version is active, and the release that reads from the registry serves
+> users from the moment it is deployed. So the deploy opens a window of
+> `503`s, which step 5 closes. Keep it short and expected:
+>
+> 1. Run [the preflight](#the-preflight) on the commit being deployed, and
+>    time it. It is the same steps against the real chain, so it finds a
+>    block or a feed the seed has wrong before anyone waits on it, and says
+>    how long the window will be.
+> 2. Announce the window beforehand — when it opens and how long it lasts —
+>    to the frontend developer and to whoever answers users.
+> 3. Deploy, and run steps 1 to 6 below straight away, one after another.
+>
+> Once a version is active, a client that pages transaction history with a
+> cursor it was given before is told to start over, once
+> (`409 REGISTRY_VERSION_CHANGED`).
 
 ### The admin token
 
@@ -131,6 +149,66 @@ after it. The answer's message says which; run the command again without
 the secret is updated, without a deploy, so replace it in the password
 manager first and tell whoever else holds it. There is one token per
 environment: a stage token is not a production one.
+
+### The preflight
+
+The seed's tests check it against everything but the chain. What only the
+chain can confirm — that each creation block is the block its Comet was
+deployed in, and the decimals of each feed — step 3 of the bring-up checks as
+it sends the file, and one block the chain contradicts refuses all of it. So
+before an environment depends on the file, bring a registry up with it once
+on your machine, on a database of its own, against the real chain. Nothing of
+it reaches any environment.
+
+**Set it up.** In `c3-api` of a checkout of the commit being deployed, put
+into `.dev.vars` the hash of an admin token of your own
+(`COMET_REGISTRY_ADMIN_TOKEN_HASH`, see [The admin token](#the-admin-token)),
+a `COMET_GITHUB_TOKEN`, and the `NODE_PROXY_HOST` and `NODE_PROXY_KEY` of a
+deployed node provider proxy whose providers keep archive state: the creation
+blocks are read at past blocks. The local source is the one stage and
+production import, `Compound-Foundation/comet` at `main`. Then start the
+worker on an empty database, kept apart from your usual local one:
+
+```sh
+cd c3-api
+npx wrangler d1 migrations apply APP_DB --local --persist-to .wrangler/preflight
+npx wrangler dev --local --persist-to .wrangler/preflight entrypoint.ts
+```
+
+With the proxy run on your machine instead
+([README.md](./README.md#getting-started)), leave `NODE_PROXY_HOST` and
+`NODE_PROXY_KEY` out of `.dev.vars`: a `NODE_PROXY_HOST` there overrides the
+binding ([wrangler.local-proxy.toml](./wrangler.local-proxy.toml)). Give the
+proxy, in `../node-provider-proxy/.dev.vars`, the keys of providers that keep
+archive state, and add `-c wrangler.local-proxy.toml` to both commands.
+
+**Bring it up.** In another terminal, from the root of the checkout, with
+`export API=http://localhost:8787` and your token in `TOKEN`, run steps 1 to 6
+of [the first bring-up](#bringing-an-environment-up-for-the-first-time), and
+time them.
+
+**You should see** each step answer as it says. Step 2 prints its
+`compared:` line alone, or above it only markets the source has added, in
+its second column. Step 3 answers `"changed": true`, with nothing unreviewed
+but those; to check the file it asks the node 10 `eth_blockNumber`, 58
+`eth_getCode` at past blocks — each Comet at its creation block and at the
+block before — and the decimals of up to 19 feeds. Step 4 answers
+`validated`, and step 6 serves every market, none in `error`. Then compare
+`GET $API/registry/v1/active` with develop's
+`GET /market/all-networks/all-contracts/summary`: every market develop serves
+but its test markets, under the same display name, base asset name, slug, and
+default and institutional flags.
+
+**If not.** What step 3 refuses, its table explains. Where the file is at
+fault, it needs a change ([its README](./registry/seed/README.md#changing-it))
+before any environment is brought up with it. A `503` there with
+`details.code` `CHAIN_REQUEST_FAILED` and
+"the node provider did not serve the code of 0x…", naming a Comet, is a
+provider that did not serve the Comet's code at a past block — most often one
+that does not keep the state of past blocks: route the network to one with
+archive state. To run the preflight again, stop the worker, delete
+`c3-api/.wrangler/preflight`, and start the worker again as above; delete it
+once you are done, too.
 
 ## Bringing an environment up for the first time
 
@@ -268,78 +346,117 @@ cause — most often the node provider proxy — and send this step with
 whole source, whose draft you use instead. Once it has every market, it
 closes the incomplete one.
 
-### 2. Read what the release proposes
+### 2. Check that the draft holds the seed's markets
 
 ```sh
-curl -s "$API/registry/v1/admin/versions/$V/proposal/review" -H "Authorization: Bearer $TOKEN"
+set -o pipefail
+jq -r 'to_entries[] | "\(.key) \(.value)"' c3-api/registry/seed/production.comets.json | LC_ALL=C sort > seed-markets.txt &&
+curl -sS "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" > changes.json &&
+jq -r '.markets.added[] | "\(.scope) \(.market.contracts.comet)"' changes.json | LC_ALL=C sort > draft-markets.txt &&
+LC_ALL=C comm -3 seed-markets.txt draft-markets.txt &&
+echo "compared: $(wc -l < draft-markets.txt | tr -d ' ') markets in the draft"
 ```
 
 Postman:
 
 ```http
-GET {{API}}/registry/v1/admin/versions/{{V}}/proposal/review
+GET {{API}}/registry/v1/admin/versions/{{V}}/changes
 Authorization: Bearer {{TOKEN}}
 ```
 
-**Why.** This is the human check. The Worker writes down, for the markets the
-draft imported, the decisions the API and the website already act on today —
-names, features, which feed prices what — as a document to read, with where
-each kind of value came from. It changes nothing.
+Each entry of `markets.added` is a market of the draft, with its key as
+`scope` and its Comet as `market.contracts.comet`: compare them with
+`c3-api/registry/seed/production.comets.json`.
 
-The proposal exists for this first bring-up only. Once a version has been
-switched on, the decisions live in the registry and every draft inherits
-them, so the proposal routes answer `409`: a later draft is reviewed with the
-overlay routes, as in [Describing a new market](#describing-a-new-market).
+**Why.** The seed names each market by its key, such as `1/usdc`, and its
+decisions were made for one Comet, which `production.comets.json` beside it
+names. The draft holds what the source listed at the commit it imported, and
+since the seed was written the source may have added a deployment, renamed or
+dropped one, or given a key another Comet. This compares the two before
+anything is sent. It changes nothing.
 
-**You should see** "Nothing." under **Needs a decision**, and a **Digest**
-near the top — note it for the next step. Skim the tables.
+**You should see** only `compared: 29 markets in the draft`, with no line
+above it: the draft holds every market of the seed, under the seed's Comet,
+and no other. In Postman, 29 entries under `markets.added`, each the key and
+the Comet of one line of the file.
 
-**If not.** A market listed under "Needs a decision" is one the constants do
-not describe. It is not proposed, and stays switched off; the rest can be
-applied without it, and it is described afterwards — see
-[Describing a new market](#describing-a-new-market). A value that is wrong is
-corrected by a developer in the tables of `src/registry/bootstrap.ts`, and
-the release that carries the correction proposes it.
+**If not.**
 
-The same proposal as data, with the digest and the documents it would write,
-is `GET {{API}}/registry/v1/admin/versions/{{V}}/proposal`.
+- A line at the start of the row — `comm`'s first column — is a market of the
+  seed that the draft does not hold under that Comet: the source dropped or
+  renamed it, or gave its key another Comet, and then a second-column line
+  names the key with the Comet the draft holds. Stop: the draft refuses the
+  seed whole, with `404` for a key it lacks and `422` for a key that names
+  another Comet. The file needs a change, by a pull request
+  ([its README](./registry/seed/README.md#changing-it)); nothing in the
+  Worker reads it, so the change needs no release of its own. While users
+  wait, it is quicker to cut the file down to what the draft holds under the
+  seed's Comets ([its README](./registry/seed/README.md#cutting-it-down)) and
+  describe the rest afterwards.
+- A line indented into the second column, alone, is a market the source lists
+  and the seed does not describe. The seed leaves it switched off and
+  unreviewed, the draft can be switched on without it, and it is described
+  afterwards — see [Describing a new market](#describing-a-new-market). Go on.
+- `jq: error … Cannot iterate over null` means the request was refused, and
+  nothing was compared: `jq .error changes.json` says why
+  ([When something goes wrong](#when-something-goes-wrong)).
+- A `curl: (N) …` line means the request did not reach the API — `API`
+  unset, or the host down or out of reach — and nothing was compared. Set
+  `API`, or wait for the host, and run the block again.
 
-### 3. Apply it
+### 3. Send the seed
 
 ```sh
-curl -s -X POST "$API/registry/v1/admin/versions/$V/proposal/apply" \
+curl -s -X PUT "$API/registry/v1/admin/versions/$V/overlays" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"reason": "first registry version", "digest": "<digest from the review>"}' | jq '.error // {changed, unreviewed}'
+  --data-binary @c3-api/registry/seed/production.json | jq '.error // {changed, unreviewed}'
 ```
 
 Postman:
 
 ```http
-POST {{API}}/registry/v1/admin/versions/{{V}}/proposal/apply
+PUT {{API}}/registry/v1/admin/versions/{{V}}/overlays
 Authorization: Bearer {{TOKEN}}
 Content-Type: application/json
 
-{"reason": "first registry version", "digest": "<digest from the review>"}
+<the file c3-api/registry/seed/production.json>
 ```
 
-**Why.** The Worker builds the proposal again and writes it into the draft
-only if it is still the one with that digest — exactly what you read. It is
-all or nothing: if any part is refused, nothing is written. Users still see
-no change.
+Send the file as it is: **Body → binary**, and select it. Set the
+`Content-Type: application/json` header yourself.
+
+**Why.** The file holds every decision about the seed's networks and markets,
+each the whole document the overlay routes take, and the draft takes all of
+them in one request — or, if any part is refused, none. Before anything is
+written, the Worker holds the file against the chain: each creation block has
+to be the block its Comet was deployed in, and it reads the decimals of every
+feed the file names that the draft does not know yet. Users still see no
+change.
 
 **You should see** `"changed": true`, and `unreviewed` empty — or holding only
-the markets listed under "Needs a decision".
+the markets of step 2's second column, and under `networks` a chain whose
+every market is among them.
 
-**If not.** A `409` naming another digest means the proposal changed since you
-read it — another release was deployed, or another draft is being read. Read
-the review again. Applying the same digest twice is safe: it answers
-`"changed": false`.
+**If not.** Whatever the answer, nothing was written, so the file can be sent
+again once the cause is fixed.
 
-A `422` with `details.code` `OVERLAY_CREATION_BLOCK_WRONG` names a market
-whose creation block, as the release proposes it, is not the block its Comet
-was deployed in, and says how it is wrong; nothing is written. A developer
-corrects it in the Comet's constants (`lib/well-known/contracts`), and the
-release that carries the correction proposes it.
+| What you see | What it means | What to do |
+|---|---|---|
+| `404`, "chain …, …/… not imported into this registry version yet" | The draft lacks networks and markets the file names; the message names every one | Do as step 2 says for a line in its first column |
+| `404`, "no registry version with that id" | `V` is not the draft's id | Take it from step 1 |
+| `409`, "the overlay of network …, market … is no longer the one this was decided against", with `details.current` naming each | A scope the file names holds a review. Either the file is in already — sent before, by a request whose answer you did not see — or part of the draft was reviewed before the file came | Read the draft: `GET …/versions/$V`. If its `unreviewed` lists no more than step 2's second column, the file is in: go on to step 4. If it lists more, the rest was reviewed by hand, or handed down from an earlier attempt of this commit (step 4) or from a version that is on, when this is no first bring-up: describe what is left with the overlay routes ([Describing a new market](#describing-a-new-market)) |
+| `409`, "… registry version cannot be changed" | The draft is no longer open: it was validated, or replaced by a newer attempt of its commit | As the `409` row on writing overlays in [When something goes wrong](#when-something-goes-wrong) says |
+| `409`, "the registry version changed while this overlay was being written" | Something else wrote to the draft in the same moment | Send it again |
+| `409`, "… has no reward asset on chain, so it cannot carry a reward price feed" | The file gives a reward feed to a market whose rewards contract names no reward token | The file needs a change: that market's rewards off and no reward feed, as `1/institutional_usdc` has ([its README](./registry/seed/README.md#changing-it)) |
+| `422`, `details.code` `OVERLAY_CREATION_BLOCK_WRONG`, "markets.….creationBlock … is before the Comet … was deployed", "is after" it, or "is past the latest block" | The file's block for that market is not the block its Comet was deployed in, or the key names another Comet than the one the file was made for (step 2) | If step 2 showed the key under another Comet, the file's block is right for the Comet the file was made for: take the key's document and its expectation out ([its README](./registry/seed/README.md#cutting-it-down)), and describe the market for its new Comet after the bring-up ([Describing a new market](#describing-a-new-market)). Never give the old document the new Comet's block: its other decisions were made for the old one. Otherwise the file needs the block the chain's explorer gives as the "Contract Creation" of the Comet `production.comets.json` names ([its README](./registry/seed/README.md#changing-it)). [The preflight](#the-preflight) finds this before an environment depends on it |
+| `422`, `details.code` `OVERLAY_FEED_UNREADABLE` | A feed the file names does not answer its decimals on that chain: it reverts, or nothing is deployed at that address there | The file needs the right feed ([its README](./registry/seed/README.md#changing-it)) |
+| `422`, `details.code` `CHAIN_RESPONSE_INVALID`, "the code of 0x… returned no data", "eth_blockNumber returned no data" or "… no block number" | The node provider answered the creation-block check with something that is neither code nor a block number. The file is not at fault | Send it again; if it repeats, route the network to another provider |
+| `503 UPSTREAM_UNAVAILABLE`, `details.code` `CHAIN_REQUEST_FAILED` | The node provider did not answer the reads, or not in time, or did not serve one. "The node provider did not serve the code of 0x…", naming a Comet, is that Comet's code at a past block, which the creation blocks are read at: most often a provider that does not keep the state of past blocks | Send it again once the proxy answers. For a Comet's code, route the network to a provider with archive state |
+| `400`, "the request body must be JSON" | The request had no `Content-Type: application/json`, which `--data-binary` alone does not send | Send it with the header |
+| `400`, `details.code` `OVERLAY_INVALID`, naming a document of the file | The file is not the one the commit holds: a document was edited into one the overlay routes refuse | Send the file as the commit has it; its tests refuse such a file |
+| `400`, "expectedDigests names …, which this request has no overlay for" | A file cut down without its expectations: it still expects a document it left out | Cut `expectedDigests` with the documents, as [its README](./registry/seed/README.md#cutting-it-down) does |
+
+Any other answer is in [When something goes wrong](#when-something-goes-wrong).
 
 ### 4. Let the registry check the draft
 
@@ -382,9 +499,13 @@ Authorization: Bearer {{TOKEN}}
 The reasons are under `validation` in the answer.
 
 A frozen draft cannot be fixed. Once the cause is fixed, start a new attempt
-(step 1 with `{"forceNewAttempt": true, "holdForReview": true, "reason": "..."}`);
-it keeps everything already reviewed, so steps 2 and 3 only change what was
-wrong.
+(step 1 with `{"forceNewAttempt": true, "holdForReview": true, "reason": "..."}`).
+It keeps everything already reviewed, the seed's decisions with it, so the
+seed is not sent to it again — step 3 would answer `409` — and only what was
+wrong is changed, with the overlay routes as in step 5 of
+[Describing a new market](#describing-a-new-market). An attempt that imports
+a newer commit, because the source has moved on since, keeps nothing: send it
+the seed as steps 2 and 3 say.
 
 ### 5. Switch it on
 
@@ -1162,7 +1283,7 @@ whose reasons are in the draft it names.
 | `CHAIN_REQUEST_FAILED` in the import | The worker cannot reach the node provider proxy, or the proxy did not serve the calls, or did not answer them within 30 seconds. The worker's log line `registry root failed` has the status the proxy answered and its URL without the key: `HTTP 503` is no provider answering the proxy, `HTTP 401` the proxy refusing `NODE_PROXY_KEY` | Fix the proxy, its binding or its key; importing again continues where it stopped |
 | A network under `chainCheck.unreadable` in `/admin/status` | The check of the chain could not read that network, for the reason it names — most often `CHAIN_REQUEST_FAILED`, as in the row above. Nothing new is known about its markets: it raises no `chain-drift` of its own and clears none, since a drift found there before stays, with the `seenAt` of the last read that found it. The warning `registry chain not read` in the worker's log has the cause | Fix the proxy for that network. The check reads it again at the next hourly invocation, until it has read every network |
 | `chain-drift` in `/admin/status` | The chain answers a market's feed or collateral otherwise than the version on stores it | [A market that changed on chain](#a-market-that-changed-on-chain) |
-| `422`, `details.code` `OVERLAY_CREATION_BLOCK_WRONG`, writing an overlay or applying the proposal | A `creationBlock` the document changes is not the block the market's Comet was deployed in; the message says whether it is before the deployment, after it, or past the latest block. Nothing was written | Send the block the chain's explorer gives as the Comet's "Contract Creation" (step 4 of [Describing a new market](#describing-a-new-market)). From the proposal, the release's own constant is wrong: see step 3 of [the first bring-up](#bringing-an-environment-up-for-the-first-time) |
+| `422`, `details.code` `OVERLAY_CREATION_BLOCK_WRONG`, writing an overlay — the seed among them — or applying the proposal | A `creationBlock` the document changes is not the block the market's Comet was deployed in; the message says whether it is before the deployment, after it, or past the latest block. Nothing was written | Send the block the chain's explorer gives as the Comet's "Contract Creation" (step 4 of [Describing a new market](#describing-a-new-market)). From the seed, the file's block is wrong, or the key now names another Comet: see step 3 of [the first bring-up](#3-send-the-seed). From the proposal, the release's own constant is wrong, and a developer corrects it in the Comet's constants (`lib/well-known/contracts`) |
 | `401` | The token is wrong, or is the hash | Use the admin token itself |
 | `413` | The request body is larger than the route takes | Send less: a directory of overlays in several requests |
 | `429`, "too many administrative requests from this address" | More than 60 administrative requests in a minute from your address — over IPv6, from your /64 — whatever they were: every request under `/registry/v1/admin/` is counted by address before its token is checked, a wrong token or a path no route takes included, and the right token is refused too once the address has spent its budget | Wait the seconds its `Retry-After` names — a minute at most. A script in a loop, or a monitor sharing your address, is what spends it |

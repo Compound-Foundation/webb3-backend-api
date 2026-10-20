@@ -1748,7 +1748,10 @@ and `digest: null`.
 
 Many overlays in one request: the way a new environment is reviewed, where
 every network and market the first import wrote needs its decisions at once.
-`GET /versions/{version_id}/proposal` answers with exactly this body under
+A first bring-up sends the checked-in seed,
+[`c3-api/registry/seed/production.json`](./registry/seed/README.md), as this
+body ([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#3-send-the-seed)), and
+`GET /versions/{version_id}/proposal` still answers with such a body under
 `bundle`.
 
 Network overlays are keyed by chain id and market overlays by
@@ -1771,7 +1774,7 @@ written: what it decided was decided against what it read.
 
 ```json
 {
-  "reason": "bootstrap: derived from the static constants against Compound-Foundation/comet@a34d9b571c83",
+  "reason": "first registry version: c3-api/registry/seed/production.json",
   "networks": { "1": { "displayName": "Ethereum", "assetDisplayOverrides": [], "unwrappedCollateralAssets": [], "priceExceptions": [] } },
   "markets":  { "1/usdc": { "displayName": "USDC", "contractName": "cUSDCv3", "...": "..." } }
 }
@@ -1806,7 +1809,12 @@ The answer says what each document changed — the networks first, by chain
 id, then the markets in the order the request named them — and what the
 candidate still has unreviewed. A document identical to
 what is stored changes nothing and records no event, so sending the same
-directory again is safe.
+directory again is safe. A body with `expectedDigests` is not repeatable:
+once a request has written a document, its scope holds that document's digest
+rather than the one the request expected, so the same body sent again is
+refused with `409`, naming each such scope in `details.current`. That is what
+the seed's `null` for every document is for: it reviews a first draft once,
+and is refused by a draft somebody has reviewed.
 
 ```json
 {
