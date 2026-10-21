@@ -1,22 +1,22 @@
 import { BigNumber } from "@ethersproject/bignumber";
 
-import { BigFixnum } from '../../../bigfixnum';
+import { BigFixnum } from '../../../bigfixnum.js';
 
-import * as Eth from "../../../eth-constants";
-import * as Fallible from "../../../fallible/fallible";
-import * as Index from "../../../symbolic";
+import * as Eth from "../../../eth-constants.js";
+import * as Fallible from "../../../fallible/fallible.js";
+import * as Index from "../../../symbolic/index.js";
 import * as Compute from '../../../symbolic/computation.js';
-import * as Key from "../../../symbolic/key";
-import * as KnownNetwork from "../../../well-known/networks/network";
+import * as Key from "../../../symbolic/key.js";
+import * as KnownNetwork from "../../../well-known/networks/network.js";
 
-import { Comet, StandaloneContract } from "../../../well-known/contracts/types";
+import { Comet, StandaloneContract } from "../../../well-known/contracts/types.js";
 
-import type { Utilization } from '../utilization';
+import type { Utilization } from '../utilization.js';
 
-import type { BorrowKink } from './borrow-kink';
-import type { BorrowPerSecondInterestRateBase } from './borrow-per-second-interest-rate-base';
-import type { BorrowPerSecondInterestRateSlopeLow } from './borrow-per-second-interest-rate-slope-low';
-import type { BorrowPerSecondInterestRateSlopeHigh } from './borrow-per-second-interest-rate-slope-high';
+import type { BorrowKink } from './borrow-kink.js';
+import type { BorrowPerSecondInterestRateBase } from './borrow-per-second-interest-rate-base.js';
+import type { BorrowPerSecondInterestRateSlopeLow } from './borrow-per-second-interest-rate-slope-low.js';
+import type { BorrowPerSecondInterestRateSlopeHigh } from './borrow-per-second-interest-rate-slope-high.js';
 
 type BorrowRatePerSecond = Compute.Spec<{
   name: 'borrowRatePerSecond';
