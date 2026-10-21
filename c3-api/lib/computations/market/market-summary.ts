@@ -57,7 +57,7 @@ type MarketSummary = Compute.Spec<{
 
 const { implement, pipe } = Compute.Functor<MarketSummary>({});
 const marketSummary = implement({
-  version: 5,
+  version: 6,
   /*
    * validate that the block requested does not predate the market
    * contract creation block.
