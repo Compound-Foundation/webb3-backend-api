@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 
 import type { RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
-import { marketKey, parseMarketKey } from '../../lib/model/comet-registry.js';
+import { marketKey } from '../../lib/model/comet-registry.js';
 
 /*
  * The checked-in decisions of an environment's first registry version
@@ -52,19 +52,5 @@ function bodyFor(snapshot: Pick<RegistrySnapshotV1, 'networks'>, seed: SeedBody 
   };
 }
 
-// the same, in the shape replaceOverlays takes
-function seedFor(snapshot: Pick<RegistrySnapshotV1, 'networks'>, seed: SeedBody = readSeed()) {
-  const body     = bodyFor(snapshot, seed);
-  const expected = (key: string) => body.expectedDigests === undefined ? {} : { expectedDigest: body.expectedDigests[key] ?? null };
-  return {
-    reason:   body.reason,
-    networks: Object.entries(body.networks).map(([ key, overlay ]) => ({ chainId: Number(key), overlay, ...expected(key) })),
-    markets:  Object.entries(body.markets).map(([ key, overlay ]) => {
-      const { chainId, deploymentKey } = parseMarketKey(key)!;
-      return { chainId: Number(chainId), deploymentKey, overlay, ...expected(key) };
-    }),
-  };
-}
-
 export type { SeedBody };
-export { bodyFor, readSeed, readSeedComets, readSeedText, seedFor };
+export { bodyFor, readSeed, readSeedComets, readSeedText };

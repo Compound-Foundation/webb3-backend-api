@@ -531,4 +531,4 @@ async function routeAdmin(
   }
 }
 
-export { routeAdmin, syncAnswer, syncFailure };
+export { overlayDocuments, routeAdmin, syncAnswer, syncFailure };

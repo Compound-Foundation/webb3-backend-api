@@ -18,11 +18,9 @@ import {
   decodeFunctionDataFromSignature,
   describeContractCallForHumans,
   getNetworkIfCrossChain,
-  lookupInWellKnown,
   withRegistryContracts,
 } from '../../lib/well-known/contracts/utils.js';
 import type { Contract, WellKnownContractsByNetworkAddress } from '../../lib/well-known/contracts/utils.js';
-import { isAddress } from '../../lib/model/comet-registry.js';
 import { defaultAbiCoder } from '@ethersproject/abi';
 
 import type * as Type from '../../lib/type-utilities.js'
@@ -34,61 +32,6 @@ const knownGovernanceContracts = (network: Extract<KnownNetwork.Name, `ethereum-
   Eth.wellKnownContractsByNetwork[network]['GovernorBravo']['default'],
   Eth.wellKnownContractsByNetwork[network]['GovernorCharlie']['default'],
 ];
-
-type Action = governanceModel.proposal.Proposal['actions'][number];
-
-/*
- * The addresses each action names that the constants do not know: its target
- * and its arguments.
- *
- * Governance decodes against the static constants, the protocol this API is
- * built against, which name no market of a mainnet: every market is the
- * registry's to name. A market is as often an argument as the target — a
- * token approved to it, COMP sent to it, an admin handed to it — so an
- * action naming one either way is described again with the markets of the
- * active version merged in.
- */
-function unknownAddresses(
-  proposals: governanceModel.proposal.Proposal[],
-  network: KnownNetwork.Name,
-): Map<Action, Eth.Address[]> {
-  const unknown = new Map<Action, Eth.Address[]>();
-  for (const proposal of proposals) {
-    for (const action of proposal.actions) {
-      const addresses = [ action.target, ...argumentAddresses(action) ].filter(address => (
-        Fallible.isFailure(lookupInWellKnown({ network, address }, Eth.wellKnownContractsByNetwork))
-      ));
-      if (addresses.length > 0) {
-        unknown.set(action, addresses);
-      }
-    }
-  }
-  return unknown;
-}
-
-/*
- * The addresses among an action's arguments, decoded as its description
- * decodes them. Every action of the page is read here, so one this cannot
- * decode names nothing, rather than failing the page.
- */
-function argumentAddresses(action: Action): Eth.Address[] {
-  let decoded;
-  try {
-    decoded = decodeFunctionDataFromSignature(action.signature, action.data);
-  } catch {
-    return [];
-  }
-  const found: Eth.Address[] = [];
-  const walk = (value: unknown): void => {
-    if (isAddress(value)) {
-      found.push(value);
-    } else if (Array.isArray(value)) {
-      value.forEach(walk);
-    }
-  };
-  walk(decoded === null ? [] : [ ...decoded.functionValues ]);
-  return found;
-}
 
 /*
  * The contracts governance names, with the markets the version holds but
@@ -112,77 +55,25 @@ function withUnservedMarkets(
 }
 
 /*
- * An action that carries further actions to another chain. Its target is a
- * bridge the constants know, but what it carries configures contracts on that
- * chain, which may be markets only the registry describes; its description
- * says it bridged, because the constants decoded the bridge.
- */
-function isBridged(action: Action): boolean {
-  return action.title.startsWith('Bridge wrapped actions');
-}
-
-/*
- * The protocol's own contracts a proposal configures a market through. Their
- * addresses are static and the constants name them, but the market they act
- * on is an argument of the call — a Comet only the registry names — so an
- * action on one of them is described again as well.
+ * Describes every action of the page again, against the constants with the
+ * markets of the active version merged in: those it serves, with their base
+ * and reward tokens, and those it holds without serving them
+ * (Catalog.unservedMarkets). The constants name no market, and an action
+ * can name one anywhere — as its target, as an argument, or in what it
+ * bridges to another chain — so none is singled out: telling whether one
+ * does costs about what describing it does. A Comet the version does not
+ * hold reads as its address.
  *
- * They are named as the constants name them: the proxy admin, the Solidity
- * CometProxyAdmin, is `CometAdmin` on every network.
- */
-const MARKET_ADMINISTRATION = [ 'Configurator', 'CometAdmin', 'CometRewards', 'CometFactory' ];
-
-function administersMarkets(network: KnownNetwork.Name, address: Eth.Address): boolean {
-  const contracts = Eth.wellKnownContractsByNetwork[network] as Record<string, Record<string, unknown>>;
-  return MARKET_ADMINISTRATION.some(name => contracts[name]?.[address.toLowerCase()] !== undefined);
-}
-
-/*
- * The bridges that carry tokens to an address on another chain, often a
- * market seeded with reserves. The recipient is named on that chain, so a
- * mainnet lookup cannot tell whether the version names it.
- */
-const TOKEN_BRIDGES = [ 'PolygonBridge', 'ArbitrumGatewayRouter', 'OptimismL1StandardBridge', 'BaseL1StandardBridge' ];
-
-function bridgesTokens(network: KnownNetwork.Name, address: Eth.Address): boolean {
-  const contracts = Eth.wellKnownContractsByNetwork[network] as Record<string, Record<string, unknown>>;
-  return TOKEN_BRIDGES.some(name => contracts[name]?.[address.toLowerCase()] !== undefined);
-}
-
-/*
- * Describes again, against the constants with the markets of the active
- * version merged in, the actions the registry can say more about: one whose
- * target or argument the constants do not know and the version names, one
- * that bridges actions to another chain, whose inner targets may be markets,
- * one that bridges tokens to an address on another chain, which may be a
- * market, and a call to a contract that administers markets.
- *
- * The version names the markets it serves, with their base and reward
- * tokens, and the markets it holds without serving them
- * (Catalog.unservedMarkets). Any other Comet reads as its address, and so
- * does every market while the registry cannot be read, since the constants
- * name none; only a description the list cached while they still did keeps
- * their name.
- *
- * Loading the registry is deliberately last: a page whose actions name only
- * addresses the constants know, and neither bridge nor call a contract that
- * administers markets, never reads D1 at all, though few pages are like
- * that. An address neither source knows — a grant recipient, another
- * protocol — would read the same described again, so its action is not. If
- * the registry cannot be loaded, the actions keep the description they
- * already have rather than failing the whole proposal list.
+ * A page with no action never reads the registry. If the registry cannot be
+ * loaded, the actions keep the description they already have rather than
+ * failing the whole proposal list.
  */
 async function describeRegistryTargets(
   proposals: governanceModel.proposal.Proposal[],
   network: Extract<KnownNetwork.Name, `ethereum-${'mainnet'}`>,
   { registry, debug }: Pick<GovernanceRouteData, 'registry'> & { debug: Context['debug'] },
 ): Promise<void> {
-  const unknown = unknownAddresses(proposals, network);
-  const again   = (action: Action) => (
-    isBridged(action) || administersMarkets(network, action.target) || bridgesTokens(network, action.target)
-  );
-  const more = proposals.some(proposal => proposal.actions.some(again));
-  if (unknown.size === 0 && !more) {
+  if (proposals.every(proposal => proposal.actions.length === 0)) {
     return;
   }
 
@@ -190,7 +81,7 @@ async function describeRegistryTargets(
   try {
     catalog = await registry.load();
   } catch (error) {
-    debug?.error(`proposal targets not described from the registry`, { error });
+    debug?.error(`proposal actions not described from the registry`, { error });
     return;
   }
 
@@ -198,14 +89,8 @@ async function describeRegistryTargets(
     withRegistryContracts(Eth.wellKnownContractsByNetwork, catalog.markets()),
     catalog.unservedMarkets(),
   );
-  // an address the constants do not know, which the version names
-  const named = (address: Eth.Address) => !Fallible.isFailure(lookupInWellKnown({ network, address }, contracts));
-
   for (const proposal of proposals) {
     for (const action of proposal.actions) {
-      if (!again(action) && !(unknown.get(action) ?? []).some(named)) {
-        continue;
-      }
       const redescribed = describeContractCallForHumans(
         contractForLocation({ network, address: action.target }, contracts),
         action.signature,

@@ -22,7 +22,6 @@ import * as proposalModel from '../../../../lib/model/governance/proposal.js';
 import '../../../../shim/node-self.js';
 
 import { setupTestEnvVars } from '../../../util/setupTestEnvVars.js';
-import { readSeed, readSeedComets } from '../../../util/registry-seed.js';
 import * as mock from '../../../util/mock/mock.js';
 
 /*
@@ -56,43 +55,19 @@ testDebug.log({ flags });
 /*
  * The dump was made while the constants named the Comets, and the proposal
  * computation now leaves each as its address: governance names markets from
- * the registry once the computation is done (describeRegistryTargets). So the
- * actions are compared with every Comet written one way, whether the
- * constants linked it under the name the seed gives it or under its address,
- * or the computation left its address bare, in whatever case. Anything else
- * still has to match as it is: a Comet linked under another name, another
- * address, the case of any other address.
+ * the registry once the computation is done (describeRegistryTargets).
+ * cUSDCv3 is the only Comet up to the test block, so the expectation is read
+ * with every link to it written as the address the computation leaves,
+ * whatever the link was named, and the computation's actions are compared as
+ * they are. Pinning the expectation and regenerating it removes this; see
+ * "How to Update E2E test dumps" in the README.
  */
-const cometNames = (() => {
-  const seed  = readSeed();
-  // by the Comet's address, lowercase
-  const names = new Map<string, Set<string>>();
-  for (const [ key, comet ] of Object.entries(readSeedComets())) {
-    const { contractName } = seed.markets[key] as { contractName: string | null };
-    names.set(comet, new Set([ ...(names.get(comet) ?? []), ...(contractName === null ? [] : [ contractName ]) ]));
-  }
-  return names;
-})();
+const CUSDCV3      = '0xc3d688B66703497DAA19211EEdff47f25384cdc3';
+const CUSDCV3_LINK = /\[[^\]]*\]\(https:\/\/etherscan\.io\/address\/0xc3d688b66703497daa19211eedff47f25384cdc3\)/gi;
 
-function withCometsAsAddresses(title: string): string {
-  return title.replace(
-    /\[([^\]]*)\]\(https:\/\/[^/)]+\/address\/(0x[0-9a-fA-F]{40})\)|0x[0-9a-fA-F]{40}/g,
-    (found: string, name: string | undefined, linked: string | undefined) => {
-      const address = (linked ?? found).toLowerCase();
-      const names   = cometNames.get(address);
-      const comet   = names !== undefined
-        && (linked === undefined || names.has(name!) || name!.toLowerCase() === address);
-      return comet ? `<Comet ${address}>` : found;
-    },
-  );
-}
-
-function comparableActions(actions: proposalModel.Proposal['actions']) {
-  return actions.map(action => ({
-    ...action,
-    title:     withCometsAsAddresses(action.title),
-    subtitles: action.subtitles.map(withCometsAsAddresses),
-  }));
+function asRecordedNow(actions: proposalModel.Proposal['actions']): proposalModel.Proposal['actions'] {
+  const recorded = (title: string) => title.replace(CUSDCV3_LINK, CUSDCV3);
+  return actions.map(action => ({ ...action, title: recorded(action.title), subtitles: action.subtitles.map(recorded) }));
 }
 
 t.test(`allProposals alpha + bravo @ block=${testBlock.number}`, async t => {
@@ -209,7 +184,7 @@ t.test(`allProposals alpha + bravo @ block=${testBlock.number}`, async t => {
     t.equal(proposal.description, expected.description,   `${prefix}.description`);
     // deeply same: states, actions, proposer, voteEntries
     t.strictSame(proposal.states,      expected.states,      `${prefix}.states`);
-    t.strictSame(comparableActions(proposal.actions), comparableActions(expected.actions), `${prefix}.actions`);
+    t.strictSame(proposal.actions,     asRecordedNow(expected.actions), `${prefix}.actions`);
     t.strictSame(proposal.proposer,    expected.proposer,    `${prefix}.proposer`);
     t.strictSame(proposal.voteEntries, expected.voteEntries, `${prefix}.voteEntries`);
   }

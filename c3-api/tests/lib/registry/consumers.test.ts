@@ -17,11 +17,17 @@ import type * as market from '../../../lib/computations/market.js';
 import type * as rewards from '../../../lib/computations/rewards.js';
 import { lookupInWellKnown, withRegistryContracts } from '../../../lib/well-known/contracts/utils.js';
 import { Comet } from '../../../lib/well-known/contracts/types.js';
+import * as Constant from '../../../lib/constants.js';
+import * as Compute from '../../../lib/symbolic/computation.js';
+import * as Evaluator from '../../../lib/symbolic/evaluator.js';
+import { MemoryCache } from '../../../lib/symbolic/cache.js';
+import * as evm from '../../../lib/computations/evm.js';
+import * as governance from '../../../lib/computations/governance.js';
 
 import { catalogOf } from '../../../src/registry/catalog.js';
 import type { Catalog } from '../../../src/registry/catalog.js';
-import { describeRegistryTargets } from '../../../src/governance-handlers/proposals.js';
-import { getProposalVoteReceipts } from '../../../src/governance-handlers/proposal-vote-receipts.js';
+import { describeRegistryTargets, knownGovernanceContracts } from '../../../src/governance-handlers/proposals.js';
+import { getProposalVoteReceipts, type VoteReceiptsResponseData } from '../../../src/governance-handlers/proposal-vote-receipts.js';
 import { describeContractCallForHumans, contractForLocation } from '../../../lib/well-known/contracts/utils.js';
 import { defaultAbiCoder } from '@ethersproject/abi';
 import { rewardGroups } from '../../../src/account-handlers/rewards.js';
@@ -32,6 +38,9 @@ import {
 } from '../../../src/transaction-history-handler/transaction-history-items-handler.js';
 
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
+import { fakeNode } from '../../util/fake-node.js';
+
+import '../../../shim/node-self.js';
 
 /*
  * What the backend consumers now read out of one registry version instead of
@@ -206,8 +215,6 @@ t.test('a computation takes only a Comet the registry materialized', async t => 
     base:    usdc.base,
     rewards: usdc.rewards!,
   });
-  t.ok(Comet.is(constant), 'a Comet as the constants type one');
-  t.notOk('registry' in constant, 'with no description of its market');
   // @ts-expect-error the price of a collateral is read at the scale the version states
   marketOf<comet.AssetPrice>(constant);
   // @ts-expect-error the base asset's USD price is read through the feed the version's quote calls for
@@ -547,14 +554,22 @@ function describedByConstants(target: string, signature: string, data: string) {
   return { target, signature, data, value: BigFixnum.from({ value: 0 }), title: described.title, subtitles: described.subtitles ?? [] };
 }
 
+// the arguments of a transfer or an approval
+function amountTo(to: string, amount: string): string {
+  return defaultAbiCoder.encode([ 'address', 'uint256' ], [ to, amount ]);
+}
+
+// the registry of one request, which counts the times it is read
+function countingRegistry(load: () => Promise<Catalog>): { load: () => Promise<Catalog>, reads: number } {
+  const registry = { reads: 0, load: () => { registry.reads += 1; return load(); } };
+  return registry;
+}
+
 // describes a page of such actions again, and says how many times the registry was read for it
 async function readsDescribing(actions: ReturnType<typeof describedByConstants>[], load: () => Promise<Catalog>): Promise<number> {
-  let reads = 0;
-  await describeRegistryTargets([ { actions } ] as never, MAINNET, {
-    registry: { load: () => { reads += 1; return load(); } } as never,
-    debug:    undefined as never,
-  });
-  return reads;
+  const registry = countingRegistry(load);
+  await describeRegistryTargets([ { actions } ] as never, MAINNET, { registry: registry as never, debug: undefined as never });
+  return registry.reads;
 }
 
 /*
@@ -566,7 +581,6 @@ async function readsDescribing(actions: ReturnType<typeof describedByConstants>[
 t.test('an action whose arguments name a market names it from the version', async t => {
   const cUSDCv3  = catalog.marketAt(MAINNET, USDC)!.comet.address;
   const link     = `[cUSDCv3](https://etherscan.io/address/${cUSDCv3})`;
-  const amountTo = (to: string, amount: string) => defaultAbiCoder.encode([ 'address', 'uint256' ], [ to, amount ]);
 
   const approve  = describedByConstants(USDC_TOKEN, 'approve(address,uint256)', amountTo(USDC, '1000000'));
   const transfer = describedByConstants(COMP, 'transfer(address,uint256)', amountTo(USDC, '1000000000000000000'));
@@ -579,14 +593,34 @@ t.test('an action whose arguments name a market names it from the version', asyn
   t.equal(transfer.title, `Transfer 1.00 [COMP](https://etherscan.io/address/${COMP}) to ${link}`, 'and so does COMP sent to it');
   t.ok(handover.title.endsWith(`.setPendingAdmin("${link}")`), 'and an admin handed to it');
 
-  const known = describedByConstants(COMP, 'transfer(address,uint256)', amountTo(TIMELOCK, '1'));
-  t.equal(await readsDescribing([ known ], async () => catalog), 0,
-    'an action whose addresses the constants all know never reads the registry');
-
   const grant  = describedByConstants(COMP, 'transfer(address,uint256)', amountTo(RECIPIENT, '1'));
   const before = grant.title;
-  t.equal(await readsDescribing([ grant ], async () => catalog), 1, 'one naming an address they do not know reads it');
-  t.equal(grant.title, before, 'and is left as it was where the version names nothing either');
+  await readsDescribing([ grant ], async () => catalog);
+  t.equal(grant.title, before, 'one naming an address the version does not name either is left as it was');
+});
+
+/*
+ * The proposal list caches each description as the build that computed it
+ * gave it, and every action of the page is described again by the build
+ * answering, even one whose addresses the constants all know.
+ */
+t.test('every action reads as this build describes it, whatever the list cached', async t => {
+  const sent  = () => describedByConstants(COMP, 'transfer(address,uint256)', amountTo(TIMELOCK, '1'));
+  const stale = { ...sent(), title: 'as an older build described it' };
+
+  t.equal(await readsDescribing([ stale ], async () => catalog), 1,
+    'an action whose addresses the constants all know reads the registry too');
+  t.equal(stale.title, sent().title, 'and reads as this build describes it');
+});
+
+/*
+ * A page past the last, or of ids that match no proposal, has no action to
+ * describe.
+ */
+t.test('a page with no action never reads the registry', async t => {
+  const registry = countingRegistry(async () => catalog);
+  await describeRegistryTargets([], MAINNET, { registry: registry as never, debug: undefined as never });
+  t.equal(registry.reads, 0);
 });
 
 /*
@@ -598,8 +632,7 @@ t.test('an action whose arguments name a market names it from the version', asyn
  */
 t.test('a market the version holds without serving it is named all the same', async t => {
   const cWBTCv3 = catalog.marketAt(MAINNET, WBTC)!.comet.address;
-  const sentTo  = () => describedByConstants(COMP, 'transfer(address,uint256)',
-    defaultAbiCoder.encode([ 'address', 'uint256' ], [ WBTC, '1000000000000000000' ]));
+  const sentTo  = () => describedByConstants(COMP, 'transfer(address,uint256)', amountTo(WBTC, '1000000000000000000'));
   const titleFrom = async (load: () => Promise<Catalog>) => {
     const action = sentTo();
     await readsDescribing([ action ], load);
@@ -630,63 +663,96 @@ t.test('a market the version holds without serving it is named all the same', as
 
 /*
  * Vote receipts carry the proposal they were cast on where the client asks
- * for it, described as the proposal list describes it.
+ * for it, described as the proposal list describes it: the proposals of the
+ * page alone, since an account may have voted on every proposal ever made.
+ *
+ * The handler runs on the evaluator the governance route makes, over a cache
+ * that holds GovernorAlpha's proposals at its creation block, the first block
+ * they are indexed at: Bravo and Charlie come later, so it asks for no
+ * others. The block is chosen for that alone, and the proposals are later
+ * ones.
  */
 t.test('vote receipts with their proposals name markets as the proposal list does', async t => {
-  const VOTER    = '0x6666666666666666666666666666666666666666';
-  const cUSDCv3  = catalog.marketAt(MAINNET, USDC)!.comet.address;
-  const bravo    = (Eth.wellKnownContractsByNetwork[MAINNET] as any)['GovernorBravo']['default'];
-  const proposal = {
-    id:          BigNumber.from(400),
+  const VOTER     = '0x6666666666666666666666666666666666666666';
+  const cUSDCv3   = catalog.marketAt(MAINNET, USDC)!.comet.address;
+  const [ alpha ] = knownGovernanceContracts(MAINNET);
+  const latest    = alpha.creation.block;
+
+  const proposalOf = (id: number, startBlock: number, action: ReturnType<typeof describedByConstants>) => ({
+    id:          BigNumber.from(id),
     eta:         0,
-    title:       'Approve USDC to cUSDCv3',
+    title:       `Proposal ${id}`,
     description: '',
-    startBlock:  20_000_000,
-    endBlock:    20_020_000,
+    startBlock,
+    endBlock:    startBlock + 20_000,
     voteEntries: [ { voter: VOTER, support: 1, votes: BigFixnum.from({ value: '1000000000000000000', decimals: 18 }) } ],
-    states:      [ { state: 'executed', startBlock: 20_030_000 } ],
-    actions:     [ describedByConstants(USDC_TOKEN, 'approve(address,uint256)',
-      defaultAbiCoder.encode([ 'address', 'uint256' ], [ USDC, '1000000' ])) ],
+    states:      [ { state: 'executed', startBlock: startBlock + 30_000 } ],
+    actions:     [ action ],
     proposer:    { address: VOTER },
-  };
-  // the latest block, and the proposals of each governor: this one is Bravo's
-  const evaluator = {
-    pull1:    (request: unknown) => request,
-    join:     ([ requests, combine ]: [ any[], (results: unknown[][]) => unknown ]) => ({ requests, combine }),
-    evaluate: async (expression: any) => 'combine' in expression
-      ? expression.combine(expression.requests.map((request: any) => request.allProposals.contract === bravo ? [ proposal ] : []))
-      : { number: 99_000_000, timestamp: 1_900_000_000 },
-  };
-  // the voters' profiles, of which Tally has none
-  const fetchBefore = globalThis.fetch;
-  globalThis.fetch = (async () => new Response(JSON.stringify({ data: { governors: [] } }))) as never;
-  t.teardown(() => { globalThis.fetch = fetchBefore; });
+  });
+  // the newer names only addresses the constants know, the older approves a token to a market
+  const newer = proposalOf(41, 20_100_000, describedByConstants(COMP, 'transfer(address,uint256)', amountTo(TIMELOCK, '1')));
+  const older = proposalOf(40, 20_000_000, describedByConstants(USDC_TOKEN, 'approve(address,uint256)', amountTo(USDC, '1000000')));
 
-  let reads = 0;
+  // cached under the request the handler makes, as the computation caches it
+  const cache = new MemoryCache({}, [ BigNumber.JsonReviver, BigFixnum.JsonReviver ]);
+  await cache.put(await governance.allProposals.key(Compute.versionedName('allProposals', governance.allProposals.version), {
+    apiHost: '', nodeHost: 'node.test', nodeKey: '', network: MAINNET, contract: alpha, quorum: Constant.quorumVotes, blockNumber: latest.number,
+  } as never), [ newer, older ] as never);
+  const evaluator = Evaluator.instantiate<governance.AllProposals>({ ...evm, ...governance }, { cache });
+
+  // the node answers the latest block, and Tally knows no voter's profile
+  const node = fakeNode(snapshot, latest);
+  t.capture(globalThis, 'fetch', (input: string | Request, init?: RequestInit) => (
+    (input instanceof Request ? input.url : String(input)) === Eth.governanceTallyQueryEndpoint
+      ? Promise.resolve(new Response(JSON.stringify({ data: { governors: [] } })))
+      : node.fetch(input, init)
+  ));
+
+  // what a request of the voter's receipts answers, and how many times it read the registry
   const receipts = async (query: Record<string, string>) => {
+    const registry = countingRegistry(async () => catalog);
     const response = await getProposalVoteReceipts({
-      apiHost: '', nodeHost: '', nodeKey: '', network: MAINNET, contract: 'all-contracts',
-      queryParams: new URLSearchParams(query),
-      registry:    { load: async () => { reads += 1; return catalog; } },
+      apiHost: '', nodeHost: 'node.test', nodeKey: '', network: MAINNET, contract: 'all-contracts',
+      queryParams: new URLSearchParams({ account: VOTER, ...query }),
+      registry,
     } as never, { evaluator, env: { TALLY_API_KEY: '' }, debug: undefined } as never);
-    const body = await response.json() as { proposal_vote_receipts: Array<{ proposal: { actions: Array<{ title: string }> } | null }> };
-    return body.proposal_vote_receipts;
+    return { ...await response.json() as VoteReceiptsResponseData, reads: registry.reads };
   };
+  const idsOf = (answer: VoteReceiptsResponseData) => answer.proposal_vote_receipts.map(receipt => receipt.proposal_id);
 
-  const [ bare ] = await receipts({ account: VOTER });
-  t.equal(bare?.proposal, null, 'a receipt carries no proposal unless asked to');
-  t.equal(reads, 0, 'and reads no registry');
+  const bare = await receipts({});
+  t.same(bare.proposal_vote_receipts.map(receipt => [ receipt.proposal_id, receipt.proposal ]), [ [ 41, null ], [ 40, null ] ],
+    'a receipt carries no proposal unless asked to, the newest first');
+  t.equal(bare.reads, 0, 'and reads no registry');
 
-  const [ receipt ] = await receipts({ account: VOTER, with_proposal_data: 'true' });
-  t.equal(reads, 1, 'with its proposal, the registry is read once');
-  t.ok(receipt?.proposal?.actions[0]?.title.includes(`.approve("[cUSDCv3](https://etherscan.io/address/${cUSDCv3})", `),
-    'and the proposal names the market its action approves a token to');
+  const both = await receipts({ with_proposal_data: 'true' });
+  t.equal(both.reads, 1, 'with their proposals, the registry is read once');
+  t.ok(both.proposal_vote_receipts[1]?.proposal?.actions[0]?.title.includes(`.approve("[cUSDCv3](https://etherscan.io/address/${cUSDCv3})", `),
+    'and a proposal names the market its action approves a token to');
+
+  // a page of one receipt describes the proposal of that receipt alone, and a page past the last none
+  const pageOf = (number: string) => receipts({ with_proposal_data: 'true', page_size: '1', page_number: number });
+  const first  = await pageOf('1');
+  const second = await pageOf('2');
+  const past   = await pageOf('3');
+  t.same([ idsOf(first), first.pagination_summary ], [ [ 41 ], { page_size: 1, page_number: 1, total_pages: 2, total_entries: 2 } ],
+    'a page of one receipt holds the newest');
+  t.equal(first.proposal_vote_receipts[0]?.proposal?.id, 41, 'with its proposal');
+  t.equal(first.reads, 1, 'and reads the registry once');
+  t.same(idsOf(second), [ 40 ], 'the next holds the older one');
+  t.equal(second.reads, 1, 'and reads it once as well');
+  t.ok(second.proposal_vote_receipts[0]?.proposal?.actions[0]?.title.includes(`[cUSDCv3](https://etherscan.io/address/${cUSDCv3})`),
+    'to name the market of its own proposal');
+  t.same([ idsOf(past), past.pagination_summary ], [ [], { page_size: 1, page_number: 3, total_pages: 2, total_entries: 2 } ],
+    'a page past the last holds none');
+  t.equal(past.reads, 0, 'and describes no proposal, so it never reads the registry');
 });
 
 /*
  * A token bridge carries tokens to an address on another chain, often to a
- * market seeded with reserves. That address is named on its own chain, which
- * no mainnet lookup can tell, so every such action is described again.
+ * market seeded with reserves, and that address is named on its own chain:
+ * the version names the markets of every chain it describes.
  */
 t.test('a token bridged to a market of another chain names it from the version', async t => {
   const AERO     = '0x784efeb622244d2348d4f2522f8860b96fbece89';
@@ -710,10 +776,11 @@ t.test('a token bridged to a market of another chain names it from the version',
 });
 
 /*
- * Governance decodes proposal targets against the contracts this API knows by
- * name. The protocol's own contracts stay static; markets come from the
- * version, the only source that names them, so a proposal that configures one
- * reads as something rather than as a bare address.
+ * Governance describes proposal actions, their targets and the addresses they
+ * pass, against the contracts this API knows by name. The protocol's own
+ * contracts stay static; markets come from the version, the only source that
+ * names a mainnet market, so a proposal that configures one reads as
+ * something rather than as a bare address.
  */
 t.test('registry markets are merged into the contracts governance decodes against', async t => {
   const merged = withRegistryContracts(Eth.wellKnownContractsByNetwork, catalog.markets());
@@ -754,13 +821,12 @@ t.test('registry markets are merged into the contracts governance decodes agains
 
 /*
  * Governance describes a proposal against the constants, and again against
- * the registry only where the registry can say more: an action whose target
- * or argument only the registry names, a bridge whose inner actions may
- * target a market, a token bridged to another chain, and a call to a
- * contract that administers markets. An address neither knows is left as it
- * was.
+ * the registry for every action of the page it answers, wherever an action
+ * names a market: as its target, in a bridge's inner actions on another
+ * chain, or as an argument of a call to a contract that administers markets.
+ * An address neither knows is left as it was.
  */
-t.test('proposal actions are described again where the registry says more', async t => {
+t.test('every proposal action is described again with the version\'s markets', async t => {
   const NEW_MAINNET = '0x3333333333333333333333333333333333333333';
   const NEW_BASE    = '0x2222222222222222222222222222222222222222';
   const NOBODY      = '0x4444444444444444444444444444444444444444';
@@ -791,14 +857,6 @@ t.test('proposal actions are described again where the registry says more', asyn
     [ receiver, defaultAbiCoder.encode([ 'address[]', 'uint256[]', 'string[]', 'bytes[]' ], [ [ NEW_BASE ], [ 0 ], [ pause ], [ paused ] ]), 0 ],
   );
 
-  // each action as the constants alone describe it, which is what the proposal list computed
-  const action = (target: string, signature: string, data: string) => {
-    const described = describeContractCallForHumans(
-      contractForLocation({ network: MAINNET, address: target as never }, Eth.wellKnownContractsByNetwork as never) as never,
-      signature, data, BigFixnum.from({ value: 0 }), Eth.wellKnownContractsByNetwork as never,
-    );
-    return { target, signature, data, value: BigFixnum.from({ value: 0 }), title: described.title, subtitles: described.subtitles ?? [] };
-  };
   /*
    * A market is usually configured through the Configurator, whose address is
    * static: the market it acts on is an argument of the call, and may be one
@@ -810,19 +868,18 @@ t.test('proposal actions are described again where the registry says more', asyn
   // its upgrade goes through the proxy admin, which the constants call CometAdmin, and its reward token through CometRewards
   const cometAdmin   = (Object.values((Eth.wellKnownContractsByNetwork[MAINNET] as any)['CometAdmin'])[0] as { address: string }).address;
   const cometRewards = (Object.values((Eth.wellKnownContractsByNetwork[MAINNET] as any)['CometRewards'])[0] as { address: string }).address;
-  const comp         = (Eth.wellKnownContractsByNetwork[MAINNET] as any)['COMP']['default'].address;
   const upgrade      = defaultAbiCoder.encode([ 'address', 'address' ], [ configurator, NEW_MAINNET ]);
-  const rewardConfig = defaultAbiCoder.encode([ 'address', 'address' ], [ NEW_MAINNET, comp ]);
+  const rewardConfig = defaultAbiCoder.encode([ 'address', 'address' ], [ NEW_MAINNET, COMP ]);
 
-  const proposals = [ { actions: [
-    action(NEW_MAINNET, pause, paused),
-    action(NOBODY, pause, paused),
-    action(messenger, 'sendMessage(address,bytes,uint32)', bridged),
-    action(configurator, speed, speedData),
-    action(cometAdmin, 'deployAndUpgradeTo(address,address)', upgrade),
-    action(cometRewards, 'setRewardConfig(address,address)', rewardConfig),
-  ] } ] as never as Parameters<typeof describeRegistryTargets>[0];
-  const [ onRegistry, onNobody, onBridge, onConfigurator, onCometAdmin, onCometRewards ] = (proposals[0] as any).actions;
+  const actions = [
+    describedByConstants(NEW_MAINNET, pause, paused),
+    describedByConstants(NOBODY, pause, paused),
+    describedByConstants(messenger, 'sendMessage(address,bytes,uint32)', bridged),
+    describedByConstants(configurator, speed, speedData),
+    describedByConstants(cometAdmin, 'deployAndUpgradeTo(address,address)', upgrade),
+    describedByConstants(cometRewards, 'setRewardConfig(address,address)', rewardConfig),
+  ];
+  const [ onRegistry, onNobody, onBridge, onConfigurator, onCometAdmin, onCometRewards ] = actions;
   t.notMatch([ onConfigurator.title, ...onConfigurator.subtitles ].join(' '), /cMAINv3/,
     'which the constants alone cannot name');
   t.notMatch(onCometAdmin.title, /cMAINv3/, 'nor the market an upgrade deploys');
@@ -831,13 +888,7 @@ t.test('proposal actions are described again where the registry says more', asyn
   t.match(onBridge.title, /^Bridge wrapped actions to Base/, 'the constants decode the bridge');
   t.notMatch(before.bridge, /cNEWv3/, 'but not the market it configures');
 
-  let loads = 0;
-  await describeRegistryTargets(proposals, MAINNET, {
-    registry: { load: async () => { loads += 1; return registry; } } as never,
-    debug:    undefined as never,
-  });
-
-  t.equal(loads, 1, 'the registry is read once');
+  t.equal(await readsDescribing(actions, async () => registry), 1, 'the registry is read once');
   t.match(onRegistry.title, /cMAINv3/, 'a target only the registry describes is named by it');
   t.equal(onNobody.title, before.nobody, 'a target nobody describes is left as it was');
   t.match(onBridge.subtitles.join(' '), /cNEWv3/, 'and a bridged action names the market it configures on the other chain');
@@ -847,13 +898,4 @@ t.test('proposal actions are described again where the registry says more', asyn
     'as an upgrade through the CometAdmin names the market it deploys');
   t.match(onCometRewards.title, /^Set reward token for market \[cMAINv3\]/,
     'and a reward token set through CometRewards the market it is set for');
-
-  // a call to COMP whose arguments name no address
-  let unread = 0;
-  const known = [ { actions: [ action(comp, pause, paused) ] } ] as never as Parameters<typeof describeRegistryTargets>[0];
-  await describeRegistryTargets(known, MAINNET, {
-    registry: { load: async () => { unread += 1; return registry; } } as never,
-    debug:    undefined as never,
-  });
-  t.equal(unread, 0, 'a proposal of known targets that bridges nothing never reads the registry');
 });

@@ -602,7 +602,7 @@ function provisionalNetworkOverlay(canonicalName: string): NetworkOverlay {
   };
 }
 
-export type { MarketOverlay, NetworkOverlay, OverlayPriceException };
+export type { MarketOverlay, NetworkOverlay };
 
 export {
   applyMarketOverlay,

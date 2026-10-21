@@ -6,12 +6,13 @@ import type { Env } from '../../../entrypoint.js';
 import type * as jsonRpc from '../../../lib/json-rpc.js';
 import type { Address, PriceFeedV1 } from '../../../lib/model/comet-registry.js';
 
+import { overlayDocuments } from '../../../src/registry/admin-router.js';
 import { CreationReader, FeedReader, replaceMarketOverlay, replaceNetworkOverlay, replaceOverlays } from '../../../src/registry/admin.js';
 import { readCreationBlocks, readFeeds } from '../../../src/registry/enrichment.js';
 import { overlayOfMarket } from '../../../src/registry/overlay.js';
 import { readSnapshot } from '../../../src/registry/repository.js';
 import { asApiError } from '../../../src/registry/router.js';
-import { seedFor } from '../../util/registry-seed.js';
+import { bodyFor } from '../../util/registry-seed.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate } from '../../util/registry-fixture.js';
@@ -304,7 +305,7 @@ t.test('the seed for a first import has every creation block it states checked',
     ).bind(versionId),
     db.prepare(`UPDATE registry_networks SET reviewed = 0 WHERE registry_version_id = ?1`).bind(versionId),
   ]);
-  const seed   = { versionId, actor: 'test-admin', ...seedFor(snapshot) };
+  const seed   = overlayDocuments(bodyFor(snapshot), versionId, 'test-admin');
   const seeded = (chainId: number, key: string) => (seed.markets
     .find(market => market.chainId === chainId && market.deploymentKey === key)!.overlay as { creationBlock: number }).creationBlock;
 

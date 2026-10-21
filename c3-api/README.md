@@ -212,23 +212,17 @@ What that means for the endpoints:
 - routes that resolve no market — V2 and gas price — never read `APP_DB`,
   and governance reads it only to name the markets of proposal actions,
   which the static constants do not. The proposal list, and the vote
-  receipts with their proposals (`with_proposal_data`), describe each action
-  against the constants, then those the constants cannot fully name once
-  more, with the markets of the active version merged in: an action whose
-  target or argument the constants do not know and the version names, an
-  action bridged to another chain, a token bridged to an address on another
-  chain, and a call to the Configurator, CometAdmin (the CometProxyAdmin),
-  CometRewards or CometFactory, whose arguments name the market it acts on.
-  The version names the markets it serves, with their base and reward
-  tokens, and the disabled markets it holds without serving them, each by
-  its contract name, or its label where it has none, linked at its address
-  checksummed. Almost every page has such an action, so the proposal list,
-  and the vote receipts with their proposals, read the registry on almost
-  every request. A Comet the active version does not hold shows as its
-  address, and so does every market while the registry cannot be read:
-  those actions keep the description the proposal list computed, which
-  names no market, or the constants' name where the list cached it before
-  they stopped naming markets; the answer is given all the same. A
+  receipts with their proposals (`with_proposal_data`), describe the
+  actions of the page they answer again, with the markets of the active
+  version merged in, so they read the registry once on every request that
+  answers an action. The version names the markets it serves, with their
+  base and reward tokens, and the disabled markets it holds without serving
+  them, each by its contract name, or its label where it has none, linked
+  at its address checksummed. A Comet the active version does not hold
+  shows as its address. While the registry cannot be read, so does every
+  market: the actions keep the description the proposal list computed,
+  which names no market, or the constants' name where the list cached it
+  before they stopped naming markets; the answer is given all the same. A
   governance path that names a Comet as its contract, such as
   `/governance/ethereum-mainnet/{comet}/proposals`, is refused with `400`
   `Error: Contract address not known`, as any address the constants do not
@@ -397,13 +391,13 @@ first. `expectedDigests` is `null` for every document, so the file is taken
 only by a candidate nobody has reviewed: sent again, or to a draft that
 inherited decisions, it is refused with `409`.
 
-A correction to the file is a pull request, which
-`tests/lib/registry/seed.test.ts` holds to what the route and validation
-would refuse; [the preflight](./REGISTRY_RUNBOOK.md#the-preflight) holds it
-against the real chain before an environment depends on it. Once a version is
-active, the registry is where the decisions live, and a later version
-inherits them: the file is not sent again, and a decision is changed with the
-overlay routes.
+A correction to the file is a pull request, which the seed's tests hold to
+what the route and validation would refuse
+([Changing it](./registry/seed/README.md#changing-it));
+[the preflight](./REGISTRY_RUNBOOK.md#the-preflight) holds it against the
+real chain before an environment depends on it. Once a version is active, the
+registry is where the decisions live, and a later version inherits them: the
+file is not sent again, and a decision is changed with the overlay routes.
 
 ### A market the source adds later
 

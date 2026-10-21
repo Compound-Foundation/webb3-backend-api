@@ -226,7 +226,7 @@ function servedNetworks(snapshot: RegistrySnapshotV1): Array<{ network: NetworkV
     .filter(({ markets }) => markets.length > 0);
 }
 
-// what governance calls a market: its contract name, or its label where it has none
+// what governance calls a market
 function contractNameOf(market: MarketV1): string {
   return market.contractName ?? market.displayName;
 }

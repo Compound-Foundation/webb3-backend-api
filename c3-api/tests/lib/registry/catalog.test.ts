@@ -115,19 +115,7 @@ t.test('a disabled market is unreachable, a deprecated one is readable', async t
  * which no computation takes and nothing serves.
  */
 t.test('a market the catalog does not serve is still named for governance', async t => {
-  const WETH = '0xa17581a9e3356d9a858b789d68b4d866e593ae94';
   t.same(catalogOf(snapshot).unservedMarkets(), [], 'a version that serves every market it holds has none besides');
-
-  const disabled = catalogOf(withMarket('weth', market => ({ ...market, status: 'disabled' })));
-  const named    = disabled.unservedMarkets();
-  t.same(named.map(contract => [ contract.network, contract.address, contract.displayName ]),
-    [ [ MAINNET, catalogOf(snapshot).marketAt(MAINNET, WETH)!.comet.address, 'cWETHv3' ] ],
-    'a disabled market, at its Comet as a served one carries it, by the name a served one has');
-  t.notOk(Comet.is(named[0]), 'which is no Comet a computation could take');
-  t.equal(disabled.marketAt(MAINNET, WETH), null, 'nor a market the catalog serves');
-
-  const unreviewed = catalogOf(withMarket('weth', market => ({ ...market, status: 'disabled', contractName: null, displayName: 'weth' })));
-  t.equal(unreviewed.unservedMarkets()[0]?.displayName, 'weth', 'one without a contract name by its label');
 
   const offScroll: RegistrySnapshotV1 = {
     ...snapshot,

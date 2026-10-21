@@ -104,8 +104,9 @@ t.test('a draft that lacks markets of the seed refuses it whole', async t => {
     ...Object.keys(seed.markets).filter(key => !(key in held.markets)),
   ];
 
+  // the route answers 404 only for a body it takes, by size, keys, reason and count (admin-router.ts); the size is checked nowhere else
   const refused = await put(versionId, readSeedText());
-  t.equal(refused.status, 404, 'the file as it is');
+  t.equal(refused.status, 404, 'the file as it is, which the route takes');
   t.equal((await refused.json() as Refused).error.message, `${missing.join(', ')} not imported into this registry version yet`,
     'naming every network and market of it the draft has not imported, the networks first');
   t.same(await readUnreviewed(db, versionId), before, 'and writing nothing');

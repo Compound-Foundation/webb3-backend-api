@@ -104,12 +104,15 @@ there, the same decision is made in a held draft with the overlay routes.
   well as one earlier.
 
 [`tests/lib/registry/seed.test.ts`](../../tests/lib/registry/seed.test.ts)
-holds the file to the first three, and to what the route and validation would
-refuse: one default market, distinct slugs or labels on a network, a creation
-block for every served market, a USD feed exactly on the markets quoted in
-their base asset, a reward feed quoted in the base asset only on those, a
-reward feed wherever rewards are on, no expired price exception. What the
-source lists is step 2 of the runbook's to check, and the chain the request's.
+holds the file to the first three, and to every check validation makes of
+the file's decisions, run over its markets built as an import builds them,
+on facts that fail no check. It reads the file as the route reads a body —
+its keys, its reason, how each document is keyed and how many there are —
+and refuses a price exception that has expired, as the request does.
+[`tests/e2e/registry/seed-overlays.test.ts`](../../tests/e2e/registry/seed-overlays.test.ts)
+sends the file as it is, so a file larger than the route takes fails there.
+What the source lists is step 2 of the runbook's to check, and the chain the
+request's.
 
 ## Why each value is what it is
 
