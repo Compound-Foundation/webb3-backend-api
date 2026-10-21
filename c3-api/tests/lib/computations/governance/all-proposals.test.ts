@@ -22,6 +22,7 @@ import * as proposalModel from '../../../../lib/model/governance/proposal.js';
 import '../../../../shim/node-self.js';
 
 import { setupTestEnvVars } from '../../../util/setupTestEnvVars.js';
+import { readSeed, readSeedComets } from '../../../util/registry-seed.js';
 import * as mock from '../../../util/mock/mock.js';
 
 /*
@@ -51,6 +52,48 @@ t.beforeEach(() => {
 
 const testDebug = debug.scope('test');
 testDebug.log({ flags });
+
+/*
+ * The dump was made while the constants named the Comets, and the proposal
+ * computation now leaves each as its address: governance names markets from
+ * the registry once the computation is done (describeRegistryTargets). So the
+ * actions are compared with every Comet written one way, whether the
+ * constants linked it under the name the seed gives it or under its address,
+ * or the computation left its address bare, in whatever case. Anything else
+ * still has to match as it is: a Comet linked under another name, another
+ * address, the case of any other address.
+ */
+const cometNames = (() => {
+  const seed  = readSeed();
+  // by the Comet's address, lowercase
+  const names = new Map<string, Set<string>>();
+  for (const [ key, comet ] of Object.entries(readSeedComets())) {
+    const { contractName } = seed.markets[key] as { contractName: string | null };
+    names.set(comet, new Set([ ...(names.get(comet) ?? []), ...(contractName === null ? [] : [ contractName ]) ]));
+  }
+  return names;
+})();
+
+function withCometsAsAddresses(title: string): string {
+  return title.replace(
+    /\[([^\]]*)\]\(https:\/\/[^/)]+\/address\/(0x[0-9a-fA-F]{40})\)|0x[0-9a-fA-F]{40}/g,
+    (found: string, name: string | undefined, linked: string | undefined) => {
+      const address = (linked ?? found).toLowerCase();
+      const names   = cometNames.get(address);
+      const comet   = names !== undefined
+        && (linked === undefined || names.has(name!) || name!.toLowerCase() === address);
+      return comet ? `<Comet ${address}>` : found;
+    },
+  );
+}
+
+function comparableActions(actions: proposalModel.Proposal['actions']) {
+  return actions.map(action => ({
+    ...action,
+    title:     withCometsAsAddresses(action.title),
+    subtitles: action.subtitles.map(withCometsAsAddresses),
+  }));
+}
 
 t.test(`allProposals alpha + bravo @ block=${testBlock.number}`, async t => {
   /*
@@ -166,7 +209,7 @@ t.test(`allProposals alpha + bravo @ block=${testBlock.number}`, async t => {
     t.equal(proposal.description, expected.description,   `${prefix}.description`);
     // deeply same: states, actions, proposer, voteEntries
     t.strictSame(proposal.states,      expected.states,      `${prefix}.states`);
-    t.strictSame(proposal.actions,     expected.actions,     `${prefix}.actions`);
+    t.strictSame(comparableActions(proposal.actions), comparableActions(expected.actions), `${prefix}.actions`);
     t.strictSame(proposal.proposer,    expected.proposer,    `${prefix}.proposer`);
     t.strictSame(proposal.voteEntries, expected.voteEntries, `${prefix}.voteEntries`);
   }

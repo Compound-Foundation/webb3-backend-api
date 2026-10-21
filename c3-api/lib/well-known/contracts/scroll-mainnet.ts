@@ -1,5 +1,4 @@
 import {
-  Comet,
   ERC20,
   PriceFeed,
   UntypedContract,
@@ -100,29 +99,6 @@ const USDC_USD_priceFeed = PriceFeed(<const>{
 //   },
 // });
 
-const Comet_01usdc = Comet(<const>{
-  // The naming overlaps with our cUSDCv3 mainnet market, but
-  // it's fine to display, since cross-chain will always
-  // explicitly mention they're bridged to the new chain.
-  displayName: 'cUSDCv3',
-  aliases: [ '01-usdc', 'cUSDCv3' ],
-  base: {
-    asset:     USDC,
-    priceFeed: USDC_USD_priceFeed,
-  },
-  rewards: {
-    asset:    COMP,
-    contract: Comet_01usdc_Rewards,
-    priceFeed: USDC_USD_priceFeed, // TODO: Change to COMP price feed
-  },
-  network: 'scroll-mainnet',
-  address: '0xB2f97c1Bd3bf02f5e74d13f02E3e26F93D77CE44',
-  block: {
-    number: 3397674,
-    timestamp: 1708117210
-  },
-});
-
 const Bulker_01usdc = UntypedContract('Bulker', <const>{
   aliases: ['01-usdc', 'cUSDCv3'],
   network: 'scroll-mainnet',
@@ -135,7 +111,7 @@ const Bulker_01usdc = UntypedContract('Bulker', <const>{
 
 const market01usdc = <const>([
   CometAdmin, Comet_01usdc_Rewards, CometFactory, Bulker_01usdc,
-  USDC_USD_priceFeed, Comet_01usdc, /*COMP_USD_priceFeed, */
+  USDC_USD_priceFeed, /*COMP_USD_priceFeed, */
 ]);
 
 const Configurator = UntypedContract('Configurator', <const>{

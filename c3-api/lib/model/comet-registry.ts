@@ -531,11 +531,12 @@ type RegistryAnnotation = {
  *
  * It is the only kind of market a computation takes. The routes resolve every
  * market through the request's catalog, so a computation reads one kind of
- * Comet, and the compiler refuses it a Comet of the static constants, the
- * ones governance still decodes proposals against: those describe none of
- * what a computation reads here. The refusal rests on the constants typing
- * their Comets (WellKnownContractsByNetworkAddress); a cast, or a read the
- * compiler cannot type, is not refused.
+ * Comet, and the compiler refuses it a Comet as the static constants type
+ * one, which describes none of what a computation reads here. No mainnet's
+ * constants hold a Comet any more, but their `Comet` key still types one
+ * read from them (WellKnownContractsByNetworkAddress), which is what the
+ * refusal rests on; a cast, or a read the compiler cannot type, is not
+ * refused.
  */
 type RegistryComet = Contract<StandaloneContract<Comet>> & { registry: RegistryAnnotation };
 

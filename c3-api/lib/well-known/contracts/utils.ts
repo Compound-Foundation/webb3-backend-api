@@ -192,11 +192,13 @@ function StaticWellKnownContracts<
 /*
  * The constants of every network, by address and by canonical name.
  *
- * Their Comets are typed, where every other name is loose, so that the
- * compiler tells a Comet of the constants from a Comet of the catalog
- * (RegistryComet), the only market a computation takes. Each network is one
- * object type, not an intersection with the loose index, because a typed key
- * intersected with `any` is `any` again.
+ * Their `Comet` key is typed, where every other name is loose, so that the
+ * compiler tells a Comet read from the constants from a Comet of the catalog
+ * (RegistryComet), the only market a computation takes. No mainnet holds one
+ * any more; the key stays typed so that a Comet read from it, a testnet's or
+ * any added later, is still refused. Each network is one object type, not an
+ * intersection with the loose index, because a typed key intersected with
+ * `any` is `any` again.
  */
 export type WellKnownContractsByNetworkAddress = {
   [Network in KnownNetwork.Name]: {

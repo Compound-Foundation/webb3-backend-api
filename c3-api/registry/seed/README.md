@@ -114,7 +114,9 @@ source lists is step 2 of the runbook's to check, and the chain the request's.
 ## Why each value is what it is
 
 Every value is one the API acted on before the registry, taken from where it
-was decided then.
+was decided then. The static constants below are `lib/well-known/contracts`
+as the file was frozen from them, at `56d75ff`: their Comets, and the feeds
+only those named, have been removed since.
 
 | Field | Where it comes from |
 |---|---|

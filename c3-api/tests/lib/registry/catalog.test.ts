@@ -110,6 +110,45 @@ t.test('a disabled market is unreachable, a deprecated one is readable', async t
 });
 
 /*
+ * Governance names a market whatever the version says of it, so the catalog
+ * also hands it the markets it does not serve: each as a name at its Comet,
+ * which no computation takes and nothing serves.
+ */
+t.test('a market the catalog does not serve is still named for governance', async t => {
+  const WETH = '0xa17581a9e3356d9a858b789d68b4d866e593ae94';
+  t.same(catalogOf(snapshot).unservedMarkets(), [], 'a version that serves every market it holds has none besides');
+
+  const disabled = catalogOf(withMarket('weth', market => ({ ...market, status: 'disabled' })));
+  const named    = disabled.unservedMarkets();
+  t.same(named.map(contract => [ contract.network, contract.address, contract.displayName ]),
+    [ [ MAINNET, catalogOf(snapshot).marketAt(MAINNET, WETH)!.comet.address, 'cWETHv3' ] ],
+    'a disabled market, at its Comet as a served one carries it, by the name a served one has');
+  t.notOk(Comet.is(named[0]), 'which is no Comet a computation could take');
+  t.equal(disabled.marketAt(MAINNET, WETH), null, 'nor a market the catalog serves');
+
+  const unreviewed = catalogOf(withMarket('weth', market => ({ ...market, status: 'disabled', contractName: null, displayName: 'weth' })));
+  t.equal(unreviewed.unservedMarkets()[0]?.displayName, 'weth', 'one without a contract name by its label');
+
+  const offScroll: RegistrySnapshotV1 = {
+    ...snapshot,
+    networks: snapshot.networks.map(network => network.key !== SCROLL ? network : {
+      ...network,
+      markets: network.markets.map(market => ({ ...market, status: 'disabled' as const, isDefault: false })),
+    }),
+  };
+  t.same(catalogOf(offScroll).unservedMarkets().map(contract => `${contract.network}: ${contract.displayName}`),
+    [ `${SCROLL}: cUSDCv3` ], 'a network that serves nothing has its markets named too');
+  const unnameable = catalogOf({
+    ...offScroll,
+    networks: offScroll.networks.map(network => network.key !== SCROLL ? network : { ...network, key: 'nowhere-mainnet', chainId: 999999 }),
+  });
+  t.same(unnameable.unservedMarkets(), [], 'but not one this API cannot name');
+
+  const nowhere = catalogOf(withMarket('weth', market => ({ ...market, status: 'disabled', contracts: { ...market.contracts, comet: null } })));
+  t.same(nowhere.unservedMarkets(), [], 'nor a market without a Comet, which has no address to be named at');
+});
+
+/*
  * Validation refuses a market that does not declare its Comet, and the
  * catalog is typed on that: a market it hands out names its Comet, and no
  * consumer checks for one that is missing. A snapshot without it would have

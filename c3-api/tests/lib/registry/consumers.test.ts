@@ -6,6 +6,7 @@ import type { MarketV1, NetworkV1, PriceExceptionV1, RegistrySnapshotV1 } from '
 import type { RawTransactionHistoryItem } from '../../../lib/model/transaction-history/item.js';
 
 import { BigFixnum } from '../../../lib/bigfixnum.js';
+import { BigNumber } from '../../../lib/bignumber.js';
 import { enrichTransactionHistoryItem, isBulker } from '../../../lib/computations/account/enrich-transaction-history-items.js';
 import { rawTransactionHistoryItems, tokenSymbol } from '../../../lib/computations/account/raw-transaction-history-items.js';
 import { baseAssetLabel, marketRewards } from '../../../lib/computations/market/market-rewards.js';
@@ -15,10 +16,12 @@ import type * as comet from '../../../lib/computations/comet.js';
 import type * as market from '../../../lib/computations/market.js';
 import type * as rewards from '../../../lib/computations/rewards.js';
 import { lookupInWellKnown, withRegistryContracts } from '../../../lib/well-known/contracts/utils.js';
+import { Comet } from '../../../lib/well-known/contracts/types.js';
 
 import { catalogOf } from '../../../src/registry/catalog.js';
 import type { Catalog } from '../../../src/registry/catalog.js';
 import { describeRegistryTargets } from '../../../src/governance-handlers/proposals.js';
+import { getProposalVoteReceipts } from '../../../src/governance-handlers/proposal-vote-receipts.js';
 import { describeContractCallForHumans, contractForLocation } from '../../../lib/well-known/contracts/utils.js';
 import { defaultAbiCoder } from '@ethersproject/abi';
 import { rewardGroups } from '../../../src/account-handlers/rewards.js';
@@ -149,13 +152,13 @@ t.test('the rewards of a market name its base asset as the review does', async t
 /*
  * The computations take one kind of market: a Comet the request's catalog
  * materialized, whose description they read for its units, its labels, its
- * reward feed and the exceptions of its network. A Comet of the constants
- * has none of that to read, and the compiler refuses one read from them: to
- * every computation that reads the description, to every one that hands its
+ * reward feed and the exceptions of its network. A Comet as the constants
+ * type one has none of that to read, and the compiler refuses it: to every
+ * computation that reads the description, to every one that hands its
  * market to one that does, and to the market routes, which hand them theirs.
  * Each refusal below is a type error the build expects, so loosening one of
- * those types, or the constants' type of their Comets, fails the build, not a
- * request.
+ * those types, or the type the constants' `Comet` key gives a Comet, fails
+ * the build, not a request.
  */
 t.test('a computation takes only a Comet the registry materialized', async t => {
   const usdc = catalog.marketAt(MAINNET, USDC)!.comet;
@@ -188,9 +191,23 @@ t.test('a computation takes only a Comet the registry materialized', async t => 
   ];
   t.ok(taken.every(contract => contract === usdc), 'every one of them takes a Comet of the catalog');
 
-  // the same market, as the constants name it
-  const constant = Eth.wellKnownContractsByNetwork[MAINNET]['Comet']!['cUSDCv3'];
-  t.equal(constant.address.toLowerCase(), USDC, 'the constants name the same market');
+  /*
+   * The same market as a Comet of the constants: of the type their `Comet` key
+   * gives one, and without a description. No mainnet's constants hold a Comet
+   * any more, and the testnets' leave with their files, so the test makes its
+   * own; the refusals hold for as long as the key types what it holds.
+   */
+  type ConstantComet = NonNullable<(typeof Eth.wellKnownContractsByNetwork)[typeof MAINNET]['Comet']>[string];
+  const constant: ConstantComet = Comet({
+    network: MAINNET,
+    address: usdc.address,
+    aliases: [ 'cUSDCv3' ] as const,
+    block:   usdc.creation.block,
+    base:    usdc.base,
+    rewards: usdc.rewards!,
+  });
+  t.ok(Comet.is(constant), 'a Comet as the constants type one');
+  t.notOk('registry' in constant, 'with no description of its market');
   // @ts-expect-error the price of a collateral is read at the scale the version states
   marketOf<comet.AssetPrice>(constant);
   // @ts-expect-error the base asset's USD price is read through the feed the version's quote calls for
@@ -514,11 +531,189 @@ t.test('history is keyed by what it reads of a market, not by everything the mar
   t.not(await enrichedKey(resymboled), await enrichedKey(catalog), 'but not a new symbol, which it shows');
 });
 
+// what the constants name: the protocol's contracts and the tokens, no market
+const COMP       = (Eth.wellKnownContractsByNetwork[MAINNET] as any)['COMP']['default'].address as string;
+const TIMELOCK   = (Eth.wellKnownContractsByNetwork[MAINNET] as any)['Timelock']['default'].address as string;
+const USDC_TOKEN = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48';
+// a grant recipient, which neither the constants nor a version name
+const RECIPIENT  = '0x5555555555555555555555555555555555555555';
+
+// an action as the proposal list computed it: described against the constants alone
+function describedByConstants(target: string, signature: string, data: string) {
+  const described = describeContractCallForHumans(
+    contractForLocation({ network: MAINNET, address: target as never }, Eth.wellKnownContractsByNetwork as never) as never,
+    signature, data, BigFixnum.from({ value: 0 }), Eth.wellKnownContractsByNetwork as never,
+  );
+  return { target, signature, data, value: BigFixnum.from({ value: 0 }), title: described.title, subtitles: described.subtitles ?? [] };
+}
+
+// describes a page of such actions again, and says how many times the registry was read for it
+async function readsDescribing(actions: ReturnType<typeof describedByConstants>[], load: () => Promise<Catalog>): Promise<number> {
+  let reads = 0;
+  await describeRegistryTargets([ { actions } ] as never, MAINNET, {
+    registry: { load: () => { reads += 1; return load(); } } as never,
+    debug:    undefined as never,
+  });
+  return reads;
+}
+
+/*
+ * A market is as often an argument of an action as its target: a token
+ * approved to it, COMP sent to it, an admin handed to it. The constants name
+ * no market, so such an action is described again from the version, which
+ * links the market at its checksummed address.
+ */
+t.test('an action whose arguments name a market names it from the version', async t => {
+  const cUSDCv3  = catalog.marketAt(MAINNET, USDC)!.comet.address;
+  const link     = `[cUSDCv3](https://etherscan.io/address/${cUSDCv3})`;
+  const amountTo = (to: string, amount: string) => defaultAbiCoder.encode([ 'address', 'uint256' ], [ to, amount ]);
+
+  const approve  = describedByConstants(USDC_TOKEN, 'approve(address,uint256)', amountTo(USDC, '1000000'));
+  const transfer = describedByConstants(COMP, 'transfer(address,uint256)', amountTo(USDC, '1000000000000000000'));
+  const handover = describedByConstants(TIMELOCK, 'setPendingAdmin(address)', defaultAbiCoder.encode([ 'address' ], [ USDC ]));
+  t.ok([ approve, transfer, handover ].every(action => action.title.includes(cUSDCv3) && !action.title.includes('[cUSDCv3]')),
+    'the constants leave the market its address');
+
+  t.equal(await readsDescribing([ approve, transfer, handover ], async () => catalog), 1, 'the registry is read once for them all');
+  t.ok(approve.title.includes(`.approve("${link}", `), 'a token approved to the market names it');
+  t.equal(transfer.title, `Transfer 1.00 [COMP](https://etherscan.io/address/${COMP}) to ${link}`, 'and so does COMP sent to it');
+  t.ok(handover.title.endsWith(`.setPendingAdmin("${link}")`), 'and an admin handed to it');
+
+  const known = describedByConstants(COMP, 'transfer(address,uint256)', amountTo(TIMELOCK, '1'));
+  t.equal(await readsDescribing([ known ], async () => catalog), 0,
+    'an action whose addresses the constants all know never reads the registry');
+
+  const grant  = describedByConstants(COMP, 'transfer(address,uint256)', amountTo(RECIPIENT, '1'));
+  const before = grant.title;
+  t.equal(await readsDescribing([ grant ], async () => catalog), 1, 'one naming an address they do not know reads it');
+  t.equal(grant.title, before, 'and is left as it was where the version names nothing either');
+});
+
+/*
+ * A proposal names a market whatever the version says of it: it sets one up
+ * before the version serves it, and retires one the version no longer
+ * serves. A market the version holds disabled is named as a served one is; a
+ * Comet the version does not hold stays an address, and so does every market
+ * while the registry cannot be read.
+ */
+t.test('a market the version holds without serving it is named all the same', async t => {
+  const cWBTCv3 = catalog.marketAt(MAINNET, WBTC)!.comet.address;
+  const sentTo  = () => describedByConstants(COMP, 'transfer(address,uint256)',
+    defaultAbiCoder.encode([ 'address', 'uint256' ], [ WBTC, '1000000000000000000' ]));
+  const titleFrom = async (load: () => Promise<Catalog>) => {
+    const action = sentTo();
+    await readsDescribing([ action ], load);
+    return action.title;
+  };
+  const wbtcAs = (change: Partial<MarketV1>) => catalogOf(withMarket('wbtc', market => ({ ...market, ...change })));
+
+  const disabled = wbtcAs({ status: 'disabled' });
+  t.equal(disabled.marketAt(MAINNET, WBTC), null, 'a disabled market is not served');
+  t.ok((await titleFrom(async () => disabled)).endsWith(` to [cWBTCv3](https://etherscan.io/address/${cWBTCv3})`),
+    'but is named by its contract name, as a served one is');
+  t.ok((await titleFrom(async () => wbtcAs({ status: 'disabled', contractName: null, displayName: 'wbtc' })))
+    .endsWith(` to [wbtc](https://etherscan.io/address/${cWBTCv3})`), 'or by its label, where nobody has named it yet');
+
+  const unnamed = sentTo().title;
+  t.ok(unnamed.endsWith(` to ${cWBTCv3}`), 'the constants leave it its address');
+  const unheld = catalogOf({
+    ...snapshot,
+    networks: snapshot.networks.map(network => ({
+      ...network,
+      markets: network.markets.filter(market => market.contracts.comet !== WBTC),
+    })),
+  });
+  t.equal(await titleFrom(async () => unheld), unnamed, 'which a Comet the version does not hold keeps');
+  t.equal(await titleFrom(async () => { throw new Error('D1 is down'); }), unnamed,
+    'as does every market while the registry cannot be read');
+});
+
+/*
+ * Vote receipts carry the proposal they were cast on where the client asks
+ * for it, described as the proposal list describes it.
+ */
+t.test('vote receipts with their proposals name markets as the proposal list does', async t => {
+  const VOTER    = '0x6666666666666666666666666666666666666666';
+  const cUSDCv3  = catalog.marketAt(MAINNET, USDC)!.comet.address;
+  const bravo    = (Eth.wellKnownContractsByNetwork[MAINNET] as any)['GovernorBravo']['default'];
+  const proposal = {
+    id:          BigNumber.from(400),
+    eta:         0,
+    title:       'Approve USDC to cUSDCv3',
+    description: '',
+    startBlock:  20_000_000,
+    endBlock:    20_020_000,
+    voteEntries: [ { voter: VOTER, support: 1, votes: BigFixnum.from({ value: '1000000000000000000', decimals: 18 }) } ],
+    states:      [ { state: 'executed', startBlock: 20_030_000 } ],
+    actions:     [ describedByConstants(USDC_TOKEN, 'approve(address,uint256)',
+      defaultAbiCoder.encode([ 'address', 'uint256' ], [ USDC, '1000000' ])) ],
+    proposer:    { address: VOTER },
+  };
+  // the latest block, and the proposals of each governor: this one is Bravo's
+  const evaluator = {
+    pull1:    (request: unknown) => request,
+    join:     ([ requests, combine ]: [ any[], (results: unknown[][]) => unknown ]) => ({ requests, combine }),
+    evaluate: async (expression: any) => 'combine' in expression
+      ? expression.combine(expression.requests.map((request: any) => request.allProposals.contract === bravo ? [ proposal ] : []))
+      : { number: 99_000_000, timestamp: 1_900_000_000 },
+  };
+  // the voters' profiles, of which Tally has none
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({ data: { governors: [] } }))) as never;
+  t.teardown(() => { globalThis.fetch = fetchBefore; });
+
+  let reads = 0;
+  const receipts = async (query: Record<string, string>) => {
+    const response = await getProposalVoteReceipts({
+      apiHost: '', nodeHost: '', nodeKey: '', network: MAINNET, contract: 'all-contracts',
+      queryParams: new URLSearchParams(query),
+      registry:    { load: async () => { reads += 1; return catalog; } },
+    } as never, { evaluator, env: { TALLY_API_KEY: '' }, debug: undefined } as never);
+    const body = await response.json() as { proposal_vote_receipts: Array<{ proposal: { actions: Array<{ title: string }> } | null }> };
+    return body.proposal_vote_receipts;
+  };
+
+  const [ bare ] = await receipts({ account: VOTER });
+  t.equal(bare?.proposal, null, 'a receipt carries no proposal unless asked to');
+  t.equal(reads, 0, 'and reads no registry');
+
+  const [ receipt ] = await receipts({ account: VOTER, with_proposal_data: 'true' });
+  t.equal(reads, 1, 'with its proposal, the registry is read once');
+  t.ok(receipt?.proposal?.actions[0]?.title.includes(`.approve("[cUSDCv3](https://etherscan.io/address/${cUSDCv3})", `),
+    'and the proposal names the market its action approves a token to');
+});
+
+/*
+ * A token bridge carries tokens to an address on another chain, often to a
+ * market seeded with reserves. That address is named on its own chain, which
+ * no mainnet lookup can tell, so every such action is described again.
+ */
+t.test('a token bridged to a market of another chain names it from the version', async t => {
+  const AERO     = '0x784efeb622244d2348d4f2522f8860b96fbece89';
+  const cAEROv3  = catalog.marketAt('base-mainnet', AERO)!.comet.address;
+  const bridge   = (Eth.wellKnownContractsByNetwork[MAINNET] as any)['BaseL1StandardBridge']['default'].address;
+  const baseCOMP = (Eth.wellKnownContractsByNetwork['base-mainnet'] as any)['COMP']['default'].address;
+  const deposit  = () => describedByConstants(bridge, 'depositERC20To(address,address,address,uint256,uint32,bytes)',
+    defaultAbiCoder.encode([ 'address', 'address', 'address', 'uint256', 'uint32', 'bytes' ],
+      [ COMP, baseCOMP, AERO, '1000000000000000000', 200_000, '0x' ]));
+
+  const unnamed = deposit();
+  t.ok(unnamed.title.endsWith(` over Base to ${cAEROv3}`), 'the constants leave the market its address');
+  const named = deposit();
+  t.equal(await readsDescribing([ named ], async () => catalog), 1, 'the registry is read once');
+  t.ok(named.title.endsWith(` over Base to [cAEROv3](https://basescan.org/address/${cAEROv3})`),
+    'and the market is named on its own chain, linked at its checksummed address');
+
+  const down = deposit();
+  await readsDescribing([ down ], async () => { throw new Error('D1 is down'); });
+  t.equal(down.title, unnamed.title, 'while the registry cannot be read it keeps its address');
+});
+
 /*
  * Governance decodes proposal targets against the contracts this API knows by
  * name. The protocol's own contracts stay static; markets come from the
- * version, so a proposal that configures a newly added market reads as
- * something rather than as a bare address.
+ * version, the only source that names them, so a proposal that configures one
+ * reads as something rather than as a bare address.
  */
 t.test('registry markets are merged into the contracts governance decodes against', async t => {
   const merged = withRegistryContracts(Eth.wellKnownContractsByNetwork, catalog.markets());
@@ -560,9 +755,10 @@ t.test('registry markets are merged into the contracts governance decodes agains
 /*
  * Governance describes a proposal against the constants, and again against
  * the registry only where the registry can say more: an action whose target
- * only the registry describes, a bridge whose inner actions may target one,
- * and a call to a contract that administers markets. A target neither knows
- * is left as it was.
+ * or argument only the registry names, a bridge whose inner actions may
+ * target a market, a token bridged to another chain, and a call to a
+ * contract that administers markets. An address neither knows is left as it
+ * was.
  */
 t.test('proposal actions are described again where the registry says more', async t => {
   const NEW_MAINNET = '0x3333333333333333333333333333333333333333';
@@ -652,8 +848,9 @@ t.test('proposal actions are described again where the registry says more', asyn
   t.match(onCometRewards.title, /^Set reward token for market \[cMAINv3\]/,
     'and a reward token set through CometRewards the market it is set for');
 
+  // a call to COMP whose arguments name no address
   let unread = 0;
-  const known = [ { actions: [ action(USDC, pause, paused) ] } ] as never as Parameters<typeof describeRegistryTargets>[0];
+  const known = [ { actions: [ action(comp, pause, paused) ] } ] as never as Parameters<typeof describeRegistryTargets>[0];
   await describeRegistryTargets(known, MAINNET, {
     registry: { load: async () => { unread += 1; return registry; } } as never,
     debug:    undefined as never,

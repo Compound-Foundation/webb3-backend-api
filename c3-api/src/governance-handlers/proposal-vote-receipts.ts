@@ -8,13 +8,14 @@ import * as governanceModel from '../../lib/model/governance.js';
 
 import { Context } from './handlers.js';
 import {
+  describeRegistryTargets,
   formatProposals,
   knownGovernanceContracts,
 } from './proposals.js';
 import { getPageData, PaginationSummary } from '../pagination.js';
 
 async function getProposalVoteReceipts(
-  { apiHost, nodeHost, nodeKey, network, queryParams }: GovernanceRouteData,
+  { apiHost, nodeHost, nodeKey, network, queryParams, registry }: GovernanceRouteData,
   context: Context
 ): Promise<Response> {
   const { evaluate, join, pull1 } = context.evaluator;
@@ -93,6 +94,8 @@ async function getProposalVoteReceipts(
   // Maybe map the proposal id to its formatted proposal, if proposal data should be returned.
   const maybeFormattedProposalsById: { [key: string]: governanceModel.proposal.FormattedProposal } = {};
   if (shouldIncludeProposalData) {
+    // a proposal names its markets here as the proposal list names them
+    await describeRegistryTargets(filteredProposals, network, { registry, debug: context.debug });
     const formattedProposals = formatProposals(
       filteredProposals,
       network,

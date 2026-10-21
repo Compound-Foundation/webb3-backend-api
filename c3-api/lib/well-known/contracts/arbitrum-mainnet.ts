@@ -1,5 +1,4 @@
 import {
-  Comet,
   ERC20,
   PriceFeed,
   UntypedContract,
@@ -172,16 +171,6 @@ const USDC_USD_priceFeed = PriceFeed(<const>{
   },
 });
 
-const USDT_USD_priceFeed = PriceFeed(<const>{
-  decimals: 8,
-  network: 'arbitrum-mainnet',
-  address: '0x3f3f5dF88dC9F13eac63DF89EC16ef6e7E25DdE7',
-  block: {
-    number: 101979,
-    timestamp: 1626141170
-  },
-});
-
 const WETH_USD_priceFeed = PriceFeed(<const>{
   aliases: ['WETH-USD'],
   decimals: 8,
@@ -214,90 +203,6 @@ const COMP_USD_priceFeed = PriceFeed(<const>{
   },
 });
 
-const Comet_01usdc = Comet(<const>{
-  // The naming overlaps with our cUSDCv3 mainnet market, but
-  // it's fine to display, since cross-chain will always
-  // explicitly mention they're bridged to the new chain.
-  displayName: 'cUSDC.ev3',
-  aliases: ['01-usdc', 'cUSDC.ev3'],
-  base: {
-    asset: USDCe,
-    priceFeed: USDC_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: CometRewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: 'arbitrum-mainnet',
-  address: '0xA5EDBDD9646f8dFF606d7448e414884C7d905dCA',
-  block: {
-    number: 87335214,
-    timestamp: 1683235205,
-  },
-});
-
-const Comet_01weth = Comet(<const>{
-  displayName: 'cWETHv3',
-  aliases: [ '01-weth', 'cWETHv3' ],
-  base: {
-    asset: WETH,
-    priceFeed: WETH_ETH_priceFeedConstant,
-    usdPriceFeed: WETH_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    priceFeed: COMP_USD_priceFeed,
-    contract: CometRewards,
-  },
-  network: 'arbitrum-mainnet',
-  address: '0x6f7D514bbD4aFf3BcD1140B7344b32f063dEe486',
-  block: {
-    number: 219386101,
-    timestamp: 1717772620,
-  },
-});
-
-const Comet_02usdc = Comet(<const>{
-  displayName: 'cUSDCv3',
-  aliases: ['02-usdc', 'cUSDCv3'],
-  base: {
-    asset: USDC,
-    priceFeed: USDC_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: CometRewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: 'arbitrum-mainnet',
-  address: '0x9c4ec768c28520B50860ea7a15bd7213a9fF58bf',
-  block: {
-    number: 122080500,
-    timestamp: 1692224992,
-  },
-});
-
-const Comet_01usdt = Comet(<const>{
-  displayName: 'cUSDTv3',
-  aliases: [ '01-usdt', 'cUSDTv3' ],
-  base: {
-    asset:     USDT,
-    priceFeed: USDT_USD_priceFeed,
-  },
-  rewards: {
-    asset:    COMP,
-    contract: CometRewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: 'arbitrum-mainnet',
-  address: '0xd98Be00b5D27fc98112BdE293e487f8D4cA57d07',
-  block: {
-    number: 223796350,
-    timestamp: 1718876435
-  },
-});
-
 const Bulker_01usdc = UntypedContract('Bulker', {
   aliases: ['01-usdc', 'cUSDCv3', '01-weth', 'cWETHv3', '01-usdt', 'cUSDTv3'],
   network: 'arbitrum-mainnet',
@@ -310,8 +215,8 @@ const Bulker_01usdc = UntypedContract('Bulker', {
 
 const markets = <const>([
   CometAdmin, CometRewards, CometFactory, Bulker_01usdc,
-  COMP_USD_priceFeed, USDC_USD_priceFeed, Comet_01usdc, Comet_02usdc,
-  Comet_01weth, Comet_01usdt, WETH_USD_priceFeed, WETH_ETH_priceFeedConstant
+  COMP_USD_priceFeed, USDC_USD_priceFeed,
+  WETH_USD_priceFeed, WETH_ETH_priceFeedConstant
 ]);
 
 const Configurator = UntypedContract('Configurator', <const>{

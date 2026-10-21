@@ -189,9 +189,11 @@ shape the static constants used, carrying the version's description of the
 market. Its units, its labels, its reward feed and the price exceptions of
 its network are read from that description, and every computation that
 reads it, or hands its market to one that does, is typed to take nothing
-else. The constants type their Comets for that: one read from them as
-`['Comet'][alias]` does not compile there. What the compiler cannot type —
-a cast, or a name computed at run time — it cannot refuse either.
+else. The constants name no market of a mainnet any more, but their `Comet`
+key still types a Comet read from them as `['Comet'][alias]`, and such a read
+does not compile there: [the consumers test](./tests/lib/registry/consumers.test.ts)
+holds one of that type to every refusal. What the compiler cannot type — a
+cast, or a name computed at run time — it cannot refuse either.
 
 What that means for the endpoints:
 
@@ -208,16 +210,29 @@ What that means for the endpoints:
   cursor issued before the registry, which carries no version, whatever it
   reads;
 - routes that resolve no market — V2 and gas price — never read `APP_DB`,
-  and governance reads it only to describe proposal actions. The proposal
-  list describes the actions of the page it answers against the static
-  constants, then those the constants cannot fully name once more, with the
-  markets of the active version merged in: a target the constants do not
-  know and the version does, an action bridged to another chain, and a call
-  to the Configurator, CometAdmin (the CometProxyAdmin), CometRewards or
-  CometFactory, whose arguments name the market it acts on. Almost every
-  page has one, so the list reads the registry on almost every request; when
-  it cannot, those actions keep the constants' description, and the list is
-  answered all the same.
+  and governance reads it only to name the markets of proposal actions,
+  which the static constants do not. The proposal list, and the vote
+  receipts with their proposals (`with_proposal_data`), describe each action
+  against the constants, then those the constants cannot fully name once
+  more, with the markets of the active version merged in: an action whose
+  target or argument the constants do not know and the version names, an
+  action bridged to another chain, a token bridged to an address on another
+  chain, and a call to the Configurator, CometAdmin (the CometProxyAdmin),
+  CometRewards or CometFactory, whose arguments name the market it acts on.
+  The version names the markets it serves, with their base and reward
+  tokens, and the disabled markets it holds without serving them, each by
+  its contract name, or its label where it has none, linked at its address
+  checksummed. Almost every page has such an action, so the proposal list,
+  and the vote receipts with their proposals, read the registry on almost
+  every request. A Comet the active version does not hold shows as its
+  address, and so does every market while the registry cannot be read:
+  those actions keep the description the proposal list computed, which
+  names no market, or the constants' name where the list cached it before
+  they stopped naming markets; the answer is given all the same. A
+  governance path that names a Comet as its contract, such as
+  `/governance/ethereum-mainnet/{comet}/proposals`, is refused with `400`
+  `Error: Contract address not known`, as any address the constants do not
+  know is.
 
 A commit can be imported more than once — discovery tries again after an
 attempt that did not import every root, each time later, and an operator can
@@ -321,9 +336,10 @@ candidate open instead of validating it, because a version of nothing but
 unreviewed markets could only end invalid.
 
 There are ten networks and twenty-nine markets to review, and every value is
-one this API already acts on: the static constants name the markets and their
-feeds, the branches the registry replaced decided their capabilities, quote
-units and price exceptions, and the frontend lists them under its labels.
+one this API acted on before the registry: the static constants named the
+markets and their feeds, the branches the registry replaced decided their
+capabilities, quote units and price exceptions, and the frontend lists them
+under its labels.
 Those decisions are checked in as the body of `PUT /versions/{id}/overlays`,
 [`registry/seed/production.json`](./registry/seed/README.md), with each
 market's Comet beside it in `production.comets.json`. The operator checks
@@ -361,7 +377,7 @@ attempt of each root, not all five.
 
 [The file's README](./registry/seed/README.md) says where each kind of value
 came from, and why a value departs from its rule where one does. The quote
-units were read from the chain rather than the constants, which are wrong
+units were read from the chain rather than the constants, which were wrong
 about them in places; labels and presentation data — asset display overrides
 and unwrapped collateral pairs — existed nowhere but the frontend, and were
 copied once from it at a named commit. Nothing in this API reads the
