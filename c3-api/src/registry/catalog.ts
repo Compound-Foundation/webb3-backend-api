@@ -106,6 +106,14 @@ type Catalog = {
    * not renamed here.
    */
   renamedSymbolAt(network: KnownNetwork.Name, address: Address): string | null,
+  /*
+   * The markets of the version that markets() leaves out, disabled ones, as
+   * contracts that only name them, by the name a served market has. A
+   * proposal names a market whatever the version says of it — it sets one up
+   * before it is served, and retires one no longer served — so governance
+   * names these too. Nothing else may resolve a market through them.
+   */
+  unservedMarkets(): Contract[],
 };
 
 function networkName(network: NetworkV1): KnownNetwork.Name | null {
@@ -218,6 +226,11 @@ function servedNetworks(snapshot: RegistrySnapshotV1): Array<{ network: NetworkV
     .filter(({ markets }) => markets.length > 0);
 }
 
+// what governance calls a market
+function contractNameOf(market: MarketV1): string {
+  return market.contractName ?? market.displayName;
+}
+
 /*
  * One market as the computations see it.
  *
@@ -262,7 +275,7 @@ function cometOf(
   const comet   = Comet({
     network,
     address:     shown(address),
-    displayName: market.contractName ?? market.displayName,
+    displayName: contractNameOf(market),
     // the registry stores no alias keys; a market is addressed by its Comet
     aliases:     [] as const,
     block:       { number: block },
@@ -408,6 +421,22 @@ function catalogOf(snapshot: RegistrySnapshotV1, now: Date = new Date()): Catalo
   const renamed = new Map<string, string>(networks.flatMap(network => renamesOf(network)
     .map(override => [ `${network.key}:${override.tokenAddress}`, override.symbol ] as const)));
 
+  /*
+   * A network this API cannot name has no contracts to name a market among,
+   * and a market without a Comet has no address to name, so neither is here.
+   */
+  const unserved: Contract[] = snapshot.networks.flatMap(network => {
+    const name = networkName(network);
+    return name === null ? [] : network.markets.flatMap(market => (
+      isServed(market) || market.contracts.comet === null ? [] : [ UntypedContract('Comet', {
+        network:     name,
+        address:     shown(market.contracts.comet),
+        displayName: contractNameOf(market),
+        block:       { number: market.creationBlock },
+      }) ]
+    ));
+  });
+
   return {
     versionId:     snapshot.registryVersion.id,
     checksum:      snapshot.registryVersion.checksum,
@@ -421,6 +450,7 @@ function catalogOf(snapshot: RegistrySnapshotV1, now: Date = new Date()): Catalo
     renamedSymbolAt: (network, address) => renamed.get(`${network}:${address.toLowerCase()}`) ?? null,
     marketsOn: network => byNetworkMarkets.get(network) ?? [],
     marketAt:  (network, cometAddress) => byComet.get(`${network}:${cometAddress.toLowerCase()}`) ?? null,
+    unservedMarkets: () => unserved,
   };
 }
 

@@ -52,6 +52,24 @@ t.beforeEach(() => {
 const testDebug = debug.scope('test');
 testDebug.log({ flags });
 
+/*
+ * The dump was made while the constants named the Comets, and the proposal
+ * computation now leaves each as its address: governance names markets from
+ * the registry once the computation is done (describeRegistryTargets).
+ * cUSDCv3 is the only Comet up to the test block, so the expectation is read
+ * with every link to it written as the address the computation leaves,
+ * whatever the link was named, and the computation's actions are compared as
+ * they are. Pinning the expectation and regenerating it removes this; see
+ * "How to Update E2E test dumps" in the README.
+ */
+const CUSDCV3      = '0xc3d688B66703497DAA19211EEdff47f25384cdc3';
+const CUSDCV3_LINK = /\[[^\]]*\]\(https:\/\/etherscan\.io\/address\/0xc3d688b66703497daa19211eedff47f25384cdc3\)/gi;
+
+function asRecordedNow(actions: proposalModel.Proposal['actions']): proposalModel.Proposal['actions'] {
+  const recorded = (title: string) => title.replace(CUSDCV3_LINK, CUSDCV3);
+  return actions.map(action => ({ ...action, title: recorded(action.title), subtitles: action.subtitles.map(recorded) }));
+}
+
 t.test(`allProposals alpha + bravo @ block=${testBlock.number}`, async t => {
   /*
    * 1. Setup.
@@ -166,7 +184,7 @@ t.test(`allProposals alpha + bravo @ block=${testBlock.number}`, async t => {
     t.equal(proposal.description, expected.description,   `${prefix}.description`);
     // deeply same: states, actions, proposer, voteEntries
     t.strictSame(proposal.states,      expected.states,      `${prefix}.states`);
-    t.strictSame(proposal.actions,     expected.actions,     `${prefix}.actions`);
+    t.strictSame(proposal.actions,     asRecordedNow(expected.actions), `${prefix}.actions`);
     t.strictSame(proposal.proposer,    expected.proposer,    `${prefix}.proposer`);
     t.strictSame(proposal.voteEntries, expected.voteEntries, `${prefix}.voteEntries`);
   }

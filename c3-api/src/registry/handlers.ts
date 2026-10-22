@@ -30,11 +30,8 @@ import {
 } from './repository.js';
 import { compareVersions } from './changes.js';
 import { isServed, servedNetworks } from './catalog.js';
-import { bundleOf, digestOf, proposalFor, reviewDocument } from './bootstrap.js';
-import type { Generated } from './bootstrap.js';
 import { orderNetworks, overlayDigest, overlayOfMarket, parseMarketOverlay } from './overlay.js';
-import { replaceOverlays, validateStoredVersion } from './admin.js';
-import type { CreationReader, FeedReader } from './admin.js';
+import { validateStoredVersion } from './admin.js';
 import { cancelRun } from './sync.js';
 
 /*
@@ -584,97 +581,6 @@ async function getNetworkOverlay(context: RegistryContext, versionId: string, ch
 }
 
 /*
- * The proposal for a version's first review, built by the release that serves
- * this request from the markets the version imported. Building it twice from
- * the same version and release gives the same proposal, which is what lets
- * `apply` accept a digest instead of the documents.
- */
-async function proposalOf(
-  context: RegistryContext,
-  versionId: string,
-): Promise<{ repository: string, generated: Generated, digest: string }> {
-  const [ version, activeId ] = await Promise.all([
-    readVersion(context.db, versionId),
-    readActiveVersionId(context.db),
-  ]);
-  if (version === null) {
-    throw new ApiError('NOT_FOUND', `no registry version with that id`);
-  }
-  /*
-   * The proposal is the first review of an environment, derived from the
-   * static constants. Once a version has been activated, the decisions live
-   * in the registry and every draft inherits them: applying the proposal to a
-   * draft would put the constants' values back over everything reviewed
-   * since — a renamed market, a disabled one, an exception added — and its
-   * review would call them the values the API acts on today, which they no
-   * longer are.
-   */
-  if (activeId !== null) {
-    throw new ApiError(
-      'CONFLICT',
-      `a version of this registry has been activated, so its decisions are reviewed with the overlay routes; `
-        + `the proposal is for its first version only`,
-    );
-  }
-  const generated = proposalFor(orderNetworks(await readSnapshot(context.db, versionId)), {
-    repository: version.source_repository,
-    commit:     version.source_commit_sha,
-  });
-  return { repository: version.source_repository, generated, digest: await digestOf(generated) };
-}
-
-// the proposal as the overlays route would take it, with what it leaves undecided
-async function getProposal(context: RegistryContext, versionId: string): Promise<Response> {
-  const { generated, digest } = await proposalOf(context, versionId);
-  return jsonResponse({
-    versionId,
-    digest,
-    needsDecision: generated.notes
-      .filter(note => note.open)
-      .map(({ scope, field, source }) => ({ scope, field, reason: source })),
-    bundle: bundleOf(generated),
-  });
-}
-
-// the same proposal as a person reads it, naming the digest to apply it by
-async function getProposalReview(context: RegistryContext, versionId: string): Promise<Response> {
-  const { repository, generated, digest } = await proposalOf(context, versionId);
-  return new Response(reviewDocument(generated, repository, digest), {
-    headers: { 'Content-Type': 'text/markdown; charset=utf-8' },
-  });
-}
-
-/*
- * Applies the proposal an operator read, by its digest: it is built again and
- * written only if it is still the proposal with that digest, all of it or
- * none, exactly as the overlays route writes a directory.
- */
-async function applyProposal(
-  context: RegistryContext,
-  versionId: string,
-  request: { digest: string, reason: string },
-  readFeeds: FeedReader,
-  readCreations: CreationReader,
-): Promise<Response> {
-  const { generated, digest } = await proposalOf(context, versionId);
-  if (digest !== request.digest) {
-    throw new ApiError(
-      'CONFLICT',
-      `this version's proposal is no longer the one with digest ${request.digest}; read its review again`,
-      { digest },
-    );
-  }
-  const result = await replaceOverlays(context.db, {
-    versionId,
-    actor:    context.actor,
-    reason:   request.reason,
-    networks: generated.networks.map(({ chainId, overlay }) => ({ chainId, overlay })),
-    markets:  generated.markets.map(({ chainId, deploymentKey, overlay }) => ({ chainId, deploymentKey, overlay })),
-  }, readFeeds, readCreations);
-  return jsonResponse({ digest, ...result });
-}
-
-/*
  * A validation that ran answers 200 whatever it decided: an invalid version
  * is the outcome of the command, not a failure of it, and `version.status`
  * says which it is, beside the checks that decided it. A command that could
@@ -721,12 +627,9 @@ export {
   getActive,
   getChanges,
   getMarket,
-  applyProposal,
   getMarketOverlay,
   getMarkets,
   getNetworkOverlay,
-  getProposal,
-  getProposalReview,
   getNetworks,
   getSyncRun,
   getVersion,

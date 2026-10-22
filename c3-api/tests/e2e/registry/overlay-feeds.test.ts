@@ -6,12 +6,13 @@ import type { Env } from '../../../entrypoint.js';
 import type * as jsonRpc from '../../../lib/json-rpc.js';
 import type { Address, PriceFeedV1 } from '../../../lib/model/comet-registry.js';
 
+import { overlayDocuments } from '../../../src/registry/admin-router.js';
 import { CreationReader, FeedReader, replaceMarketOverlay, replaceNetworkOverlay, replaceOverlays } from '../../../src/registry/admin.js';
 import { readCreationBlocks, readFeeds } from '../../../src/registry/enrichment.js';
-import { RegistryContext, applyProposal, getProposal } from '../../../src/registry/handlers.js';
 import { overlayOfMarket } from '../../../src/registry/overlay.js';
 import { readSnapshot } from '../../../src/registry/repository.js';
 import { asApiError } from '../../../src/registry/router.js';
+import { bodyFor } from '../../util/registry-seed.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate } from '../../util/registry-fixture.js';
@@ -292,11 +293,11 @@ t.test('a directory has its creation blocks checked one network a read', async t
 
 /*
  * A first import states no creation block, since nobody has decided one
- * (provisionalMarketOverlay), so the proposal an environment's first review
- * applies states every one, from the Comets' constants: each is checked, one
- * read a network, before anything of the proposal is written.
+ * (provisionalMarketOverlay), so the seed an environment's first review
+ * sends states every one: each is checked, one read a network, before
+ * anything of the seed is written.
  */
-t.test('the proposal for a first import has every creation block it states checked', async t => {
+t.test('the seed for a first import has every creation block it states checked', async t => {
   const { db, versionId } = await freshCandidate();
   await db.batch([
     db.prepare(
@@ -304,24 +305,19 @@ t.test('the proposal for a first import has every creation block it states check
     ).bind(versionId),
     db.prepare(`UPDATE registry_networks SET reviewed = 0 WHERE registry_version_id = ?1`).bind(versionId),
   ]);
-  // the proposal is read and applied from the database and the actor alone
-  const context = { db, actor: 'test-admin' } as RegistryContext;
-  const proposal = await (await getProposal(context, versionId)).json() as {
-    digest: string,
-    bundle: { markets: Record<string, { creationBlock: number }> },
-  };
-  const request  = { digest: proposal.digest, reason: 'bootstrap' };
-  const proposed = (chainId: number, key: string) => proposal.bundle.markets[`${chainId}/${key}`]!.creationBlock;
+  const seed   = overlayDocuments(bodyFor(snapshot), versionId, 'test-admin');
+  const seeded = (chainId: number, key: string) => (seed.markets
+    .find(market => market.chainId === chainId && market.deploymentKey === key)!.overlay as { creationBlock: number }).creationBlock;
 
-  const contradicted = await applyProposal(context, versionId, request, knownFeeds, async (network, markets) => (
+  const contradicted = await replaceOverlays(db, seed, knownFeeds, async (network, markets) => (
     network === 'base-mainnet' ? markets.map(({ scope }) => `${scope}.creationBlock is not the block its Comet was deployed in`) : []
   )).then(() => null, (error: unknown) => error as Error & { code?: string });
-  t.equal(contradicted?.code, 'OVERLAY_CREATION_BLOCK_WRONG', 'one block the chain contradicts refuses the proposal');
+  t.equal(contradicted?.code, 'OVERLAY_CREATION_BLOCK_WRONG', 'one block the chain contradicts refuses the seed');
   t.equal(await eventsOf(db, versionId), 0, 'and nothing of it is written');
 
   const { readCreations, asked } = askedOf();
-  const applied = await applyProposal(context, versionId, request, knownFeeds, readCreations);
-  t.equal(applied.status, 200, 'with every block right, the proposal is applied');
+  const written = await replaceOverlays(db, seed, knownFeeds, readCreations);
+  t.equal(written.changed, true, 'with every block right, the seed is written');
   t.same(
     asked
       .map(({ network, markets }) => ({ network, markets: [ ...markets ].sort((left, right) => left.scope.localeCompare(right.scope)) }))
@@ -333,13 +329,13 @@ t.test('the proposal for a first import has every creation block it states check
           .map(market => ({
             scope: `markets.${network.chainId}/${market.deploymentKey}`,
             comet: market.contracts.comet,
-            block: proposed(network.chainId, market.deploymentKey),
+            block: seeded(network.chainId, market.deploymentKey),
           }))
           .sort((left, right) => left.scope.localeCompare(right.scope)),
       }))
       .sort((left, right) => left.network.localeCompare(right.network)),
-    'each network was read once, for the block the constants state for every market',
+    'each network was read once, for the block the seed states for every market',
   );
   t.ok(asked.every(({ markets }) => markets.every(({ block }) => block > 0)), 'which is a block for each of them');
-  t.equal(await storedBlock(db, versionId), proposed(1, 'usdc'), 'and is the block the market then holds');
+  t.equal(await storedBlock(db, versionId), seeded(1, 'usdc'), 'and is the block the market then holds');
 });

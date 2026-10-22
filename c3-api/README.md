@@ -189,9 +189,11 @@ shape the static constants used, carrying the version's description of the
 market. Its units, its labels, its reward feed and the price exceptions of
 its network are read from that description, and every computation that
 reads it, or hands its market to one that does, is typed to take nothing
-else. The constants type their Comets for that: one read from them as
-`['Comet'][alias]` does not compile there. What the compiler cannot type —
-a cast, or a name computed at run time — it cannot refuse either.
+else. The constants name no market of a mainnet any more, but their `Comet`
+key still types a Comet read from them as `['Comet'][alias]`, and such a read
+does not compile there: [the consumers test](./tests/lib/registry/consumers.test.ts)
+holds one of that type to every refusal. What the compiler cannot type — a
+cast, or a name computed at run time — it cannot refuse either.
 
 What that means for the endpoints:
 
@@ -208,16 +210,23 @@ What that means for the endpoints:
   cursor issued before the registry, which carries no version, whatever it
   reads;
 - routes that resolve no market — V2 and gas price — never read `APP_DB`,
-  and governance reads it only to describe proposal actions. The proposal
-  list describes the actions of the page it answers against the static
-  constants, then those the constants cannot fully name once more, with the
-  markets of the active version merged in: a target the constants do not
-  know and the version does, an action bridged to another chain, and a call
-  to the Configurator, CometAdmin (the CometProxyAdmin), CometRewards or
-  CometFactory, whose arguments name the market it acts on. Almost every
-  page has one, so the list reads the registry on almost every request; when
-  it cannot, those actions keep the constants' description, and the list is
-  answered all the same.
+  and governance reads it only to name the markets of proposal actions,
+  which the static constants do not. The proposal list, and the vote
+  receipts with their proposals (`with_proposal_data`), describe the
+  actions of the page they answer again, with the markets of the active
+  version merged in, so they read the registry once on every request that
+  answers an action. The version names the markets it serves, with their
+  base and reward tokens, and the disabled markets it holds without serving
+  them, each by its contract name, or its label where it has none, linked
+  at its address checksummed. A Comet the active version does not hold
+  shows as its address. While the registry cannot be read, so does every
+  market: the actions keep the description the proposal list computed,
+  which names no market, or the constants' name where the list cached it
+  before they stopped naming markets; the answer is given all the same. A
+  governance path that names a Comet as its contract, such as
+  `/governance/ethereum-mainnet/{comet}/proposals`, is refused with `400`
+  `Error: Contract address not known`, as any address the constants do not
+  know is.
 
 A commit can be imported more than once — discovery tries again after an
 attempt that did not import every root, each time later, and an operator can
@@ -321,12 +330,15 @@ candidate open instead of validating it, because a version of nothing but
 unreviewed markets could only end invalid.
 
 There are ten networks and twenty-nine markets to review, and every value is
-one this API already acts on: the static constants name the markets and their
-feeds, the branches the registry replaced decided their capabilities, quote
-units and price exceptions, and the frontend lists them under its labels. The
-Worker proposes those decisions for the markets the candidate imported
-(`src/registry/bootstrap.ts`), so the review is reading a document rather
-than typing, and nothing runs outside the environment:
+one this API acted on before the registry: the static constants named the
+markets and their feeds, the branches the registry replaced decided their
+capabilities, quote units and price exceptions, and the frontend lists them
+under its labels.
+Those decisions are checked in as the body of `PUT /versions/{id}/overlays`,
+[`registry/seed/production.json`](./registry/seed/README.md), with each
+market's Comet beside it in `production.comets.json`. The operator checks
+that the candidate holds the seed's markets and sends the file, and nothing
+runs outside the environment but the requests:
 
 ```sh
 # 1. import the whole source in one request. The run ends "heldForReview";
@@ -334,13 +346,15 @@ than typing, and nothing runs outside the environment:
 curl -X POST .../registry/v1/admin/sync -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{}'
 
-# 2. read what this release proposes for that candidate, and its digest
-curl .../registry/v1/admin/versions/$VERSION/proposal/review -H "Authorization: Bearer $TOKEN"
+# 2. check that the candidate holds every market of the seed, under the Comet
+#    production.comets.json names for it
+curl .../registry/v1/admin/versions/$VERSION/changes -H "Authorization: Bearer $TOKEN" \
+  | jq -r '.markets.added[] | "\(.scope) \(.market.contracts.comet)"'
 
-# 3. apply exactly what was read, by its digest: every decision, one transaction
-curl -X POST .../registry/v1/admin/versions/$VERSION/proposal/apply \
+# 3. send the seed: every decision, one transaction
+curl -X PUT .../registry/v1/admin/versions/$VERSION/overlays \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"reason": "first registry version", "digest": "<digest>"}'
+  --data-binary @registry/seed/production.json
 
 # 4. validate, then activate. The first activation expects nothing to be on;
 #    a later one names the version that is
@@ -355,33 +369,35 @@ which is what the steady state needs. Either way each root is attempted at
 most once per request, so a node provider that is briefly down costs one
 attempt of each root, not all five.
 
-The proposal is built from the candidate's own markets by the release serving
-the request, so it cannot describe another set of markets than the one it is
-applied to, and a release deployed to stage and then to production proposes
-the same decisions for the same commit. `apply` builds it again and writes it
-only if it still has the digest the operator read; the write goes through the
-same route as `PUT /versions/{id}/overlays` — every document parsed and every
-row it names found before anything is written, and one D1 transaction.
-Applying the same digest again is safe: it answers `changed: false`.
+[The file's README](./registry/seed/README.md) says where each kind of value
+came from, and why a value departs from its rule where one does. The quote
+units were read from the chain rather than the constants, which were wrong
+about them in places; labels and presentation data — asset display overrides
+and unwrapped collateral pairs — existed nowhere but the frontend, and were
+copied once from it at a named commit. Nothing in this API reads the
+presentation, but the first version already serves it, and the frontend stops
+being where it is decided.
 
-The review puts every proposed decision in a table — names, status, the
-default market, creation blocks, capabilities, quote units, USD and reward
-feeds, price exceptions, presentation — says where each kind of value came
-from, and lists apart what no source could answer. A market the constants do
-not describe is not proposed at all: it stays switched off until it is
-described with the market overlay route. The quote units are read from the
-chain rather than the constants, which are wrong about them in places.
-Labels and presentation data — asset display overrides and unwrapped
-collateral pairs — exist nowhere but the frontend, so they are copied once
-from it at a named commit. Nothing in this API reads the presentation, but
-the first version already serves it, and the frontend stops being where it is
-decided.
+Each document is complete, in the form the registry stores it, which is how
+`GET …/overlay` answers. The `PUT` writes all of them or none, in one D1
+transaction, after every document is parsed, every network and market it
+names is found, and the chain has confirmed what only the chain can: each
+creation block, by the Comet's code at that block and none at the block
+before, and the scale of each feed the candidate does not know yet. A market
+of the candidate the file does not describe stays switched off and
+unreviewed, and is described with the market overlay route; a market of the
+file the candidate does not hold refuses the whole file, which step 2 shows
+first. `expectedDigests` is `null` for every document, so the file is taken
+only by a candidate nobody has reviewed: sent again, or to a draft that
+inherited decisions, it is refused with `409`.
 
-A correction belongs in the tables of `src/registry/bootstrap.ts`: the release
-that carries it proposes it. Once a version is active, the registry is where
-the decisions live, and a later version inherits them: the proposal routes
-answer `409` from then on, because applying the constants' values to a draft
-would undo what was reviewed since.
+A correction to the file is a pull request, which the seed's tests hold to
+what the route and validation would refuse
+([Changing it](./registry/seed/README.md#changing-it));
+[the preflight](./REGISTRY_RUNBOOK.md#the-preflight) holds it against the
+real chain before an environment depends on it. Once a version is active, the
+registry is where the decisions live, and a later version inherits them: the
+file is not sent again, and a decision is changed with the overlay routes.
 
 ### A market the source adds later
 

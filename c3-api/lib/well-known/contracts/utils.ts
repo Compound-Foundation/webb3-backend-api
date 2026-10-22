@@ -192,11 +192,13 @@ function StaticWellKnownContracts<
 /*
  * The constants of every network, by address and by canonical name.
  *
- * Their Comets are typed, where every other name is loose, so that the
- * compiler tells a Comet of the constants from a Comet of the catalog
- * (RegistryComet), the only market a computation takes. Each network is one
- * object type, not an intersection with the loose index, because a typed key
- * intersected with `any` is `any` again.
+ * Their `Comet` key is typed, where every other name is loose, so that the
+ * compiler tells a Comet read from the constants from a Comet of the catalog
+ * (RegistryComet), the only market a computation takes. No mainnet holds one
+ * any more; the key stays typed so that a Comet read from it, a testnet's or
+ * any added later, is still refused. Each network is one object type, not an
+ * intersection with the loose index, because a typed key intersected with
+ * `any` is `any` again.
  */
 export type WellKnownContractsByNetworkAddress = {
   [Network in KnownNetwork.Name]: {
@@ -973,15 +975,16 @@ function getNetworkIfCrossChain({ network, target, signature }: {
 }
 
 /*
- * The static contracts of one network, with the markets and tokens of a
+ * The static contracts of every network, with the markets and tokens of a
  * registry version merged in.
  *
- * Governance decodes proposal action targets against the contracts this API
- * knows by name. The protocol's own contracts — governors, COMP, V2, the
- * bridges — are static and stay static; markets and their tokens come from
- * the activated version, so a proposal that configures a market added after
- * this Worker was built still reads as something rather than as a bare
- * address. A target neither source knows keeps its address, as before.
+ * Governance describes proposal actions, their targets and the addresses
+ * they pass, against the contracts this API knows by name. The protocol's
+ * own contracts — governors, COMP, V2, the bridges — are static and stay
+ * static. Markets and their tokens come from the activated version, the only
+ * source that names a mainnet market, so a proposal that configures one
+ * reads as something rather than as a bare address. An address neither
+ * source knows stays an address.
  */
 function withRegistryContracts(
   wellKnownContracts: WellKnownContractsByNetworkAddress,

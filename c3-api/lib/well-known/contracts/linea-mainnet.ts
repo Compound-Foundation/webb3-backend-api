@@ -1,5 +1,4 @@
 import {
-  Comet,
   ERC20,
   PriceFeed,
   UntypedContract,
@@ -89,16 +88,6 @@ const USDC_USD_priceFeed = PriceFeed(<const>{
   },
 });
 
-const COMP_ETH_priceFeed = PriceFeed(<const>{
-  decimals: 8,
-  network: "linea-mainnet",
-  address: "0x6Af327313876eF9a5D342105747Ebf3aa2543547",
-  block: {
-    number: 23989241,
-    timestamp: 1759248445,
-  },
-});
-
 const COMP_USD_priceFeed = PriceFeed(<const>{
   aliases: ['COMP-USD'],
   decimals: 8,
@@ -131,47 +120,6 @@ const WETH_USD_priceFeed = PriceFeed(<const>{
   },
 });
 
-const Comet_01usdc = Comet(<const>{
-  displayName: 'cUSDCv3',
-  aliases: [ '01-usdc', 'cUSDCv3' ],
-  base: {
-    asset:     USDC,
-    priceFeed: USDC_USD_priceFeed,
-  },
-  rewards: {
-    asset:    COMP,
-    contract: Comet_Rewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: 'linea-mainnet',
-  address: '0x8D38A3d6B3c3B7d96D6536DA7Eef94A9d7dbC991',
-  block: {
-    number: 15197719,
-    timestamp: 1738189859
-  },
-});
-
-const Comet_01weth = Comet(<const>{
-  displayName: 'cWETHv3',
-  aliases: [ '01-weth', 'cWETHv3' ],
-  base: {
-    asset: WETH,
-    priceFeed: WETH_ETH_priceFeedConstant,
-    usdPriceFeed: WETH_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: Comet_Rewards,
-    priceFeed: COMP_ETH_priceFeed,
-  },
-  network: 'linea-mainnet',
-  address: '0x60F2058379716A64a7A5d29219397e79bC552194',
-  block: {
-    number: 20601032,
-    timestamp: 1738189859
-  },
-});
-
 const Bulker = UntypedContract('Bulker', <const>{
   network: 'linea-mainnet',
   address: '0x023ee795361B28cDbB94e302983578486A0A5f1B',
@@ -184,7 +132,7 @@ const Bulker = UntypedContract('Bulker', <const>{
 const market01usdc = <const>([
   CometAdmin, Comet_Rewards, Bulker,
   USDC_USD_priceFeed, COMP_USD_priceFeed, WETH_ETH_priceFeedConstant,
-  WETH_USD_priceFeed, Comet_01usdc, Comet_01weth,
+  WETH_USD_priceFeed,
 ]);
 
 const Configurator = UntypedContract('Configurator', <const>{

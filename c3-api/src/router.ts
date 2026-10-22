@@ -97,11 +97,10 @@ interface GovernanceRouteData {
   queryParams: URL['searchParams'];
   /*
    * The registry, not loaded. Governance resolves its own contracts
-   * statically. The proposal list reads it for three kinds of action it may
-   * describe again — a target the constants do not know, an action bridged
-   * to another chain, and a call to a contract that administers markets —
-   * so almost every page reads it, and only a page with none of them never
-   * reads D1.
+   * statically, and names markets from the registry alone: the proposal
+   * list, and the vote receipts with their proposals, describe the actions
+   * of the page they answer again with its markets, so only a page with no
+   * action never reads D1.
    */
   registry: RequestCatalog;
 }

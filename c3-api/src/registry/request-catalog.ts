@@ -19,8 +19,8 @@ import { registryHeaders } from './version-headers.js';
  * duration, and the version that answered is reported back in the response
  * headers.
  *
- * Loading is lazy, because the routes that need no registry — governance, V2,
- * gas price — must not pay a D1 read, nor fail when the registry is empty.
+ * Loading is lazy: V2 and gas price never pay a D1 read, and governance reads
+ * it only to name the markets of proposal actions, and answers without it.
  */
 type RequestCatalog = {
   // loads the active version; throws RegistryUnavailable when there is none to serve, and a database fault as it is
