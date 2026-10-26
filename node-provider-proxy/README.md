@@ -36,9 +36,9 @@ Each production environment protects the RPC provider quota in a different way, 
 |---|---|---|---|
 | `production-v3-api` | `node-provider-v3-api.compound.xyz` | c3-api (`v3-api` and `v3-api-stage`), through a service binding | `allowedAppKey` secret, `rateLimiter` binding for callers of the public hostname |
 | `production-v3-app` | `node-provider-v3-app.compound.xyz` | Browsers on the v3 app | `rateLimiter` binding, `allowedHosts` |
-| `production-v2` | `node-provider-v2.compound.xyz` | Browsers on the v2 app | `rateLimiter` binding, `allowedHosts` |
+| `production-v2` | `node-provider-v2.compound.xyz` | Browsers on the sunset v2 app (palisade) | `allowedHosts` only. This environment is due to be decommissioned, so it has no rate limit. |
 
-Browsers cannot keep a key secret, so the browser-facing environments limit each client IP instead.
+Browsers cannot keep a key secret, so `production-v3-app` limits each client IP instead.
 
 ### Application key
 
@@ -73,13 +73,13 @@ Do not add `allowedAppKey` to `[vars]` in `wrangler.toml`: Cloudflare rejects a 
 
 ### Rate limit
 
-Each production environment binds a [Workers rate limiter](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) as `rateLimiter`: 60 JSON-RPC calls per 60 seconds for each client. A batch counts once for each call in it, up to 100 calls per request. Over the limit the proxy responds `429` with `Retry-After: 60`. `OPTIONS` preflight requests are not counted.
+`production-v3-api` and `production-v3-app` bind a [Workers rate limiter](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/) as `rateLimiter`: 60 JSON-RPC calls per 60 seconds for each client. A batch counts once for each call in it, up to 100 calls per request. Over the limit the proxy responds `429` with `Retry-After: 60`. `OPTIONS` preflight requests are not counted.
 
 The client is the `cf-connecting-ip` header, which Cloudflare sets on every request from the internet, or `cf-connecting-ipv6` when the zone's Pseudo IPv4 setting adds it. IPv6 clients are counted by their /64 prefix, because one host usually holds a whole /64. Requests from other Workers over a service binding, such as c3-api's, have no `cf-connecting-ip` and are not limited. Requests made while the limiter is failing are not limited either.
 
 Cloudflare counts the limit separately in each of its locations, and the count is eventually consistent, so a client can exceed it briefly. Clients behind one shared IPv4 address, such as a carrier-grade NAT, share one limit. A client that controls many addresses, such as an IPv6 /48 or a pool of IPv4 proxies, can exceed the limit by spreading requests across them. The `namespace_id` of each binding must be unique in the Cloudflare account.
 
-When `rateLimitLogOnly` is `true`, the proxy serves requests over the limit and logs `rate limit exceeded (log only)` for each one. `production-v3-app` and `production-v2` start in this mode. To check how often real users would be refused, run `npx wrangler tail --env production-v3-app --search "rate limit exceeded" --format json` while the apps are busy. Each event includes the request headers, so you can count distinct `cf-connecting-ip` values and tell real browsers (by `user-agent` and `origin`) from scripts. Then set `rateLimitLogOnly = false` and deploy.
+When `rateLimitLogOnly` is `true`, the proxy serves requests over the limit and logs `rate limit exceeded (log only)` for each one. `production-v3-app` starts in this mode. To check how often real users would be refused, run `npx wrangler tail --env production-v3-app --search "rate limit exceeded" --format json` while the app is busy. Each event includes the request headers, so you can count distinct `cf-connecting-ip` values and tell real browsers (by `user-agent` and `origin`) from scripts. Then set `rateLimitLogOnly = false` and deploy.
 
 ## Running Locally
 

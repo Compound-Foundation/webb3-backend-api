@@ -44,9 +44,6 @@ defaultRetryAfterUpstreamErrorSeconds = 5     #  5s backoff Retry-After
 
 [env.production-v2.vars]
 allowedHosts = ["v2-app.compound.xyz", "v2-pinata-host.compound.xyz"]
-# log requests over the rate limit instead of refusing them, until the
-# logs show the limit does not refuse real users: see README.md
-rateLimitLogOnly = true
 
 # secrets: ^^^ same as above, manage with wrangler
 [env.production-v2.vars.settings]
@@ -64,13 +61,6 @@ routes = [
 kv_namespaces = [
     { binding = "kv", id = "b656c8d3ba254c2189a436373efab3ef" },
 ]
-
-# browsers call this proxy directly and cannot hold an app key, so limit
-# each client IP instead: 60 JSON-RPC calls per 60s, per Cloudflare location.
-[[env.production-v2.ratelimits]]
-name = "rateLimiter"
-namespace_id = "1651"
-simple = { limit = 60, period = 60 }
 
 [env.production-v3-app.vars]
 allowedHosts = ["app.compound.xyz", "v3-app.compound.xyz", "v3-pinata-host.compound.xyz"]
