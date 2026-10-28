@@ -1,22 +1,53 @@
 name: c3-api Dependency Audit
+# Runs on every pull request so the check can be required on main. Pull
+# requests that change none of the paths in the "Check for relevant changes"
+# step pass without auditing; pushes to main and manual runs always audit.
 on:
   push:
-    paths:
-      - 'c3-api/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/audit-c3-api.yaml'
+    branches: [main]
+  pull_request:
+    # "edited" covers a base-branch change (a stacked PR retargeted to main),
+    # which would otherwise leave a path check computed against the old base.
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   audit:
-    name: npm audit (high/critical must pass)
+    # The job name is the required status check on main, so it must stay
+    # unique across workflows.
+    name: c3-api npm audit (high/critical must pass)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # On pull_request this checks out the test merge commit; its first
+          # parent is the base branch tip.
+          fetch-depth: 2
+
+      - name: Check for relevant changes
+        id: changes
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "audit=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Fails the step, not skips the audit, if the diff cannot be computed.
+          git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed-files.txt"
+          if grep -qE '^(c3-api/|package\.json$|package-lock\.json$|\.github/workflows/audit-c3-api\.yaml$)' "$RUNNER_TEMP/changed-files.txt"; then
+            echo "audit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No c3-api dependency changes; skipping the audit."
+            echo "audit=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install Node.js
+        if: steps.changes.outputs.audit == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -24,8 +55,10 @@ jobs:
       # The repo-root lockfile covers the shared workspace libraries
       # (c3-api/lib/*) that c3-api builds against.
       - name: Audit shared workspace libraries
+        if: steps.changes.outputs.audit == 'true'
         run: npm audit --audit-level=high
 
       - name: Audit c3-api
+        if: steps.changes.outputs.audit == 'true'
         working-directory: c3-api
         run: npm audit --audit-level=high
