@@ -1,6 +1,11 @@
 name: node-provider-proxy Dependency Audit
 on:
+  # Every pull request runs this audit, whatever it changes, because main
+  # requires the check. Fork pull requests get a read-only token and no secrets.
+  pull_request:
   push:
+    branches:
+      - main
     paths:
       - 'node-provider-proxy/**'
       # node-provider-proxy consumes the shared workspace libraries that
@@ -11,13 +16,18 @@ on:
       - '.github/workflows/audit-node-provider-proxy.yaml'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   audit:
-    name: npm audit (high/critical must pass)
+    name: node-provider-proxy npm audit (high/critical must pass)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install Node.js
         uses: actions/setup-node@v4
