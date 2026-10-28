@@ -5,6 +5,7 @@ import * as streamInto from 'node:stream/consumers';
 
 import * as jsonUtil            from '../../../../util/json.js';
 import { MemoryKv, encodeSeed } from '../../../../util/kv.js';
+import { makeTestEnv }          from '../../../../util/test-env.js';
 
 import C3Api, { Env } from '../../../../../entrypoint.js';
 
@@ -65,12 +66,7 @@ t.test(`/${route} @ block=${testBlock.number}`, async t => {
    */
   // pre-encode seed JSON into in-memory KV format so we only encode once.
   const seed = encodeSeed(seedJson);
-  const testEnv: Env = Object.assign({
-    'TALLY_API_KEY':       'test',
-    'V3_API_HOST':         'test',
-    'NODE_PROXY_HOST':     'test',
-    'NODE_PROXY_KEY':      'test',
-    'ENVIRONMENT':         'test',
+  const testEnv: Env = makeTestEnv({
     'MEMORY_CACHE_SEED':   'governance-history',
     'kv_testnet':  MemoryKv({ seed }),
     'kv_mainnet': MemoryKv({ seed }),

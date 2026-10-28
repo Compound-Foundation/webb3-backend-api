@@ -6,7 +6,9 @@ import * as Fallible from '../../fallible/fallible.js';
 
 import * as KnownNetwork from '../../well-known/networks/network.js';
 
-import { Contract } from '../../well-known/contracts/utils.js';
+import type { RegistryComet } from '../../model/comet-registry.js';
+
+import type { PriceError } from '../comet/get-price.js';
 
 import type { SupplyRewardsApr } from './supply-rewards-apr.js';
 import type { BorrowRewardsApr } from './borrow-rewards-apr.js';
@@ -26,24 +28,31 @@ type RewardsSummary = Compute.Spec<{
     nodeHost: string,
     nodeKey: string,
     block:    Eth.Block,
-    contract: Contract,
+    contract: RegistryComet,
     network:  KnownNetwork.Name,
+    // the feed the version states for the token the market pays
     rewardsTokenPriceFeed: {
       address:  Eth.Address,
       decimals: number,
     },
   },
-  returns: {
-    supplyRewardsApr: string,
-    borrowRewardsApr: string,
-    supplyRewardsRatePerSecond: string,
-    borrowRewardsRatePerSecond: string,
-  },
+  // a price the rates are measured in that reverts leaves nothing to report
+  returns: (
+    | {
+        status: 'success',
+        supplyRewardsApr: string,
+        borrowRewardsApr: string,
+        supplyRewardsRatePerSecond: string,
+        borrowRewardsRatePerSecond: string,
+      }
+    | PriceError
+  ),
 }>;
 
 const { implement, pipe } = Compute.Functor<RewardsSummary>({});
 const rewardsSummary = implement({
-  version: 2,
+  // 3: a price that reverts is reported as the summary's status
+  version: 3,
   /*
    * Since RewardsSummary['expects'] is just MarketDaySummary['expects']
    * but with an added rewardsTokenPriceFeed address, we can also reuse
@@ -79,12 +88,21 @@ const rewardsSummary = implement({
         borrowRewardsApr,
         supplyRewardsRatePerSecond,
         borrowRewardsRatePerSecond,
-      }) => ({
-        supplyRewardsApr: supplyRewardsApr.toString(),
-        borrowRewardsApr: borrowRewardsApr.toString(),
-        supplyRewardsRatePerSecond: supplyRewardsRatePerSecond.toString(),
-        borrowRewardsRatePerSecond: borrowRewardsRatePerSecond.toString(),
-      }),
+      }): RewardsSummary['returns'] => {
+        if (supplyRewardsApr.status === 'error') {
+          return supplyRewardsApr;
+        }
+        if (borrowRewardsApr.status === 'error') {
+          return borrowRewardsApr;
+        }
+        return {
+          status: 'success',
+          supplyRewardsApr: supplyRewardsApr.apr.toString(),
+          borrowRewardsApr: borrowRewardsApr.apr.toString(),
+          supplyRewardsRatePerSecond: supplyRewardsRatePerSecond.toString(),
+          borrowRewardsRatePerSecond: borrowRewardsRatePerSecond.toString(),
+        };
+      },
     ]);
   },
 });

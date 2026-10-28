@@ -43,19 +43,25 @@ export default {
     if (request.method === 'OPTIONS') { // 200: OK
       return cors(origin, new Response());
     }
-    // Load secrets from environment to instantiate node endpoints.
-    const endpoints = providers.instantiate(env);
     // Validate the request, then forward it to the node provider.
     let response; try {
+      /*
+       * Load secrets from environment to instantiate node endpoints. A
+       * missing secret fails every request, and is answered and logged as
+       * any other unexpected error rather than escaping the handler.
+       */
+      const endpoints = providers.instantiate(env);
       response = await handleRequest(request, {
         endpoints,
         kv:       env.kv,
         settings: env.settings,
         allowedAppKey: env.allowedAppKey,
         allowedHosts: env.allowedHosts,
-        defer:    context.waitUntil,
+        // waitUntil is a method: the runtime refuses a call made off the context
+        defer:    promise => context.waitUntil(promise),
       });
-    } catch {
+    } catch (error) {
+      console.error(`unexpected error:`, error);
       return cors(origin, new Response(`unexpected error`, { status: 500 }));
     }
     // Always respond with proper CORS headers.

@@ -17,6 +17,7 @@ import { ResponseData } from '../../../../src/v2-handlers/ctokens.js';
 import * as mock                from '../../../util/mock/mock.js';
 import * as jsonUtil            from '../../../util/json.js';
 import { MemoryKv, encodeSeed } from '../../../util/kv.js';
+import { makeTestEnv }          from '../../../util/test-env.js';
 
 import { setupTestEnvVars } from '../../../util/setupTestEnvVars.js';
 
@@ -89,12 +90,10 @@ t.test(`/${route} @ block=${testBlock.number}`, async t => {
    */
   // pre-encode seed JSON into in-memory KV format so we only encode once.
   const seed = encodeSeed(seedJson);
-  const testEnv: Env = Object.assign({
-    'TALLY_API_KEY':       'test',
+  const testEnv: Env = makeTestEnv({
     'V3_API_HOST':         apiHost,
     'NODE_PROXY_HOST':     nodeHost,
     'NODE_PROXY_KEY':      nodeKey,
-    'ENVIRONMENT':         'test',
     'MEMORY_CACHE_SEED':   'proposal-vote-receipts',
     'kv_testnet':  MemoryKv({ seed }),
     'kv_mainnet': MemoryKv({ seed }),

@@ -17,7 +17,7 @@ import * as evm from '../../../../lib/computations/evm.js';
 
 import type * as jsonRpc from '../../../../lib/json-rpc.js';
 
-import { MemoryKv } from "../../../util/kv.js";
+import { makeTestEnv } from '../../../util/test-env.js';
 import * as mock from '../../../util/mock/mock.js';
 
 import { setupTestEnvVars } from '../../../util/setupTestEnvVars.js';
@@ -53,16 +53,12 @@ const getBlockNumber: (_: number) => evm.EthGetBlock['expects'] = number => ({
   blockReference: number,
 });
 
-const testEnv: Env = {
-  TALLY_API_KEY: "test",
+const testEnv: Env = makeTestEnv({
   V3_API_HOST: apiHost,
   NODE_PROXY_HOST: nodeHost,
   NODE_PROXY_KEY: nodeKey,
-  ENVIRONMENT: "test",
   MEMORY_CACHE_SEED: "market-historical-summary",
-  kv_testnet: MemoryKv({}),
-  kv_mainnet: MemoryKv({}),
-};
+});
 
 /*
  * Set up a fetch mock for the test suite.

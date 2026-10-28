@@ -1,7 +1,7 @@
 import t from "tap";
 import * as streamInto from "node:stream/consumers";
 
-import { MemoryKv } from "../../../../util/kv.js";
+import { makeTestEnv } from "../../../../util/test-env.js";
 import * as Debug from "../../../../../lib/debug-log.js";
 import * as Flags from "../../../../../lib/flags.js";
 import * as Eth from "../../../../../lib/eth-constants.js";
@@ -9,6 +9,7 @@ import * as Eth from "../../../../../lib/eth-constants.js";
 import C3Api, { Env } from "../../../../../entrypoint.js";
 
 import { setupTestEnvVars } from '../../../../util/setupTestEnvVars.js';
+import { activeRegistryDatabase } from '../../../../util/registry-database.js';
 
 /* tests are running in node.js, so we need to shim in the 'self' object
  * that workers scripts depend upon.
@@ -23,17 +24,23 @@ testDebug.log({ flags });
 
 const { apiHost, nodeHost, nodeKey } = setupTestEnvVars();
 
+
+/*
+ * Markets, tokens, and feeds come from the activated registry, so this test
+ * seeds one: the frozen snapshot fixture, activated in a D1 database of its
+ * own. Nothing here resolves a market from the static constants any more.
+ */
 t.test(`/market/all-networks/all-contracts/summary`, async (t) => {
-  const testEnv: Env = Object.assign(
+  const registry = await activeRegistryDatabase();
+  t.teardown(() => registry.dispose());
+
+  const testEnv: Env = makeTestEnv(
     {
-      TALLY_API_KEY: "test",
       V3_API_HOST: apiHost,
       NODE_PROXY_HOST: nodeHost,
       NODE_PROXY_KEY: nodeKey,
-      ENVIRONMENT: "test",
       MEMORY_CACHE_SEED: "market",
-      kv_testnet: MemoryKv({}),
-      kv_mainnet: MemoryKv({}),
+      APP_DB: registry.db,
     },
     process.env
   );
@@ -41,6 +48,11 @@ t.test(`/market/all-networks/all-contracts/summary`, async (t) => {
     `http://${nodeHost}/market/all-networks/all-contracts/summary`
   );
   const response = await C3Api.fetch(request, testEnv);
+  // a node provider that did not answer is a 503 and its error, not a summary of another shape
+  if (response.status !== 200) {
+    t.fail(`the route answered ${response.status}: ${await response.text()}`);
+    return;
+  }
   t.ok(response.body);
   // non-null assert (!) is safe because of the t.ok(response.body) above.
   const responseJson = (await streamInto.json(response.body! as any)) as any[];
@@ -54,6 +66,16 @@ t.test(`/market/all-networks/all-contracts/summary`, async (t) => {
 
   t.ok(Array.isArray(responseJson));
 
+  // one summary for each market the version serves, and for nothing else
+  const served = registry.snapshot.networks.flatMap(network => network.markets
+    .filter(market => market.status !== 'disabled')
+    .map(market => `${network.chainId}:${market.contracts.comet}`));
+  t.same(
+    responseJson.map(({ chain_id, comet }) => `${chain_id}:${comet.address.toLowerCase()}`).sort(),
+    served.sort(),
+    `the ${served.length} markets the active version serves are summarized`,
+  );
+
   responseJson.forEach((entry) => {
     // check basic formatting of the summary response
     const {
@@ -65,6 +87,13 @@ t.test(`/market/all-networks/all-contracts/summary`, async (t) => {
       total_supply_value,
       total_collateral_value,
       utilization,
+      base_price,
+      deployment_key,
+      display_name,
+      base_asset_name,
+      is_wrapped_native,
+      is_default,
+      is_institutional,
     } = entry;
 
     t.ok(typeof chain_id === "number");
@@ -75,6 +104,13 @@ t.test(`/market/all-networks/all-contracts/summary`, async (t) => {
     t.ok(/^\d+\.\d+$/.test(total_supply_value));
     t.ok(/^\d+\.\d+$/.test(total_collateral_value));
     t.ok(BigInt(utilization) >= BigInt(0));
+    t.ok(/^\d+\.\d+$/.test(base_price));
+    t.equal(typeof deployment_key, "string");
+    t.equal(typeof display_name, "string");
+    t.equal(typeof base_asset_name, "string");
+    t.equal(typeof is_wrapped_native, "boolean");
+    t.equal(typeof is_default, "boolean");
+    t.equal(typeof is_institutional, "boolean");
   });
 
   t.end();

@@ -1,6 +1,6 @@
 #!/bin/sh
 git_root=$(git rev-parse --show-toplevel)
-dump_path="${git_root}/cloudflare/workers/c3-api/tests/dumps"
+dump_path="${git_root}/c3-api/tests/dumps"
 export RCLONE_CONFIG_DUMPSR2_TYPE=s3
 export RCLONE_CONFIG_DUMPSR2_ACCESS_KEY_ID="${CLOUDFLARE_R2_ACCESS_KEY_ID}"
 export RCLONE_CONFIG_DUMPSR2_SECRET_ACCESS_KEY="${CLOUDFLARE_R2_SECRET_ACCESS_KEY}"
@@ -19,9 +19,13 @@ export RCLONE_CONFIG_DUMPSR2_PROVIDER=Cloudflare
 # CLOUDFLARE_R2_SECRET_ACCESS_KEY
 # CLOUDFLARE_R2_ENDPOINT
 # Which will be loaded into RCLONE_CONFIG ENV
+#
+# An upload adds and replaces files, and deletes none: the bucket holds the
+# dumps of every branch, and a checkout holds only its own, so mirroring one
+# into the other would delete the rest.
 if [ "$1" = "upload" ]
 then
-  rclone sync "${dump_path}" dumpsr2:compound-v3-api-test-dumps/dumps
+  rclone copy "${dump_path}" dumpsr2:compound-v3-api-test-dumps/dumps
 else
   rclone sync dumpsr2:compound-v3-api-test-dumps/dumps "${dump_path}" 
 fi

@@ -1,0 +1,39 @@
+# Local values for `wrangler dev`. Copy to .dev.vars, which Git ignores, and
+# uncomment only the values you set: a value here overrides wrangler.toml
+# [vars], and an empty value overrides it with an empty string.
+#
+# Deployed environments do not define these in wrangler.toml; set them with:
+#   npx wrangler secret put <NAME> --env <environment>
+
+# Tally API key for the governance routes
+# TALLY_API_KEY=
+
+# node-provider-proxy used for every JSON-RPC call, as
+# https://<NODE_PROXY_HOST>/<network>/<NODE_PROXY_KEY>; the host has no scheme
+# and the key may be empty. `npm start` reads the chain through the deployed
+# proxy these name; with wrangler.local-proxy.toml, which binds the proxy run
+# on this machine instead, leave them unset (README.md, Getting Started)
+# NODE_PROXY_HOST=
+# NODE_PROXY_KEY=
+
+# Public host of this API
+# V3_API_HOST=
+
+# Optional Blocknative API key for /legacy/mainnet/gas-price
+# BLOCK_NATIVE_API_KEY=
+
+# Comet registry admin API: the SHA-256 of the admin bearer token, as 64 hex
+# digits, never the token itself
+# COMET_REGISTRY_ADMIN_TOKEN_HASH=
+
+# Optional name the registry records as the actor of every administrative
+# change: activations and rollbacks, overlay events, and the syncs it asks
+# for. Unset, it is registry-admin:<ENVIRONMENT>
+# COMET_REGISTRY_ADMIN_ACTOR=
+
+# GitHub token the registry import reads the Comet repository with: optional
+# here, required in stage and production. Without one GitHub allows 60 API
+# requests an hour per address, which a Worker shares with every other Worker
+# leaving Cloudflare through it. A fine-grained token with read-only access
+# to public repositories, and no other permission, is enough
+# COMET_GITHUB_TOKEN=

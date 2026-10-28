@@ -1,0 +1,26 @@
+# Local provider keys for `wrangler dev` (npm start). Copy to .dev.vars, which
+# Git ignores, and uncomment the keys you set: a value here takes the place of
+# the placeholder of the same name in wrangler.toml [vars], and a key left at
+# its placeholder fails its network.
+#
+# Deployed workers do not take these from wrangler.toml; set them with:
+#   npx wrangler secret put <NAME> --env <environment>
+# or, for the Woof deployment:
+#   npx wrangler secret put <NAME> -c woof.wrangler.toml
+
+# The Alchemy key of each network (src/providers.ts)
+# alchemyEthMainnet=
+# alchemyArbMainnet=
+# alchemyPolygonMainnet=
+# alchemyBaseMainnet=
+# alchemyScrollMainnet=
+# alchemyOptMainnet=
+# alchemyMantleMainnet=
+# alchemyLineaMainnet=
+# alchemyUnichainMainnet=
+# alchemyRoninMainnet=
+
+# QuickNode, which Ethereum mainnet falls back to: the key, and the subdomain of
+# the endpoint it belongs to
+# quicknodeEthMainnet=
+# quicknodeEthMainnetSubdomain=

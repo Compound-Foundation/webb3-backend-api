@@ -5,15 +5,18 @@ import * as Constant from '../../constants.js';
 
 import * as KnownNetwork from '../../well-known/networks/network.js';
 
-import type { GetPrice     } from '../comet/get-price.js';
+import type { RegistryComet } from '../../model/comet-registry.js';
+
+import type { GetPrice, PriceRead } from '../comet/get-price.js';
 import type { BasePrice    } from '../comet/base-price.js';
 import type { TotalBorrow  } from '../comet/total-borrow.js';
 
+import type { AprRead                    } from './supply-rewards-apr.js';
 import type { TotalsBasic                } from './totals-basic.js';
 import type { BaseMinForRewards          } from './base-min-for-rewards.js';
 import type { BorrowRewardsRatePerSecond } from './borrow-rewards-rate-per-second.js';
 
-import { Contract } from '../../well-known/contracts/utils.js';
+import { usdBasePriceFeedFor } from './base-price-feed.js';
 
 type BorrowRewardsApr = Compute.Spec<{
   name: 'borrowRewardsApr',
@@ -32,60 +35,30 @@ type BorrowRewardsApr = Compute.Spec<{
     nodeHost: string,
     nodeKey: string,
     network: KnownNetwork.Name,
-    contract: Contract, // comet contract
+    contract: RegistryComet, // comet contract
     blockNumber: Eth.BlockNumber,
     rewardsTokenPriceFeed: {
       address:  Eth.Address,
       decimals: number,
     },
   },
-  returns: BigFixnum;
+  returns: AprRead;
 }>;
 
 const { implement, pipe, pipe1 } = Compute.Functor<BorrowRewardsApr>({});
 const borrowRewardsApr = implement({
-  version: 1,
+  // 2: a price that reverts is answered, not thrown
+  version: 2,
   compute({ apiHost, nodeHost, nodeKey, rewardsTokenPriceFeed, blockNumber, contract, network }) {
-    let basePriceComputation: {basePrice?: any, getPrice?: any} = { 
-      basePrice: { apiHost, nodeHost, nodeKey, blockNumber, contract, network  }
-    };
-
-    if (contract.displayName === 'cWETHv3' && (network === 'base-mainnet' || network === 'arbitrum-mainnet' || network === 'optimism-mainnet' || network === 'unichain-mainnet')) {
-      const wethUsdPriceFeed = (
-        Eth.wellKnownContractsByNetwork[network]['PriceFeed']['WETH-USD']
-      );
-
-      basePriceComputation = {
-        getPrice: { apiHost, nodeHost, nodeKey, priceFeed: wethUsdPriceFeed, blockNumber, contract, network },
-      };
-    }
-    else if (contract.displayName === 'cwstETHv3' && network === 'ethereum-mainnet') {
-      const wstETHUsdPriceFeed = (
-        Eth.wellKnownContractsByNetwork[network]['PriceFeed']['wstETH-USD']
-      );
-
-      basePriceComputation = {
-        getPrice: { apiHost, nodeHost, nodeKey, priceFeed: wstETHUsdPriceFeed, blockNumber, contract, network },
-      };
-    }
-    else if (contract.displayName === 'cUSDev3' && network === 'mantle-mainnet') {
-      const uSDeUsdPriceFeed = (
-        Eth.wellKnownContractsByNetwork[network]['PriceFeed']['cUSDev3-USD']
-      );
-
-      basePriceComputation = {
-        getPrice: { apiHost, nodeHost, nodeKey, priceFeed: uSDeUsdPriceFeed, blockNumber, contract, network },
-      };
-    }
-    else if (contract.displayName === 'cWBTCv3' && network === 'ethereum-mainnet') {
-      const wBtcUsdPriceFeed = (
-        Eth.wellKnownContractsByNetwork[network]['PriceFeed']['WBTC-USD']
-      );
-
-      basePriceComputation = {
-        getPrice: { apiHost, nodeHost, nodeKey, priceFeed: wBtcUsdPriceFeed, blockNumber, contract, network },
-      };
-    }
+    /*
+     * The base price in the unit the reward feed answers in: the market's own
+     * base price, or its USD feed where the reward price is in USD and the
+     * market quotes its base asset.
+     */
+    const usdBasePriceFeed = usdBasePriceFeedFor(contract);
+    const basePriceComputation: { basePrice?: any, getPrice?: any } = usdBasePriceFeed === null
+      ? { basePrice: { apiHost, nodeHost, nodeKey, blockNumber, contract, network } }
+      : { getPrice:  { apiHost, nodeHost, nodeKey, priceFeed: usdBasePriceFeed, blockNumber, contract, network } };
 
     return pipe([
       {
@@ -104,15 +77,21 @@ const borrowRewardsApr = implement({
         totalsBasic: { totalBorrowBase },
       }) => pipe1([
         basePriceComputation,
-        basePrice => {
-          if (totalBorrowBase.lte(baseMinForRewards)) {
-            return BigFixnum.from({ value: 0 });
+        (basePrice: PriceRead): AprRead => {
+          if (rewardsTokenPrice.status === 'error') {
+            return rewardsTokenPrice;
           }
-          const borrowValue = basePrice.mul(totalBorrow);
-          const rewardsValueAnnual = rewardsTokenPrice
+          if (basePrice.status === 'error') {
+            return basePrice;
+          }
+          if (totalBorrowBase.lte(baseMinForRewards)) {
+            return { status: 'success', apr: BigFixnum.from({ value: 0 }) };
+          }
+          const borrowValue = basePrice.price.mul(totalBorrow);
+          const rewardsValueAnnual = rewardsTokenPrice.price
             .mul(borrowRewardsRatePerSecond)
             .mul(Constant.secondsPerYear);
-          return rewardsValueAnnual.div(borrowValue);
+          return { status: 'success', apr: rewardsValueAnnual.div(borrowValue) };
         },
       ])
     ]);

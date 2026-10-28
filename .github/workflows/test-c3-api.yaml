@@ -1,0 +1,67 @@
+name: c3-api Build and D1 Tests
+on:
+  push:
+    paths:
+      - 'c3-api/**'
+      # tests/lib/wrangler-local-proxy.test.ts reads the name the proxy runs
+      # under locally, which c3-api/wrangler.local-proxy.toml binds
+      - 'node-provider-proxy/wrangler.toml'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/test-c3-api.yaml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: build, offline tests, migrations, dry-run bundles
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: c3-api
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # the c3-api preinstall script also installs, builds, and tests the
+      # repo-root workspace libraries
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # every test that needs neither a node provider nor the R2 dumps
+      # (tests/offline.sh names the ones that do): the registry suites, in
+      # real workerd with local D1, KV, and rate-limit bindings from
+      # wrangler.toml, and the unit tests of the rest of the worker
+      - name: Offline tests
+        run: npm run test:offline
+
+      - name: Apply migrations to an empty local database
+        run: npx wrangler d1 migrations apply APP_DB --local --persist-to "$RUNNER_TEMP/d1-state"
+
+      - name: Re-apply migrations as a no-op
+        run: |
+          output="$(npx wrangler d1 migrations apply APP_DB --local --persist-to "$RUNNER_TEMP/d1-state")"
+          echo "$output"
+          grep -q "No migrations to apply" <<< "$output"
+
+      - name: Check foreign keys
+        run: |
+          violations="$(npx wrangler d1 execute APP_DB --local --persist-to "$RUNNER_TEMP/d1-state" --json \
+            --command "PRAGMA foreign_key_check;" | jq '[.[].results[]] | length')"
+          echo "foreign key violations: $violations"
+          test "$violations" -eq 0
+
+      - name: Dry-run stage bundle
+        run: npx wrangler deploy --dry-run --env stage --outdir "$RUNNER_TEMP/bundle-stage"
+
+      - name: Dry-run production bundle
+        run: npx wrangler deploy --dry-run --env production --outdir "$RUNNER_TEMP/bundle-production"

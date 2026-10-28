@@ -12,7 +12,7 @@
     "../c3-api/tests/util/mock"
   ],
   "engines": {
-    "node": ">=19.4.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@compound-finance/well-known-networks": "1.0.0-alpha.1",
@@ -23,14 +23,14 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240314.0",
-    "@types/node": "^20.3.1",
+    "@types/node": "^22",
     "testutil.mock": "1.0.0-alpha.1",
     "typescript": "^5",
-    "wrangler": "^4.59.1"
+    "wrangler": "^4.105.0"
   },
   "overrides": {
     "elliptic": "^6.6.1",
-    "sharp": "^0.35.3",
+    "sharp": "^0.35.5",
     "undici": "^6.24.0",
     "node-forge": "^1.4.0",
     "ws": "^8.21.0",

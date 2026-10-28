@@ -4,6 +4,7 @@ import * as Fallible from '../../fallible/fallible.js';
 
 import * as Index from '../../symbolic/index.js';
 import * as Compute from '../../symbolic/computation.js';
+import * as Key from '../../symbolic/key.js';
 
 import * as cometModel from '../../model/comet.js';
 import * as cometRewardsModel from '../../model/comet-rewards.js';
@@ -12,12 +13,10 @@ import { RawTransactionHistoryAction } from '../../model/transaction-history/act
 
 import * as KnownNetwork from '../../well-known/networks/network.js';
 
-import {
-  Contract,
-  getTokenSymbol,
-  getTokenDecimals,
-  getBaseTokenAddress,
-} from '../../well-known/contracts/utils.js';
+import { Contract } from '../../well-known/contracts/utils.js';
+
+import { checksumAddress } from '../../model/comet-registry.js';
+import type { RegistryLookup } from '../../model/registry-lookup.js';
 
 import type * as evm from '../evm.js';
 
@@ -33,6 +32,8 @@ type RawTransactionHistoryItems = Compute.Spec<{
     blockNumber: Eth.BlockNumber,
     marketContracts: Contract[],
     rewardsContract: Contract,
+    // the one registry version this request resolves tokens against
+    catalog: RegistryLookup,
   },
   depends: [ evm.EthGetLogs ],
   returns: RawTransactionHistoryItem[],
@@ -43,6 +44,45 @@ const {
   pull1,
   implement,
 } = Compute.Functor<RawTransactionHistoryItems>({});
+
+/*
+ * The tokens an event names, as the pinned version describes them.
+ *
+ * An event carries an address and a raw amount; the symbol and the scale it
+ * has to be read at come from the registry. A token no version describes — an
+ * asset of a market outside the registry, or one added on chain but not yet
+ * imported — keeps the defaults this code has always used, so an unknown
+ * token is reported rather than dropped.
+ */
+const UNKNOWN_DECIMALS = 18;
+
+/*
+ * A token's own symbol can be the same as another's, or one its issuer has
+ * since renamed: bridged USDC calls itself USDC beside native USDC. Where the
+ * network's presentation renames it, history says what the website says.
+ */
+function tokenSymbol(catalog: RegistryLookup, network: KnownNetwork.Name, address: Eth.Address): string {
+  const token = catalog.tokenAt(network, address) ?? catalog.baseTokenAt(network, address);
+  if (token === null) {
+    return '';
+  }
+  return catalog.renamedSymbolAt(network, token.address) ?? token.symbol;
+}
+
+function tokenDecimals(catalog: RegistryLookup, network: KnownNetwork.Name, address: Eth.Address): number {
+  return catalog.tokenAt(network, address)?.decimals
+      ?? catalog.baseTokenAt(network, address)?.decimals
+      ?? UNKNOWN_DECIMALS;
+}
+
+/*
+ * Checksummed, as the addresses a decoded log carries are: one history page
+ * must not name some tokens in one form and some in another.
+ */
+function baseTokenAddress(catalog: RegistryLookup, network: KnownNetwork.Name, address: Eth.Address): Eth.Address {
+  const token = catalog.baseTokenAt(network, address);
+  return token === null ? '0x0' : checksumAddress(token.address) as Eth.Address;
+}
 
 // Identify if the decoded log is migrator actions
 function isMigratorAddress(address: Eth.Address, network: KnownNetwork.Name) {
@@ -56,11 +96,13 @@ function createTransactionAction({
   network,
   contractAddress,
   proxyAddresses,
+  catalog,
 }: {
   log: Eth.Event.Log,
   network: KnownNetwork.Name,
   contractAddress: Eth.Address,
   proxyAddresses: Eth.Address[],
+  catalog: RegistryLookup,
 }): RawTransactionHistoryAction | null {
   const lowerCasedProxyAddresses = proxyAddresses.map(address => address.toLowerCase());
   const decoded = coders.decode(log);
@@ -69,12 +111,12 @@ function createTransactionAction({
       return {
         eventType: decoded.name,
         token: {
-          address: getBaseTokenAddress(network, contractAddress),
-          symbol: getTokenSymbol(network, contractAddress),
+          address: baseTokenAddress(catalog, network, contractAddress),
+          symbol: tokenSymbol(catalog, network, contractAddress),
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: getTokenDecimals(network, contractAddress),
+          decimals: tokenDecimals(catalog, network, contractAddress),
         }),
         contract: {
           address: contractAddress,
@@ -92,11 +134,11 @@ function createTransactionAction({
         eventType: decoded.name,
         token: {
           address: decoded.body.asset,
-          symbol: getTokenSymbol(network, decoded.body.asset),
+          symbol: tokenSymbol(catalog, network, decoded.body.asset),
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: getTokenDecimals(network, decoded.body.asset),
+          decimals: tokenDecimals(catalog, network, decoded.body.asset),
         }),
         contract: {
           address: contractAddress,
@@ -113,12 +155,12 @@ function createTransactionAction({
       return {
         eventType: decoded.name,
         token: {
-          address: getBaseTokenAddress(network, contractAddress),
-          symbol: getTokenSymbol(network, contractAddress),
+          address: baseTokenAddress(catalog, network, contractAddress),
+          symbol: tokenSymbol(catalog, network, contractAddress),
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: getTokenDecimals(network, contractAddress),
+          decimals: tokenDecimals(catalog, network, contractAddress),
         }),
         contract: {
           address: contractAddress,
@@ -136,11 +178,11 @@ function createTransactionAction({
         eventType: decoded.name,
         token: {
           address: decoded.body.asset,
-          symbol: getTokenSymbol(network, decoded.body.asset),
+          symbol: tokenSymbol(catalog, network, decoded.body.asset),
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: getTokenDecimals(network, decoded.body.asset),
+          decimals: tokenDecimals(catalog, network, decoded.body.asset),
         }),
         contract: {
           address: contractAddress,
@@ -161,12 +203,12 @@ function createTransactionAction({
       return {
         eventType: decoded.name,
         token: {
-          address: getBaseTokenAddress(network, contractAddress),
-          symbol: getTokenSymbol(network, contractAddress), //Base asset
+          address: baseTokenAddress(catalog, network, contractAddress),
+          symbol: tokenSymbol(catalog, network, contractAddress), //Base asset
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: getTokenDecimals(network, contractAddress),
+          decimals: tokenDecimals(catalog, network, contractAddress),
         }),
         contract: {
           address: contractAddress,
@@ -183,11 +225,11 @@ function createTransactionAction({
         eventType: decoded.name,
         token: {
           address: decoded.body.asset,
-          symbol: getTokenSymbol(network, decoded.body.asset),
+          symbol: tokenSymbol(catalog, network, decoded.body.asset),
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: getTokenDecimals(network, decoded.body.asset),
+          decimals: tokenDecimals(catalog, network, decoded.body.asset),
         }),
         contract: {
           address: contractAddress,
@@ -204,11 +246,11 @@ function createTransactionAction({
         eventType: decoded.name,
         token: {
           address: decoded.body.asset,
-          symbol: getTokenSymbol(network, decoded.body.asset),
+          symbol: tokenSymbol(catalog, network, decoded.body.asset),
         },
         amount: BigFixnum.from({
           value: decoded.body.collateralAbsorbed,
-          decimals: getTokenDecimals(network, decoded.body.asset),
+          decimals: tokenDecimals(catalog, network, decoded.body.asset),
         }),
         contract: {
           address: contractAddress,
@@ -224,12 +266,12 @@ function createTransactionAction({
       return {
         eventType: decoded.name,
         token: {
-          address: getBaseTokenAddress(network, contractAddress),
-          symbol: getTokenSymbol(network, contractAddress),
+          address: baseTokenAddress(catalog, network, contractAddress),
+          symbol: tokenSymbol(catalog, network, contractAddress),
         },
         amount: BigFixnum.from({
           value: decoded.body.basePaidOut,
-          decimals: getTokenDecimals(network, contractAddress),
+          decimals: tokenDecimals(catalog, network, contractAddress),
         }),
         contract: {
           address: contractAddress,
@@ -246,11 +288,11 @@ function createTransactionAction({
         eventType: 'RewardClaimed',
         token: {
           address: decoded.body.token,
-          symbol: getTokenSymbol(network, decoded.body.token),
+          symbol: tokenSymbol(catalog, network, decoded.body.token),
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: getTokenDecimals(network, decoded.body.token),
+          decimals: tokenDecimals(catalog, network, decoded.body.token),
         }),
         contract: {
           address: contractAddress,
@@ -267,8 +309,23 @@ function createTransactionAction({
 };
 
 const rawTransactionHistoryItems = implement({
-  version: 4,
+  // 6: keyed by what history reads, so a change to a feed or an exception keeps the items
+  version: 6,
   index: Index.TransactionHistoryIndex,
+  /*
+   * The items read one network's markets and tokens, so a change elsewhere
+   * keeps them. The contracts are named by address: their creation blocks
+   * are in the network's history key, and a market's own cache key also
+   * covers its feeds and exceptions, which no item reads.
+   */
+  key(name, { catalog, marketContracts, rewardsContract, ...context }) {
+    return Key.toKey(name, {
+      ...context,
+      marketContracts: marketContracts.map(contract => contract.address.toLowerCase()),
+      rewardsContract: rewardsContract.address.toLowerCase(),
+      registry:        catalog.historyKeyFor(context.network),
+    });
+  },
   compute({ 
     accountAddress,
     proxyAddresses,
@@ -278,7 +335,8 @@ const rawTransactionHistoryItems = implement({
     network,
     blockNumber,
     marketContracts,
-    rewardsContract 
+    rewardsContract,
+    catalog,
   }) {
     const contracts: Contract[] = [...marketContracts, rewardsContract];
     const precedingResult = Index.TransactionHistoryIndex.preceding({
@@ -392,6 +450,7 @@ const rawTransactionHistoryItems = implement({
             network,
             contractAddress: log.address, // log.address is contract address in string, but we know it must be an Eth.Address
             proxyAddresses,
+            catalog,
           });
           // createTransactionAction will return null, if detected the derived action is minting / burning of cTokens
           // If action === null, we skip this action
@@ -439,4 +498,5 @@ const coders = Eth.Event.Coder.fromSignatures([
 export {
   RawTransactionHistoryItems,
   rawTransactionHistoryItems,
+  tokenSymbol,
 };

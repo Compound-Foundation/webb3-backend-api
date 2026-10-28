@@ -5,7 +5,7 @@
   "license": "GPL-3.0",
   "private": true,
   "engines": {
-    "node": ">=19.4.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "@compound-finance/sleuth": "^1.0.1-alpha4",
@@ -15,14 +15,15 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240314.0",
     "@ethersproject/hash": "5.6",
-    "@types/node": "^18.0.6",
+    "@types/node": "^22",
+    "miniflare": "^4.20260625.0",
     "tap": "^21",
     "typescript": "^5",
-    "wrangler": "^4.59.1"
+    "wrangler": "^4.105.0"
   },
   "overrides": {
     "elliptic": "^6.6.1",
-    "sharp": "^0.35.3",
+    "sharp": "^0.35.5",
     "shell-quote": "^1.8.4",
     "undici": "^6.24.0",
     "node-forge": "^1.4.0",
@@ -60,8 +61,15 @@
     "pretest": "tsc",
     "test": "npm run test:tap",
     "test:tap": "npx tap --disable-coverage --timeout=900 'dist/tests/**/*.test.js'",
+    "pretest:worker": "tsc",
+    "test:worker": "npx tap --disable-coverage --timeout=300 'dist/tests/e2e/registry/**/*.test.js'",
     "build": "npx tsc",
+    "test:offline": "npm run build && sh tests/offline.sh",
     "start": "wrangler dev --local entrypoint.ts",
+    "start:scheduled": "wrangler dev --local --test-scheduled entrypoint.ts",
+    "d1:migrate:local": "npx wrangler d1 migrations apply APP_DB --local",
+    "d1:migrate:stage": "npx wrangler d1 migrations apply APP_DB --env stage --remote",
+    "d1:migrate:production": "npx wrangler d1 migrations apply APP_DB --env production --remote",
     "deploy:stage": "npx wrangler deploy --env stage",
     "deploy:production": "npx wrangler deploy --env production"
   }

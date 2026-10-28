@@ -1,6 +1,5 @@
 import t from 'tap';
 
-import * as Eth   from '../../../../lib/eth-constants.js';
 import * as Debug from '../../../../lib/debug-log.js';
 import * as Flags from '../../../../lib/flags.js';
 
@@ -20,6 +19,7 @@ import * as cometRewards from '../../../../lib/computations/comet-rewards.js';
 import '../../../../shim/node-self.js';
 
 import { setupTestEnvVars } from '../../../util/setupTestEnvVars.js';
+import { fixtureComet }     from '../../../util/registry-fixture.js';
 
 /*
  * Global env.
@@ -64,7 +64,7 @@ t.test(
       nodeHost,
       nodeKey,
       contract:
-        Eth.wellKnownContractsByNetwork['ethereum-mainnet']['Comet']['cUSDCv3'],
+        fixtureComet('ethereum-mainnet', '0xc3d688b66703497daa19211eedff47f25384cdc3'),
       network: 'ethereum-mainnet',
       block: { number: 17835961 },
       account: '0xc01e119d19d10ab6b60b95b28c201b09cf95360b',
@@ -74,11 +74,12 @@ t.test(
       evaluator.pull1({ accountRewards })
     );
     t.strictSame(result, {
+      status: 'success',
       chainId: 1,
-      comet: { address: '0xc3d688b66703497daa19211eedff47f25384cdc3' },
-      cometRewards: { address: '0x1b0e765f6224c21223aea2af16c1c46e38885a40' },
+      comet: { address: '0xc3d688B66703497DAA19211EEdff47f25384cdc3' },
+      cometRewards: { address: '0x1B0e765F6224C21223AeA2af16c1C46E38885a40' },
       baseAsset: {
-        address: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+        address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
         decimals: 6,
         description: 'USD Coin',
         symbol: 'USDC',
@@ -86,9 +87,9 @@ t.test(
         priceFeed: '0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6',
       },
       rewardAsset: {
-        address: '0xc00e94cb662c3520282e6f5717214004a7f26888',
+        address: '0xc00e94Cb662C3520282E6f5717214004A7f26888',
         decimals: 18,
-        description: 'Compound Governance Token',
+        description: 'Compound',
         price: '60.03203654',
         symbol: 'COMP',
       },
@@ -143,7 +144,7 @@ t.test(`account-rewards@block:17835961 verify supplyBalance`, async () => {
     nodeHost,
     nodeKey,
     contract:
-      Eth.wellKnownContractsByNetwork['ethereum-mainnet']['Comet']['cUSDCv3'],
+      fixtureComet('ethereum-mainnet', '0xc3d688b66703497daa19211eedff47f25384cdc3'),
     network: 'ethereum-mainnet',
     block: { number: 17835961 },
     account: '0x65aba0bcaa72daf4ab9512a9c73f4fa813f02f82',
@@ -151,11 +152,12 @@ t.test(`account-rewards@block:17835961 verify supplyBalance`, async () => {
 
   const result = await evaluator.evaluate(evaluator.pull1({ accountRewards }));
   t.strictSame(result, {
+    status: 'success',
     chainId: 1,
-    comet: { address: '0xc3d688b66703497daa19211eedff47f25384cdc3' },
-    cometRewards: { address: '0x1b0e765f6224c21223aea2af16c1c46e38885a40' },
+    comet: { address: '0xc3d688B66703497DAA19211EEdff47f25384cdc3' },
+    cometRewards: { address: '0x1B0e765F6224C21223AeA2af16c1C46E38885a40' },
     baseAsset: {
-      address: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+      address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
       decimals: 6,
       description: 'USD Coin',
       symbol: 'USDC',
@@ -163,9 +165,9 @@ t.test(`account-rewards@block:17835961 verify supplyBalance`, async () => {
       priceFeed: '0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6',
     },
     rewardAsset: {
-      address: '0xc00e94cb662c3520282e6f5717214004a7f26888',
+      address: '0xc00e94Cb662C3520282E6f5717214004A7f26888',
       decimals: 18,
-      description: 'Compound Governance Token',
+      description: 'Compound',
       price: '60.03203654',
       symbol: 'COMP',
     },
@@ -212,7 +214,7 @@ t.test(`account-rewards@block:17835961 verify usdc walletBalance`, async () => {
     nodeHost,
     nodeKey,
     contract:
-      Eth.wellKnownContractsByNetwork['ethereum-mainnet']['Comet']['cUSDCv3'],
+      fixtureComet('ethereum-mainnet', '0xc3d688b66703497daa19211eedff47f25384cdc3'),
     network: 'ethereum-mainnet',
     block: { number: 17835961 },
     account: '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045', // vitalik.eth
@@ -220,11 +222,12 @@ t.test(`account-rewards@block:17835961 verify usdc walletBalance`, async () => {
 
   const result = await evaluator.evaluate(evaluator.pull1({ accountRewards }));
   t.strictSame(result, {
+    status: 'success',
     chainId: 1,
-    comet: { address: '0xc3d688b66703497daa19211eedff47f25384cdc3' },
-    cometRewards: { address: '0x1b0e765f6224c21223aea2af16c1c46e38885a40' },
+    comet: { address: '0xc3d688B66703497DAA19211EEdff47f25384cdc3' },
+    cometRewards: { address: '0x1B0e765F6224C21223AeA2af16c1C46E38885a40' },
     baseAsset: {
-      address: '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+      address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
       decimals: 6,
       description: 'USD Coin',
       symbol: 'USDC',
@@ -232,9 +235,9 @@ t.test(`account-rewards@block:17835961 verify usdc walletBalance`, async () => {
       priceFeed: '0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6',
     },
     rewardAsset: {
-      address: '0xc00e94cb662c3520282e6f5717214004a7f26888',
+      address: '0xc00e94Cb662C3520282E6f5717214004A7f26888',
       decimals: 18,
-      description: 'Compound Governance Token',
+      description: 'Compound',
       price: '60.03203654',
       symbol: 'COMP',
     },

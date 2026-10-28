@@ -222,6 +222,20 @@ namespace StepState {
   };
 }
 
+/*
+ * The keys of the items each pending batch carries, so a batch that grows
+ * over several steps takes each item once.
+ */
+const pendedKeys = new WeakMap<object, Set<string>>();
+
+// the error a computation that answered a Failure throws
+function failureOf(payload: unknown): Error {
+  const type = (typeof(payload) === 'object' && payload !== null && 'type' in payload)
+    ? String((payload as { type: unknown }).type)
+    : 'unknown';
+  return new Error(`Failure: ${type}`, { cause: payload });
+}
+
 async function step<
   Scope extends Compute.Spec,
   Return,
@@ -243,6 +257,40 @@ async function step<
   let work: WorkItem<Scope>[] = todo.slice();
   let next: WorkItem<Scope>[] = [];
   let rewrites: RewriteItem<Scope>[] = [];
+  /*
+   * Start the cache read of every indexed computation of this step at once.
+   * The loop below takes one item at a time, and awaiting each read in turn
+   * made a step that holds, say, every market of a network as slow as the
+   * sum of their reads. readOnce is the one way this step reads the cache:
+   * a key is read once however many items share it, and a read the loop
+   * never gets to, because an item before it threw, must not reject
+   * unobserved, so each one is observed as it starts and awaited below.
+   */
+  const keys  = new Map<WorkItem<Scope>, string>();
+  const reads = new Map<string, ReturnType<typeof this.cache.get<{/*unknown*/}>>>();
+  const readOnce = (key: string) => {
+    let read = reads.get(key);
+    if (read === undefined) {
+      read = this.cache.get<{/*unknown*/}>(key);
+      read.catch(() => {});
+      reads.set(key, read);
+    }
+    return read;
+  };
+  await Promise.all(work.map(async (candidate) => {
+    if (candidate[0] !== 'computation') {
+      return;
+    }
+    const [ _, name, context ] = candidate;
+    const computation = this.computations[name];
+    const key = await computation.key(Compute.versionedName(name, computation.version), context);
+    keys.set(candidate, key);
+    if (!(key in done) && computation.index.includes(context)) {
+      readOnce(key);
+    }
+  }));
+  // keys of the computations an item of this step already took on
+  const started = new Set<string>();
   // process every work item and try to step-evaluate it
   /* NOTE(jordan): by iterating backwards we are more likely to make
    * progress, because the last items on the work queue are the leaves
@@ -326,9 +374,8 @@ async function step<
         }
         const outcome = await computation.compute(batch, D, name);
         if (Fallible.isFailure(outcome)) {
-          /* do something dude
-           */
-          throw new Error(`bad vibes`);
+          // logged once, by whoever answers the failure: evaluate traces it with the state
+          throw failureOf(Fallible.unwrap(outcome));
         }
         const result = Fallible.must(outcome);
         // 2.a. if it's a redex, queue for rewrite into a new work item
@@ -363,7 +410,8 @@ async function step<
         const [ _, name, context ] = item;
         const computation = this.computations[name];
         const versionedName = Compute.versionedName(name, computation.version);
-        const key = await computation.key(versionedName, context);
+        // every computation item of this step was keyed above
+        const key = keys.get(item)!;
         D.group(`computation { key: ${key} }`);
         // 0. check if this work was already done by a later item
         if (key in done) {
@@ -372,10 +420,21 @@ async function step<
           D.groupEnd(); // computation
           continue;
         }
+        /* 0.1. or is being done by one: another item with the same key
+         * already read it, and computes it or waits in a batch for it.
+         * Doing it again would compute it twice, and send its calls to the
+         * node twice in the same batch.
+         */
+        if (started.has(key)) {
+          D.log('! already started in this step. skipping.');
+          D.groupEnd(); // computation
+          continue;
+        }
+        started.add(key);
         // 1.a. if indexed, try to read a result from cache
         const indexed = computation.index.includes(context);
         if (indexed) {
-          const cacheResult = await this.cache.get<{/*unknown*/}>(key);
+          const cacheResult = await readOnce(key);
           if (Fallible.isFailure(cacheResult)) {
             const payload = Fallible.unwrap(cacheResult);
             this.debug.error(`Failure: ${payload.type}`, { failure: payload });
@@ -419,8 +478,27 @@ async function step<
           } else {
             D.log(`→ in batch  { hash: ${batchHash} }`); // manually aligned
           }
-          // 1.b.1.3. push all the items in this batch onto pend
-          existing[2].items.push(...context.items);
+          /* 1.b.1.3. push the items the pending batch does not carry yet.
+           * Two computations can make the same call in different steps —
+           * a market reads its utilization twice — and a batch that grows
+           * over several steps would otherwise send it twice. An item is
+           * known by the key its result is saved under once the batch runs
+           * (2.b.1.2), which a duplicate shares.
+           */
+          let pended = pendedKeys.get(existing[2]);
+          if (pended === undefined) {
+            pended = new Set();
+            pendedKeys.set(existing[2], pended);
+          }
+          for (const batchItem of context.items) {
+            const itemKey = context.items.length === 1
+              ? key
+              : await computation.key(versionedName, { frame, items: [ batchItem ] });
+            if (!pended.has(itemKey)) {
+              pended.add(itemKey);
+              existing[2].items.push(batchItem);
+            }
+          }
           D.groupEnd(); // computation
           continue;
         }
@@ -428,9 +506,8 @@ async function step<
         stuck = false;
         const outcome = await computation.compute(context, D, name);
         if (Fallible.isFailure(outcome)) {
-          /* do something dude
-           */
-          throw new Error(`bad vibes`);
+          // logged once, by whoever answers the failure: evaluate traces it with the state
+          throw failureOf(Fallible.unwrap(outcome));
         }
         const result = Fallible.must(outcome);
         // 2.a. if it's a redex, queue for rewrite into a new work item

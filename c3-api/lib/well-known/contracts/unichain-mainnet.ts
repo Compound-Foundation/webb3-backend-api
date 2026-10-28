@@ -1,5 +1,4 @@
 import {
-  Comet,
   ERC20,
   PriceFeed,
   UntypedContract,
@@ -134,36 +133,6 @@ const COMP_USD_priceFeed = PriceFeed(<const>{
   },
 });
 
-const Comet_01usdc = Comet(<const>{
-  displayName: 'cUSDCv3',
-  aliases: [ '01-usdc', 'cUSDCv3' ],
-  base: {
-    asset:     USDC,
-    priceFeed: USDC_USD_priceFeed,
-  },
-  rewards: {
-    asset:    COMP,
-    contract: Comet_Rewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: 'unichain-mainnet',
-  address: '0x2c7118c4C88B9841FCF839074c26Ae8f035f2921',
-  block: {
-    number: 9170496,
-    timestamp: 1739890055
-  },
-});
-
-const ETH_Constant_priceFeed = PriceFeed(<const>{
-  decimals: 8,
-  network: 'unichain-mainnet',
-  address: '0x3C30B5a5A04656565686f800481580Ac4E7ed178',
-  block: {
-    number: 15416439,
-    timestamp: 1746139598,
-  },
-});
-
 const ETH_USD_priceFeed = PriceFeed(<const>{
   aliases: ['WETH-USD'],
   decimals: 8,
@@ -172,27 +141,6 @@ const ETH_USD_priceFeed = PriceFeed(<const>{
   block: {
     number: 8433246,
     timestamp: 1739152805,
-  },
-});
-
-const Comet_01weth = Comet(<const>{
-  displayName: 'cWETHv3',
-  aliases: ['01-weth', 'cWETHv3'],
-  base: {
-    asset: WETH,
-    priceFeed: ETH_Constant_priceFeed,
-    usdPriceFeed: ETH_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: Comet_Rewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: "unichain-mainnet",
-  address: "0x6C987dDE50dB1dcDd32Cd4175778C2a291978E2a",
-  block: {
-    number: 15416769,
-    timestamp: 1746139928,
   },
 });
 
@@ -207,8 +155,8 @@ const Bulker = UntypedContract('Bulker', <const>{
 
 const market01usdc = <const>([
   CometAdmin, Comet_Rewards, Bulker,
-  USDC_USD_priceFeed, COMP_USD_priceFeed, Comet_01usdc,
-  ETH_USD_priceFeed, Comet_01weth
+  USDC_USD_priceFeed, COMP_USD_priceFeed,
+  ETH_USD_priceFeed
 ]);
 
 const Configurator = UntypedContract('Configurator', <const>{

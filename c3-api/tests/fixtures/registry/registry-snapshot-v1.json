@@ -1,0 +1,1213 @@
+{
+  "schemaVersion": 1,
+  "registryVersion": {
+    "id": "00000000-0000-4000-8000-000000000001",
+    "sourceRepository": "compound-foundation/comet",
+    "sourceCommitSha": "cbe77c1ba4430266c781a251d25c8326573a33da",
+    "checksum": "748b4d56e58efd6f44f94587c0d0ea9e63355b06faebb386a42f5eee7b3c2ba9"
+  },
+  "networks": [
+    {
+      "chainId": 1,
+      "key": "ethereum-mainnet",
+      "upstreamKey": "mainnet",
+      "displayName": "Ethereum",
+      "testnet": false,
+      "presentation": {
+        "assetDisplayOverrides": [
+          {
+            "tokenAddress": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
+            "displayAddress": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
+            "symbol": "USDe",
+            "name": "Ethena USDe"
+          },
+          {
+            "tokenAddress": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+            "displayAddress": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+            "symbol": "wstETH",
+            "name": "Lido Wrapped Staked ETH"
+          },
+          {
+            "tokenAddress": "0xa1290d69c65a6fe4df752f95823fae25cb99e5a7",
+            "displayAddress": "0xa1290d69c65a6fe4df752f95823fae25cb99e5a7",
+            "symbol": "rsETH",
+            "name": "KelpDao Restaked ETH"
+          },
+          {
+            "tokenAddress": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+            "displayAddress": "0x0000000000000000000000000000000000000000",
+            "symbol": "ETH",
+            "name": "Ether"
+          },
+          {
+            "tokenAddress": "0xf1c9acdc66974dfb6decb12aa385b9cd01190e38",
+            "displayAddress": "0xf1c9acdc66974dfb6decb12aa385b9cd01190e38",
+            "symbol": "osETH",
+            "name": "StakeWise Staked ETH"
+          },
+          {
+            "tokenAddress": "0xfae103dc9cf190ed75350761e95403b7b8afa6c0",
+            "displayAddress": "0xfae103dc9cf190ed75350761e95403b7b8afa6c0",
+            "symbol": "rswETH",
+            "name": "Restaked Swell ETH"
+          }
+        ],
+        "unwrappedCollateralAssets": [
+          {
+            "wrappedTokenAddress": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+            "tokenAddress": "0xae7ab96520de3a18e5e111b5eaab095312d7fe84",
+            "symbol": "stETH",
+            "name": "Lido Staked ETH"
+          }
+        ]
+      },
+      "priceExceptions": [
+        {
+          "kind": "fixed_price",
+          "priceFeedAddress": "0x351a133fd850ea81ed8a782016e308acbaddec91",
+          "price": {
+            "value": "102447384",
+            "decimals": 8
+          },
+          "provenance": "PumpBTC / BTC exchange-rate feed (cWBTCv3 collateral pumpBTC) reverts since 2026-09-03; last answer from retired aggregator 0x918c6cde1cdd940934820b8fa3a2c8b26a60736c (c3-api b7bb889)",
+          "expiresAt": null
+        },
+        {
+          "kind": "zero_price",
+          "priceFeedAddress": "0xe3a409ed15cd53afdefdd191ad945cec528a2496",
+          "provenance": "Deprecated wUSDM / USD feed (cUSDTv3 collateral wUSDM) reverts; c3-api asset-price.ts prices it at zero",
+          "expiresAt": null
+        }
+      ],
+      "markets": [
+        {
+          "id": "00000000-0000-4000-8000-000000000101",
+          "deploymentKey": "usdc",
+          "displayName": "USDC",
+          "slug": null,
+          "contractName": "cUSDCv3",
+          "isDefault": true,
+          "isInstitutional": false,
+          "status": "enabled",
+          "creationBlock": 15331586,
+          "collateralValueQuote": "usd",
+          "capabilities": {
+            "rewards": true,
+            "accountRewards": true,
+            "transactionHistory": true
+          },
+          "contracts": {
+            "comet": "0xc3d688b66703497daa19211eedff47f25384cdc3",
+            "configurator": "0x316f9708bb98af7da9c68c1c3b5e79039cd336e3",
+            "rewards": "0x1b0e765f6224c21223aea2af16c1c46e38885a40",
+            "bulker": "0xa397a8c2086c554b531c02e29f3291c9704b00c7",
+            "fauceteer": null,
+            "bridgeReceiver": null
+          },
+          "baseAsset": {
+            "token": {
+              "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+              "symbol": "USDC",
+              "name": "USD Coin",
+              "decimals": 6
+            },
+            "displayName": "USD Coin",
+            "isWrappedNative": false,
+            "priceFeed": {
+              "address": "0x8fffffd4afb6115b954bd326cbe7b4ba576818f6",
+              "decimals": 8
+            },
+            "usdPriceFeed": null
+          },
+          "rewardAsset": {
+            "token": {
+              "address": "0xc00e94cb662c3520282e6f5717214004a7f26888",
+              "symbol": "COMP",
+              "name": "Compound",
+              "decimals": 18
+            },
+            "priceFeed": {
+              "address": "0xdbd020caef83efd542f4de03e3cf0c28a4428bd5",
+              "decimals": 8
+            },
+            "priceFeedQuote": "usd"
+          },
+          "collateralAssets": [
+            {
+              "assetIndex": 0,
+              "token": {
+                "address": "0xc00e94cb662c3520282e6f5717214004a7f26888",
+                "symbol": "COMP",
+                "name": "Compound",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x69b50ff403e995d9c4441a303438d9049dac8ccd",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 1,
+              "token": {
+                "address": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",
+                "symbol": "WBTC",
+                "name": "Wrapped BTC",
+                "decimals": 8
+              },
+              "priceFeed": {
+                "address": "0xc8e4c3f58d5fc4409522503927ecea057ebba1fc",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 2,
+              "token": {
+                "address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "symbol": "WETH",
+                "name": "Wrapped Ether",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0xc0053f3fbccd593758258334dfce24c2a9a673ad",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 3,
+              "token": {
+                "address": "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
+                "symbol": "UNI",
+                "name": "Uniswap",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x553303d460ee0afb37edff9be42922d8ff63220e",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 4,
+              "token": {
+                "address": "0x514910771af9ca656af840dff83e8264ecf986ca",
+                "symbol": "LINK",
+                "name": "ChainLink Token",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x83b34662f65532e611a87ebed38063dec889d5a7",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 5,
+              "token": {
+                "address": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+                "symbol": "wstETH",
+                "name": "Wrapped liquid staked Ether 2.0",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0xa2699232b341881b1ed85d91592b7c259e029acf",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 6,
+              "token": {
+                "address": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+                "symbol": "cbBTC",
+                "name": "Coinbase Wrapped BTC",
+                "decimals": 8
+              },
+              "priceFeed": {
+                "address": "0x0a4f4f9e84fc4f674f0d209f94d41fafe5af887d",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 7,
+              "token": {
+                "address": "0x18084fba666a33d37592fa2633fd49a74dd93a88",
+                "symbol": "tBTC",
+                "name": "tBTC v2",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0xaa9527bf3183a96fe6e55831c96de5cd988d3484",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 8,
+              "token": {
+                "address": "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee",
+                "symbol": "weETH",
+                "name": "Wrapped eETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x4f12633d511dc3049de1ea923b7047fbed0070d2",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 9,
+              "token": {
+                "address": "0x15700b564ca08d9439c58ca5053166e8317aa138",
+                "symbol": "deUSD",
+                "name": "deUSD",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x7badab7109afbbf48ecd8d6498caacd2630b45b9",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 10,
+              "token": {
+                "address": "0x5c5b196abe0d54485975d1ec29617d42d9198326",
+                "symbol": "sdeUSD",
+                "name": "Staked deUSD",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x7badab7109afbbf48ecd8d6498caacd2630b45b9",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 11,
+              "token": {
+                "address": "0xa1290d69c65a6fe4df752f95823fae25cb99e5a7",
+                "symbol": "rsETH",
+                "name": "rsETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0xd6a48f6f687a5fef8a69834c49514b747012cf1c",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 12,
+              "token": {
+                "address": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
+                "symbol": "USDe",
+                "name": "USDe",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0xa569d910839ae8865da8f8e70fffb0cba869f961",
+                "decimals": 8
+              }
+            }
+          ]
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000102",
+          "deploymentKey": "weth",
+          "displayName": "ETH",
+          "slug": null,
+          "contractName": "cWETHv3",
+          "isDefault": false,
+          "isInstitutional": false,
+          "status": "enabled",
+          "creationBlock": 16400710,
+          "collateralValueQuote": "base",
+          "capabilities": {
+            "rewards": true,
+            "accountRewards": true,
+            "transactionHistory": true
+          },
+          "contracts": {
+            "comet": "0xa17581a9e3356d9a858b789d68b4d866e593ae94",
+            "configurator": "0x316f9708bb98af7da9c68c1c3b5e79039cd336e3",
+            "rewards": "0x1b0e765f6224c21223aea2af16c1c46e38885a40",
+            "bulker": "0xa397a8c2086c554b531c02e29f3291c9704b00c7",
+            "fauceteer": null,
+            "bridgeReceiver": null
+          },
+          "baseAsset": {
+            "token": {
+              "address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+              "symbol": "WETH",
+              "name": "Wrapped Ether",
+              "decimals": 18
+            },
+            "displayName": "Ether",
+            "isWrappedNative": true,
+            "priceFeed": {
+              "address": "0xd72ac1bce9177cfe7aeb5d0516a38c88a64ce0ab",
+              "decimals": 8
+            },
+            "usdPriceFeed": {
+              "address": "0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419",
+              "decimals": 8
+            }
+          },
+          "rewardAsset": {
+            "token": {
+              "address": "0xc00e94cb662c3520282e6f5717214004a7f26888",
+              "symbol": "COMP",
+              "name": "Compound",
+              "decimals": 18
+            },
+            "priceFeed": {
+              "address": "0x1b39ee86ec5979ba5c322b826b3ecb8c79991699",
+              "decimals": 18
+            },
+            "priceFeedQuote": "base"
+          },
+          "collateralAssets": [
+            {
+              "assetIndex": 0,
+              "token": {
+                "address": "0xbe9895146f7af43049ca1c1ae358b0541ea49704",
+                "symbol": "cbETH",
+                "name": "Coinbase Wrapped Staked ETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x23a982b74a3236a5f2297856d4391b2edbbb5549",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 1,
+              "token": {
+                "address": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+                "symbol": "wstETH",
+                "name": "Wrapped liquid staked Ether 2.0",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x91359ce8989cb610a4127777828e667f23b94ee9",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 2,
+              "token": {
+                "address": "0xae78736cd615f374d3085123a210448e74fc6393",
+                "symbol": "rETH",
+                "name": "Rocket Pool ETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x584a6bb85fc446642217be0f6491c9d652f33b72",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 3,
+              "token": {
+                "address": "0xa1290d69c65a6fe4df752f95823fae25cb99e5a7",
+                "symbol": "rsETH",
+                "name": "rsETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x5abcfc8a649ac15ff7d41c0dd0d53af3bbb7f876",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 4,
+              "token": {
+                "address": "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee",
+                "symbol": "weETH",
+                "name": "Wrapped eETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x5641af9ab0794afcc5c9b036f6e01144ba42e747",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 5,
+              "token": {
+                "address": "0xf1c9acdc66974dfb6decb12aa385b9cd01190e38",
+                "symbol": "osETH",
+                "name": "Staked ETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0xdf08cd1b9d40a106b49b74f70c1cca60596ededc",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 6,
+              "token": {
+                "address": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",
+                "symbol": "WBTC",
+                "name": "Wrapped BTC",
+                "decimals": 8
+              },
+              "priceFeed": {
+                "address": "0xd98be00b5d27fc98112bde293e487f8d4ca57d07",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 7,
+              "token": {
+                "address": "0xbf5495efe5db9ce00f80364c8b423567e58d2110",
+                "symbol": "ezETH",
+                "name": "Renzo Restaked ETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0xf5600f17f7d3d87d0e0fdafe01dbe513919c6bf8",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 8,
+              "token": {
+                "address": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+                "symbol": "cbBTC",
+                "name": "Coinbase Wrapped BTC",
+                "decimals": 8
+              },
+              "priceFeed": {
+                "address": "0x57a71a9c632b2e6d8b0eb9a157888a3fc87400d1",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 9,
+              "token": {
+                "address": "0xfae103dc9cf190ed75350761e95403b7b8afa6c0",
+                "symbol": "rswETH",
+                "name": "rswETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x0ca9231a11c242206139a6dd8bf532f885516f96",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 10,
+              "token": {
+                "address": "0x18084fba666a33d37592fa2633fd49a74dd93a88",
+                "symbol": "tBTC",
+                "name": "tBTC v2",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x1933f7e5f8b0423fbab28ce9c8c39c2cc414027b",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 11,
+              "token": {
+                "address": "0xa35b1b31ce002fbf2058d22f30f95d405200a15b",
+                "symbol": "ETHx",
+                "name": "ETHx",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x9f4001c75295049dc5d566acfb27054d1fa1af35",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 12,
+              "token": {
+                "address": "0xd11c452fc99cf405034ee446803b6f6c1f6d5ed8",
+                "symbol": "tETH",
+                "name": "Treehouse ETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x7783a5c7656d75ed1144379c25142b7e43da5f5e",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 13,
+              "token": {
+                "address": "0xd9a442856c234a39a81a089c06451ebaa4306a72",
+                "symbol": "pufETH",
+                "name": "pufETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x5546198be8479dcd69044e90f50783ba1a25a8f5",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 14,
+              "token": {
+                "address": "0xdcee70654261af21c44c093c300ed3bb97b78192",
+                "symbol": "wOETH",
+                "name": "Wrapped OETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x835b92840b721d3a66eb9da7fc4adf092a8f77e7",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 15,
+              "token": {
+                "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                "symbol": "USDC",
+                "name": "USD Coin",
+                "decimals": 6
+              },
+              "priceFeed": {
+                "address": "0xfd5282968119c348c1e47fbcadd13069d9857bf2",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 16,
+              "token": {
+                "address": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+                "symbol": "USDT",
+                "name": "Tether USD",
+                "decimals": 6
+              },
+              "priceFeed": {
+                "address": "0xb6e043072c5815b75e0ee0cb31ed33bd089fca84",
+                "decimals": 8
+              }
+            }
+          ]
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000103",
+          "deploymentKey": "usdt",
+          "displayName": "USDT",
+          "slug": null,
+          "contractName": "cUSDTv3",
+          "isDefault": false,
+          "isInstitutional": false,
+          "status": "enabled",
+          "creationBlock": 20190637,
+          "collateralValueQuote": "usd",
+          "capabilities": {
+            "rewards": true,
+            "accountRewards": true,
+            "transactionHistory": true
+          },
+          "contracts": {
+            "comet": "0x3afdc9bca9213a35503b077a6072f3d0d5ab0840",
+            "configurator": "0x316f9708bb98af7da9c68c1c3b5e79039cd336e3",
+            "rewards": "0x1b0e765f6224c21223aea2af16c1c46e38885a40",
+            "bulker": "0xa397a8c2086c554b531c02e29f3291c9704b00c7",
+            "fauceteer": null,
+            "bridgeReceiver": null
+          },
+          "baseAsset": {
+            "token": {
+              "address": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+              "symbol": "USDT",
+              "name": "Tether USD",
+              "decimals": 6
+            },
+            "displayName": "Tether",
+            "isWrappedNative": false,
+            "priceFeed": {
+              "address": "0x3e7d1eab13ad0104d2750b8863b489d65364e32d",
+              "decimals": 8
+            },
+            "usdPriceFeed": null
+          },
+          "rewardAsset": {
+            "token": {
+              "address": "0xc00e94cb662c3520282e6f5717214004a7f26888",
+              "symbol": "COMP",
+              "name": "Compound",
+              "decimals": 18
+            },
+            "priceFeed": {
+              "address": "0xdbd020caef83efd542f4de03e3cf0c28a4428bd5",
+              "decimals": 8
+            },
+            "priceFeedQuote": "usd"
+          },
+          "collateralAssets": [
+            {
+              "assetIndex": 0,
+              "token": {
+                "address": "0xc00e94cb662c3520282e6f5717214004a7f26888",
+                "symbol": "COMP",
+                "name": "Compound",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x69b50ff403e995d9c4441a303438d9049dac8ccd",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 1,
+              "token": {
+                "address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+                "symbol": "WETH",
+                "name": "Wrapped Ether",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0xc0053f3fbccd593758258334dfce24c2a9a673ad",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 2,
+              "token": {
+                "address": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",
+                "symbol": "WBTC",
+                "name": "Wrapped BTC",
+                "decimals": 8
+              },
+              "priceFeed": {
+                "address": "0xc8e4c3f58d5fc4409522503927ecea057ebba1fc",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 3,
+              "token": {
+                "address": "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984",
+                "symbol": "UNI",
+                "name": "Uniswap",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x553303d460ee0afb37edff9be42922d8ff63220e",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 4,
+              "token": {
+                "address": "0x514910771af9ca656af840dff83e8264ecf986ca",
+                "symbol": "LINK",
+                "name": "ChainLink Token",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x83b34662f65532e611a87ebed38063dec889d5a7",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 5,
+              "token": {
+                "address": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+                "symbol": "wstETH",
+                "name": "Wrapped liquid staked Ether 2.0",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0xa2699232b341881b1ed85d91592b7c259e029acf",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 6,
+              "token": {
+                "address": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+                "symbol": "cbBTC",
+                "name": "Coinbase Wrapped BTC",
+                "decimals": 8
+              },
+              "priceFeed": {
+                "address": "0x2d09142eae60fd8bd454a276e95aebdffd05722d",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 7,
+              "token": {
+                "address": "0x18084fba666a33d37592fa2633fd49a74dd93a88",
+                "symbol": "tBTC",
+                "name": "tBTC v2",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x7b03a016dbc36db8e05c480192fadcdb0a06bc37",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 8,
+              "token": {
+                "address": "0x57f5e098cad7a3d1eed53991d4d66c45c9af7812",
+                "symbol": "wUSDM",
+                "name": "Wrapped Mountain Protocol USD",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x7badab7109afbbf48ecd8d6498caacd2630b45b9",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 9,
+              "token": {
+                "address": "0xa663b02cf0a4b149d2ad41910cb81e23e1c41c32",
+                "symbol": "sFRAX",
+                "name": "Staked FRAX",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x8c74b2811d2f1ad65517adb5c65773c1e520ed2f",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 10,
+              "token": {
+                "address": "0xd5f7838f5c461feff7fe49ea5ebaf7728bb0adfa",
+                "symbol": "mETH",
+                "name": "mETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x60f2058379716a64a7a5d29219397e79bc552194",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 11,
+              "token": {
+                "address": "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee",
+                "symbol": "weETH",
+                "name": "Wrapped eETH",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x4f12633d511dc3049de1ea923b7047fbed0070d2",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 12,
+              "token": {
+                "address": "0x5c5b196abe0d54485975d1ec29617d42d9198326",
+                "symbol": "sdeUSD",
+                "name": "Staked deUSD",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x7badab7109afbbf48ecd8d6498caacd2630b45b9",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 13,
+              "token": {
+                "address": "0x15700b564ca08d9439c58ca5053166e8317aa138",
+                "symbol": "deUSD",
+                "name": "deUSD",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x7badab7109afbbf48ecd8d6498caacd2630b45b9",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 14,
+              "token": {
+                "address": "0x68749665ff8d2d112fa859aa293f07a622782f38",
+                "symbol": "XAUt",
+                "name": "Tether Gold",
+                "decimals": 6
+              },
+              "priceFeed": {
+                "address": "0x214ed9da11d2fbe465a6fc601a91e62ebec1a0d6",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 15,
+              "token": {
+                "address": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
+                "symbol": "USDe",
+                "name": "USDe",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0xa569d910839ae8865da8f8e70fffb0cba869f961",
+                "decimals": 8
+              }
+            }
+          ]
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000104",
+          "deploymentKey": "wbtc",
+          "displayName": "WBTC",
+          "slug": null,
+          "contractName": "cWBTCv3",
+          "isDefault": false,
+          "isInstitutional": false,
+          "status": "enabled",
+          "creationBlock": 21820087,
+          "collateralValueQuote": "base",
+          "capabilities": {
+            "rewards": true,
+            "accountRewards": true,
+            "transactionHistory": false
+          },
+          "contracts": {
+            "comet": "0xe85dc543813b8c2cfeaac371517b925a166a9293",
+            "configurator": "0x316f9708bb98af7da9c68c1c3b5e79039cd336e3",
+            "rewards": "0x1b0e765f6224c21223aea2af16c1c46e38885a40",
+            "bulker": "0xa397a8c2086c554b531c02e29f3291c9704b00c7",
+            "fauceteer": null,
+            "bridgeReceiver": null
+          },
+          "baseAsset": {
+            "token": {
+              "address": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",
+              "symbol": "WBTC",
+              "name": "Wrapped BTC",
+              "decimals": 8
+            },
+            "displayName": "Wrapped BTC",
+            "isWrappedNative": false,
+            "priceFeed": {
+              "address": "0xfdfd9c85ad200c506cf9e21f1fd8dd01932fbb23",
+              "decimals": 8
+            },
+            "usdPriceFeed": {
+              "address": "0xf4030086522a5beea4988f8ca5b36dbc97bee88c",
+              "decimals": 8
+            }
+          },
+          "rewardAsset": {
+            "token": {
+              "address": "0xc00e94cb662c3520282e6f5717214004a7f26888",
+              "symbol": "COMP",
+              "name": "Compound",
+              "decimals": 18
+            },
+            "priceFeed": {
+              "address": "0xdbd020caef83efd542f4de03e3cf0c28a4428bd5",
+              "decimals": 8
+            },
+            "priceFeedQuote": "usd"
+          },
+          "collateralAssets": [
+            {
+              "assetIndex": 0,
+              "token": {
+                "address": "0x8236a87084f8b84306f72007f36f2618a5634494",
+                "symbol": "LBTC",
+                "name": "Lombard Staked Bitcoin",
+                "decimals": 8
+              },
+              "priceFeed": {
+                "address": "0x5c29868c58b6e15e2b962943278969ab6a7d3212",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 1,
+              "token": {
+                "address": "0xf469fbd2abcd6b9de8e169d128226c0fc90a012e",
+                "symbol": "pumpBTC",
+                "name": "pumpBTC",
+                "decimals": 8
+              },
+              "priceFeed": {
+                "address": "0x7badab7109afbbf48ecd8d6498caacd2630b45b9",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 2,
+              "token": {
+                "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                "symbol": "USDC",
+                "name": "USD Coin",
+                "decimals": 6
+              },
+              "priceFeed": {
+                "address": "0x40fcee8cdda01522846d197df9d9c1199b1cb1d3",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 3,
+              "token": {
+                "address": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+                "symbol": "USDT",
+                "name": "Tether USD",
+                "decimals": 6
+              },
+              "priceFeed": {
+                "address": "0x8a5c2e36e02fb1ba95c9a3e96e6e16bbbdae9aaa",
+                "decimals": 8
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "chainId": 8453,
+      "key": "base-mainnet",
+      "upstreamKey": "base",
+      "displayName": "Base",
+      "testnet": false,
+      "presentation": {
+        "assetDisplayOverrides": [
+          {
+            "tokenAddress": "0x4200000000000000000000000000000000000006",
+            "displayAddress": "0x0000000000000000000000000000000000000000",
+            "symbol": "ETH",
+            "name": "Ether"
+          },
+          {
+            "tokenAddress": "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",
+            "displayAddress": "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",
+            "symbol": "USDbC",
+            "name": "Bridged USDC"
+          },
+          {
+            "tokenAddress": "0xedfa23602d0ec14714057867a78d01e94176bea0",
+            "displayAddress": "0xedfa23602d0ec14714057867a78d01e94176bea0",
+            "symbol": "wrsETH",
+            "name": "Wrapped rsETH"
+          }
+        ],
+        "unwrappedCollateralAssets": []
+      },
+      "priceExceptions": [],
+      "markets": [
+        {
+          "id": "00000000-0000-4000-8000-000000000105",
+          "deploymentKey": "aero",
+          "displayName": "AERO",
+          "slug": null,
+          "contractName": "cAEROv3",
+          "isDefault": false,
+          "isInstitutional": false,
+          "status": "enabled",
+          "creationBlock": 20852405,
+          "collateralValueQuote": "usd",
+          "capabilities": {
+            "rewards": true,
+            "accountRewards": true,
+            "transactionHistory": false
+          },
+          "contracts": {
+            "comet": "0x784efeb622244d2348d4f2522f8860b96fbece89",
+            "configurator": "0x45939657d1ca34a8fa39a924b71d28fe8431e581",
+            "rewards": "0x123964802e6ababbe1bc9547d72ef1b69b00a6b1",
+            "bulker": "0x78d0677032a35c63d142a48a2037048871212a8c",
+            "fauceteer": null,
+            "bridgeReceiver": "0x18281dfc4d00905da1aaa6731414eaba843c468a"
+          },
+          "baseAsset": {
+            "token": {
+              "address": "0x940181a94a35a4569e4529a3cdfb74e38fd98631",
+              "symbol": "AERO",
+              "name": "Aerodrome",
+              "decimals": 18
+            },
+            "displayName": "Aero",
+            "isWrappedNative": false,
+            "priceFeed": {
+              "address": "0xdb7edfa090061d9367cbeaf6be16ecbde596676c",
+              "decimals": 8
+            },
+            "usdPriceFeed": null
+          },
+          "rewardAsset": {
+            "token": {
+              "address": "0x9e1028f5f1d5ede59748ffcee5532509976840e0",
+              "symbol": "COMP",
+              "name": "Compound",
+              "decimals": 18
+            },
+            "priceFeed": {
+              "address": "0x9dda783de64a9d1a60c49ca761ebe528c35ba428",
+              "decimals": 8
+            },
+            "priceFeedQuote": "usd"
+          },
+          "collateralAssets": [
+            {
+              "assetIndex": 0,
+              "token": {
+                "address": "0x4200000000000000000000000000000000000006",
+                "symbol": "WETH",
+                "name": "Wrapped Ether",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0xe6eb5b9b85cff2c84df3de6e7855bc9e76f034d5",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 1,
+              "token": {
+                "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                "symbol": "USDC",
+                "name": "USD Coin",
+                "decimals": 6
+              },
+              "priceFeed": {
+                "address": "0x3e6d1cca8eee6d02f1f578b613374eb53e6823b4",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 2,
+              "token": {
+                "address": "0xc1cba3fcea344f92d9239c08c0568f6f2f0ee452",
+                "symbol": "wstETH",
+                "name": "Wrapped liquid staked Ether 2.0",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x1738fcae8d5a6aef39985df31fe60e5dc5e1a7b3",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 3,
+              "token": {
+                "address": "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf",
+                "symbol": "cbBTC",
+                "name": "Coinbase Wrapped BTC",
+                "decimals": 8
+              },
+              "priceFeed": {
+                "address": "0x8df378453ff9deffa513367cdf9b3b53726303e9",
+                "decimals": 8
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "chainId": 534352,
+      "key": "scroll-mainnet",
+      "upstreamKey": "scroll",
+      "displayName": "Scroll",
+      "testnet": false,
+      "presentation": {
+        "assetDisplayOverrides": [
+          {
+            "tokenAddress": "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4",
+            "displayAddress": "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4",
+            "symbol": "USDC",
+            "name": "USDC"
+          },
+          {
+            "tokenAddress": "0x5300000000000000000000000000000000000004",
+            "displayAddress": "0x0000000000000000000000000000000000000000",
+            "symbol": "ETH",
+            "name": "Ether"
+          },
+          {
+            "tokenAddress": "0xf610a9dfb7c89644979b4a0f27063e9e7d7cda32",
+            "displayAddress": "0xf610a9dfb7c89644979b4a0f27063e9e7d7cda32",
+            "symbol": "wstETH",
+            "name": "Lido Wrapped Staked ETH"
+          }
+        ],
+        "unwrappedCollateralAssets": []
+      },
+      "priceExceptions": [],
+      "markets": [
+        {
+          "id": "00000000-0000-4000-8000-000000000106",
+          "deploymentKey": "usdc",
+          "displayName": "USDC",
+          "slug": null,
+          "contractName": "cUSDCv3",
+          "isDefault": false,
+          "isInstitutional": false,
+          "status": "enabled",
+          "creationBlock": 3397674,
+          "collateralValueQuote": "usd",
+          "capabilities": {
+            "rewards": false,
+            "accountRewards": false,
+            "transactionHistory": false
+          },
+          "contracts": {
+            "comet": "0xb2f97c1bd3bf02f5e74d13f02e3e26f93d77ce44",
+            "configurator": "0xecab0beea3e5dea0c35d3e69468eac20098032d7",
+            "rewards": "0x70167d30964cbfdc315ecae02441af747be0c5ee",
+            "bulker": "0x53c6d04e3ec7031105baea05b36cbc3c987c56fa",
+            "fauceteer": null,
+            "bridgeReceiver": "0xc6bf5a64896d679cf89843dbec6c0f5d3c9b610d"
+          },
+          "baseAsset": {
+            "token": {
+              "address": "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4",
+              "symbol": "USDC",
+              "name": "USD Coin",
+              "decimals": 6
+            },
+            "displayName": "USD Coin",
+            "isWrappedNative": false,
+            "priceFeed": {
+              "address": "0x43d12fb3afcad5347fa764eeab105478337b7200",
+              "decimals": 8
+            },
+            "usdPriceFeed": null
+          },
+          "rewardAsset": {
+            "token": {
+              "address": "0x643e160a3c3e2b7eae198f0beb1bfd2441450e86",
+              "symbol": "COMP",
+              "name": "Compound",
+              "decimals": 18
+            },
+            "priceFeed": null,
+            "priceFeedQuote": null
+          },
+          "collateralAssets": [
+            {
+              "assetIndex": 0,
+              "token": {
+                "address": "0x5300000000000000000000000000000000000004",
+                "symbol": "WETH",
+                "name": "Wrapped Ether",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x6bf14cb0a831078629d993fdebcb182b21a8774c",
+                "decimals": 8
+              }
+            },
+            {
+              "assetIndex": 1,
+              "token": {
+                "address": "0xf610a9dfb7c89644979b4a0f27063e9e7d7cda32",
+                "symbol": "wstETH",
+                "name": "Wrapped liquid staked Ether 2.0",
+                "decimals": 18
+              },
+              "priceFeed": {
+                "address": "0x709cef91dd5d162d7047b678334d1be41fe92843",
+                "decimals": 8
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

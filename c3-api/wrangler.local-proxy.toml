@@ -1,0 +1,66 @@
+# A local run against the node provider proxy running on this machine
+# (README.md, Getting Started). It is the default environment of wrangler.toml
+# with the proxy bound to the worker the way stage and production bind
+# theirs: the same local database, which `npm run d1:migrate:local` prepares,
+# and the same settings. Start the proxy from ../node-provider-proxy, with its
+# dependencies installed there (npm install) and its provider keys in its own
+# .dev.vars, then the worker:
+#
+#   npm start -- --port 8788        (in ../node-provider-proxy)
+#   npx wrangler dev --local -c wrangler.local-proxy.toml entrypoint.ts
+#
+# A NODE_PROXY_HOST in .dev.vars overrides the one below, and with it the
+# binding: leave it unset there. tests/lib/wrangler-local-proxy.test.ts holds
+# this file to wrangler.toml.
+main = "./entrypoint"
+
+compatibility_date = "2026-06-25"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = false
+
+name = "v3-api-local"
+
+kv_namespaces = [
+    { binding = "kv_testnet", preview_id = "local:kv_testnet", id = "nil" },
+    { binding = "kv_mainnet", preview_id = "local:kv_mainnet", id = "nil" },
+    { binding = "kv_registry", preview_id = "local:kv_registry", id = "local:kv_registry" },
+]
+
+d1_databases = [
+    { binding = "APP_DB", database_name = "c3-api-local", database_id = "local:c3-api", migrations_dir = "migrations" },
+]
+
+ratelimits = [
+    { name = "REGISTRY_ADMIN_RATE_LIMITER", namespace_id = "1001", simple = { limit = 30, period = 60 } },
+    { name = "REGISTRY_ADMIN_AUTH_RATE_LIMITER", namespace_id = "1002", simple = { limit = 60, period = 60 } },
+]
+
+# node-provider-proxy-local is the name of the proxy's default environment
+services = [
+    { binding = "node_provider_proxy", service = "node-provider-proxy-local" },
+]
+
+[triggers]
+crons = ["0 * * * *"]
+
+[vars]
+DEBUG = "fetch"
+ENVIRONMENT = "local"
+MEMORY_CACHE_SEED = "local"
+V3_API_HOST = "your-domain-host_XXX"
+# never resolved: a request to this host goes through the binding instead
+NODE_PROXY_HOST = "node-provider-proxy.invalid"
+NODE_PROXY_KEY = "optional-node-proxy-key_XXX"
+BLOCK_NATIVE_API_KEY = "optional-BN-key_XXX"
+FLAGS_ETH_COMPUTATION_INDEX_BIAS = "default"
+COMET_SOURCE_REPOSITORY = "Compound-Foundation/comet"
+COMET_SOURCE_REF = "main"
+COMET_UPSTREAM_CHECK_INTERVAL_S = "86400"
+COMET_SYNC_MARKETS_PER_INVOCATION = "2"
+COMET_SYNC_LEASE_SECONDS = "900"
+REGISTRY_SNAPSHOT_CACHE_TTL_S = "300"
+REGISTRY_STALE_FALLBACK_MAX_S = "3600"
+
+[[vars.URL_SERVICE_BINDING_OVERRIDES]]
+host    = "node-provider-proxy.invalid"
+binding = "node_provider_proxy"

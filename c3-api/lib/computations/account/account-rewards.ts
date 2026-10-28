@@ -7,10 +7,8 @@ import * as Index   from '../../symbolic/index.js';
 import * as Compute from '../../symbolic/computation.js';
 
 import * as KnownNetwork from '../../well-known/networks/network.js';
-import {
-  Comet,
-  StandaloneContract,
-} from '../../well-known/contracts/types.js';
+
+import type { RegistryComet } from '../../model/comet-registry.js';
 
 import * as market            from '../market.js';
 import type * as comet        from '../comet.js';
@@ -32,26 +30,37 @@ type AccountRewards = Compute.Spec<{
     nodeKey: string;
     block: Eth.Block;
     network: KnownNetwork.Name;
-    contract: Eth.Contract<StandaloneContract<Comet>>;
+    contract: RegistryComet;
     account: Eth.Address;
   };
-  returns: market.MarketRewards['returns'] & {
-    amountOwed: BigFixnum;
-    walletBalance: BigFixnum;
-    supplyBalance: BigFixnum;
-    borrowBalance: BigFixnum;
-  };
+  // a market whose rewards cannot be valued reports only what identifies it
+  returns: Extract<market.MarketRewards['returns'], { status: 'error' }> | (
+    & Extract<market.MarketRewards['returns'], { status: 'success' }>
+    & {
+      amountOwed: BigFixnum;
+      walletBalance: BigFixnum;
+      supplyBalance: BigFixnum;
+      borrowBalance: BigFixnum;
+    }
+  );
 }>;
 
 const { implement, pipe } = Compute.Functor<AccountRewards>({});
 const accountRewards = implement({
-  version: 2,
+  // 3: a price that reverts is reported as the market's status
+  version: 3,
   index: Index.BlockIndexOnIntervalSeconds(60 * 5),
   key(name, { block, ...context }) {
     const { block: projected } = Fallible.must(this.index.project({ block, ...context }));
     return Key.toKey(name, { block: projected.number, ...context });
   },
   compute({ apiHost, nodeHost, nodeKey, contract, network, block, account }) {
+    // an account is owed rewards in the token a market pays, through the contract that pays it
+    const rewards = contract.rewards;
+    if (rewards?.asset === undefined) {
+      throw new Error(`invariant violated: ${contract.address} pays no reward token`);
+    }
+    const rewardToken = rewards.asset;
     const marketRewards = Fallible.must(market.marketRewards.index.project({
       apiHost, nodeHost, nodeKey, contract, network, block
     }));
@@ -82,7 +91,7 @@ const accountRewards = implement({
           nodeKey,
           account,
           network,
-          contract: contract.rewards.asset,
+          contract: rewardToken,
           blockNumber: block.number,
         },
         getRewardOwed: {
@@ -92,9 +101,9 @@ const accountRewards = implement({
           network,
           account,
           comet:        contract.address,
-          contract:     contract.rewards.contract,
+          contract:     rewards.contract,
           blockNumber:  block.number,
-          rewardsAsset: contract.rewards.asset,
+          rewardsAsset: rewardToken,
         },
       },
       ({
@@ -103,7 +112,10 @@ const accountRewards = implement({
         borrowBalanceOf,
         erc20Balance,
         getRewardOwed,
-      }) => {
+      }): AccountRewards['returns'] => {
+        if (marketRewards.status === 'error') {
+          return marketRewards;
+        }
         return {
           ...marketRewards,
           amountOwed: getRewardOwed,

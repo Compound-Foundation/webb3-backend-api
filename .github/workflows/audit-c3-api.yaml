@@ -19,7 +19,7 @@ jobs:
       - name: Install Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       # The repo-root lockfile covers the shared workspace libraries
       # (c3-api/lib/*) that c3-api builds against.

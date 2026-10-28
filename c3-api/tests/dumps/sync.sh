@@ -1,8 +1,13 @@
 #!/usr/bin/env -S zsh -euo pipefail
 
 git_root=$(git rev-parse --show-toplevel)
-dump_path="${git_root}/cloudflare/workers/c3-api/tests/dumps"
-git_branch=$(git rev-parse --abbrev-ref HEAD)
+dump_path="${git_root}/c3-api/tests/dumps"
+
+# Every branch syncs the same bucket path. The dumps a test pins are named by
+# the SHA-256 of its expectation (see "How to Update E2E test dumps" in the
+# README), so regenerating them on one branch adds new files there, never
+# ones another branch's test compares against. Every other dump is one file
+# for all branches, and a regenerated one replaces it for each of them.
 
 # take R2_REMOTE name or configuration string from env, or default
 # R2_REMOTE would be the same as {your.r2.domain} if you setup rclone

@@ -4,7 +4,7 @@ import * as Compute from '../../symbolic/computation.js';
 
 import * as KnownNetwork from '../../well-known/networks/network.js';
 
-import type { EvmRpc } from './rpc.js';
+import { notServed, type EvmRpc } from './rpc.js';
 
 type EthGetTransactionByHash = Compute.Spec<{
   name: 'ethGetTransactionByHash',
@@ -32,9 +32,9 @@ const ethGetTransactionByHash = implement({
       { evmRpc: { frame: { apiHost, nodeHost, nodeKey, network }, items: [ call ] } },
       ([{ result, error }]) => {
         if (error) {
-          const message = `${call.method}: ${jsonRpc.formatError(error)}`;
-          debug.error(message, { error, result });
-          throw new Error(message);
+          const failure = notServed(call.method, error);
+          debug.error(failure.message, { error, result });
+          throw failure;
         }
         // FIXME(jordan): this parser only checks 'to', 'from', 'hash'
         if (!Eth.parseTransaction(result)) {

@@ -12,6 +12,27 @@ import type {
 
 import type { Settings } from './settings.js';
 
+/*
+ * The most calls one upstream batch carries. Alchemy accepts up to 1000 and
+ * recommends staying under 50; the registry import bounds its own batches at
+ * the same 100 (c3-api/src/registry/enrichment.ts).
+ */
+const MAX_CALLS_PER_BATCH = 100;
+
+/*
+ * A batch an endpoint answered in part: the responses of the pieces it
+ * answered, and the calls of the pieces it failed.
+ */
+class PartlyAnswered extends Error {
+  constructor(
+    readonly answered:   jsonRpc.Response[],
+    readonly unanswered: jsonRpc.Request[],
+    reason: unknown,
+  ) {
+    super(`${unanswered.length} calls were not answered: ${(reason as Error).message}`, { cause: reason });
+  }
+}
+
 interface HandlerContext {
   kv:        KVNamespace,
   settings:  Settings,
@@ -169,9 +190,9 @@ export async function handleRequest(
     if (selected != null) {
       nodeEndpoint = selected;
     } else { // otherwise, deactivate the invalid active-fallback
-      context.defer(new Promise(() => {
-        console.log(`performing deferred delete: ${prefix}:active-fallback`);
-        return kv.delete(`${prefix}:active-fallback`);
+      console.log(`performing deferred delete: ${prefix}:active-fallback`);
+      context.defer(kv.delete(`${prefix}:active-fallback`).catch(error => {
+        console.error(`deferred delete failed: ${prefix}:active-fallback: ${(error as Error).message}`);
       }));
     }
   }
@@ -209,11 +230,35 @@ export async function handleRequest(
       }));
       return [ response ];
     }
-    // otherwise, post an RPC batch
-    return Fallible.must(await jsonRpc.postBatch({
+    /*
+     * otherwise, post an RPC batch, in pieces a provider serves reliably. A
+     * client that batches every market of a network sends a couple of
+     * hundred calls at once; the pieces cost this invocation's subrequests,
+     * not the client's, and each piece's responses come back in its order.
+     *
+     * Every piece is waited for, whether or not another fails. When some are
+     * answered and others are not, the answers are kept and only the calls
+     * of the failed pieces are left to ask again (PartlyAnswered).
+     */
+    const pieces: jsonRpc.Request[][] = [];
+    for (let index = 0; index < rpcs.length; index += MAX_CALLS_PER_BATCH) {
+      pieces.push(rpcs.slice(index, index + MAX_CALLS_PER_BATCH));
+    }
+    const outcomes = await Promise.allSettled(pieces.map(async piece => Fallible.must(await jsonRpc.postBatch({
       endpoint: nodeEndpoint.uri,
-      calls: rpcs,
-    }));
+      calls: piece,
+    }))));
+    const answered   = outcomes.flatMap(outcome => outcome.status === 'fulfilled' ? outcome.value : []);
+    const unanswered = pieces.filter((_, index) => outcomes[index].status === 'rejected').flat();
+    const failure    = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected');
+    if (failure === undefined) {
+      return answered;
+    }
+    // nothing was answered: the endpoint failed the request as a whole
+    if (unanswered.length === rpcs.length) {
+      throw failure.reason;
+    }
+    throw new PartlyAnswered(answered, unanswered, failure.reason);
   }
   async function performRpcs_reportLatency(
     rpcs: jsonRpc.Request[],
@@ -233,6 +278,8 @@ export async function handleRequest(
     }
   }
 
+  // the calls of a batch's failed pieces, when the endpoint answered the rest
+  let unanswered: jsonRpc.Request[] = [];
   try {
     responses.push(...await performRpcs_reportLatency(rpcs, nodeEndpoint));
   } catch (error) { // 503: Service Unavailable (please retry)
@@ -252,7 +299,8 @@ export async function handleRequest(
      * expected to retry until it succeeds. By default, failure responses
      * will set a Retry-After header asking the client to wait some time.
      *
-     * If a fallback is set, the Retry-After header will be set to 0s.
+     * A fallback set here does not shorten the wait: a 503 asks for the
+     * same Retry-After, and the client's retry goes to the fallback.
      *
      */
     // TODO: per-app-key configurable settings.
@@ -266,10 +314,22 @@ export async function handleRequest(
     }
     logFallback(nodeEndpoint, fallback, { expirationTtl });
     activateFallback(fallback, { kv, prefix, expirationTtl, defer: context.defer });
-    // retry with fallback on behalf of client
-    if (settings.retryWithActiveFallback) {
+    /*
+     * A batch the endpoint answered in part keeps those answers, whichever
+     * setting retries it. Only the calls of the failed pieces are asked of
+     * the fallback: asking for the whole batch again would spend the
+     * answered pieces twice.
+     */
+    const answered    = error instanceof PartlyAnswered ? error.answered   : [];
+    const failedCalls = error instanceof PartlyAnswered ? error.unanswered : rpcs;
+    if (error instanceof PartlyAnswered && settings.retryIndividualFailedRpcs) {
+      // asked below, with the calls that fail one by one
+      responses.push(...answered);
+      unanswered = failedCalls;
+    } else if (settings.retryWithActiveFallback) {
+      // retry with fallback on behalf of client
       try {
-        responses.push(...await performRpcs_reportLatency(rpcs, fallback));
+        responses.push(...answered, ...await performRpcs_reportLatency(failedCalls, fallback));
       } catch (error) {
         console.error(`fallback-retry-all error: ${(error as Error).message}`);
         // respond 503 with Retry-After to encourage clients to retry.
@@ -292,7 +352,7 @@ export async function handleRequest(
   const maskedResponses: jsonRpc.Response[]  = [];
   const erroredResponses: jsonRpc.Response[] = [];
   for (const response of responses) {
-    if (!('error' in response)) {
+    if (!isFailure(response)) {
       maskedResponses.push(response);
       continue;
     }
@@ -311,10 +371,12 @@ export async function handleRequest(
   }
 
   /*
-   * If some RPCs errored, try to fallback and retry the errored RPCs.
+   * If some RPCs errored, or were in a piece that failed, try to fallback
+   * and retry them.
    */
   const retried: jsonRpc.Response[] = [];
-  if (settings.retryIndividualFailedRpcs && erroredRpcs.length > 0) {
+  const retrying = [ ...erroredRpcs, ...unanswered ];
+  if (settings.retryIndividualFailedRpcs && retrying.length > 0) {
     // TODO: per-app-key configurable settings.
     // const expirationTtl = settings.defaultFallbackExpirationTtlSeconds;
     const fallback = findNewProvider(nodeEndpoint, availableEndpoints);
@@ -322,16 +384,30 @@ export async function handleRequest(
       logFallback(nodeEndpoint, fallback, { expirationTtl: 0 });
       // activateFallback(fallback, { kv, prefix, expirationTtl, defer: context.defer });
       try {
-        retried.push(...await performRpcs_reportLatency(erroredRpcs, fallback));
+        retried.push(...await performRpcs_reportLatency(retrying, fallback));
       } catch (error) {
         console.error(`fallback-retry-only-failed error: ${(error as Error).message}`);
+        if (error instanceof PartlyAnswered) {
+          retried.push(...error.answered);
+        }
       }
-      for (const rpc of erroredRpcs) {
+      for (const rpc of retrying) {
         const response = (
              retried.  find(({ id }) => id === rpc.id)
           ?? responses.find(({ id }) => id === rpc.id)
-        )!;
-        if (!('error' in response)) {
+        );
+        /*
+         * A call of a failed piece that the fallback did not answer either
+         * has no answer to give. One made up would read as the node failing
+         * the call, which a client counts against the call itself, so the
+         * request fails as it would have whole: 503, to be retried.
+         */
+        if (response === undefined) {
+          // TODO: per-app-key configurable settings.
+          const retryAfter = settings.defaultRetryAfterUpstreamErrorSeconds;
+          return retryResponse({ retryAfter });
+        }
+        if (!isFailure(response)) {
           maskedResponses.push(response);
           continue;
         }
@@ -344,6 +420,9 @@ export async function handleRequest(
           endpoint: fallback,
         });
       }
+    } else {
+      // with no other provider to ask, the errors are the answer
+      erroredResponses.push(...responses.filter(response => erroredRpcs.some(({ id }) => id === response.id)));
     }
   }
 
@@ -372,6 +451,16 @@ export async function handleRequest(
       ? JSON.stringify(maskedResponses)
       : JSON.stringify(maskedResponses[0])
   );
+}
+
+/*
+ * A response the provider failed: an error, other than a revert. A revert is
+ * the contract's answer, not the provider failing — every provider gives the
+ * same one — so it is neither retried nor masked, whichever provider answered
+ * it, and a client can tell a call that reverts from one that was not served.
+ */
+function isFailure(response: jsonRpc.Response): response is jsonRpc.Response & { error: NonNullable<jsonRpc.Response['error']> } {
+  return response.error !== undefined && !jsonRpc.isExecutionReverted(response.error);
 }
 
 function findMatchingEndpoint(
@@ -422,14 +511,18 @@ function activateFallback(
     defer: HandlerContext['defer'],
   }
 ) {
-  // do a deferred write to the active-fallback key
-  context.defer(new Promise(() => {
-    console.log(`performing deferred write: ${prefix}:active-fallback`);
-    return kv.put(
-      `${prefix}:active-fallback`,
-      JSON.stringify(fallback),
-      { expirationTtl },
-    );
+  /*
+   * do a deferred write to the active-fallback key. What is deferred is the
+   * write itself, so the runtime keeps the invocation alive until it settles;
+   * nothing waits on its outcome, so a write that fails is logged here.
+   */
+  console.log(`performing deferred write: ${prefix}:active-fallback`);
+  context.defer(kv.put(
+    `${prefix}:active-fallback`,
+    JSON.stringify(fallback),
+    { expirationTtl },
+  ).catch(error => {
+    console.error(`deferred write failed: ${prefix}:active-fallback: ${(error as Error).message}`);
   }));
 }
 

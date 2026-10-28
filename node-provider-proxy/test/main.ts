@@ -143,7 +143,7 @@ test.afterEach(() => fetch.satisfy(assert));
  * - include proper CORS headers on 200s
  * - block invalid JSON-RPC payload, w/o sending to provider -> 400
  * - respond to eth_chainId, w/o sending to provider
- * - fallback to alchemyEthMainnet -> 503, Retry-After 0
+ * - fallback to alchemyEthMainnet -> 503, Retry-After as configured
  *   - persist fallback to alchemyEthMainnet on subsequent requests
  *   - expire fallback to alchemyEthMainnet
  * - fail w/ no available fallback -> 503, Retry-After >=10s
@@ -151,17 +151,27 @@ test.afterEach(() => fetch.satisfy(assert));
  * - manual json filter object for active-fallback should work
  */
 
-// FIXME: this test fails: right now the API throws an uncaught exception
-test.skip('missing provider secret causes 500', async () => {
+/*
+ * A missing secret is a fault of the deployment. The client is answered as
+ * for any unexpected error, with the usual headers, and the log names the
+ * secret: a caller is not told which secret the proxy lacks.
+ */
+test('missing provider secret causes 500', async t => {
   const env = makeTestEnv({});
   delete (env as any)['alchemyEthMainnet'];
-  const endpoint = `http://node-provider.test.local`;
-  const request  = new Request(endpoint, {
+  const logged  = t.mock.method(console, 'error', () => {});
+  const request = jsonRpc.preparePost({
+    endpoint: 'http://node-provider.test.local/ethereum-mainnet',
+    call: { method: 'eth_blockNumber', params: [] },
   });
   const response = await Api.fetch(request, env);
   assert.equal(response.status, 500);
-  const bodyText = await response.text();
-  assert.match(bodyText, /alchemyEthMainnet not found/);
+  assert.equal(await response.text(), 'unexpected error');
+  assertSecurityHeaders(response);
+  assert.match(
+    logged.mock.calls.map(call => call.arguments.map(String).join(' ')).join('\n'),
+    /alchemyEthMainnet not found in environment/,
+  );
 });
 
 test.todo('methods other than POST cause 405', async () => {
@@ -323,6 +333,213 @@ test('one-item batch RPCs are unwrapped', async () => {
   assert.deepEqual(bodyText, JSON.stringify([ rpcResponse ]));
 });
 
+test('a large batch goes upstream in pieces and comes back in order', async () => {
+  const env = makeTestEnv({});
+  const endpoint = 'http://node-provider.test.local/ethereum-mainnet';
+  const calls: jsonRpc.Call[] = Array.from({ length: 250 }, (_, index) => (
+    { method: 'eth_getBalance', params: [ `0x${index.toString(16).padStart(40, '0')}`, 'latest' ] }
+  ));
+  const request = jsonRpc.preparePostBatch({ endpoint, calls });
+  const endpoints = providers.instantiate(env);
+  // 100, 100 and 50 calls, each answered in reverse to show order is restored
+  for (const [ start, end ] of [ [ 0, 100 ], [ 100, 200 ], [ 200, 250 ] ]) {
+    const piece = calls.slice(start, end).map((call, offset) => ({ id: start + offset, jsonrpc: '2.0', ...call }));
+    fetch.expect(endpoints['ethereum-mainnet'][0].uri, {
+      method: 'POST',
+      body: { type: 'json', value: piece },
+    })
+      .returns(JSON.stringify(piece.map(({ id }) => ({ id, jsonrpc: '2.0', result: `0x${id.toString(16)}` })).reverse()));
+  }
+  const response = await Api.fetch(request, env);
+  const responses = await response.json() as jsonRpc.Response[];
+  assert.equal(responses.length, 250);
+  assert.deepEqual(responses.map(({ id }) => id), calls.map((_, index) => index));
+  assert.deepEqual(responses.map(({ result }) => result), calls.map((_, index) => `0x${index.toString(16)}`));
+});
+
+/*
+ * A batch of 250 balance reads, and the pieces of 100, 100 and 50 calls the
+ * proxy sends it upstream in, as a provider receives them.
+ */
+function balanceBatch(network: string) {
+  const calls: jsonRpc.Call[] = Array.from({ length: 250 }, (_, index) => (
+    { method: 'eth_getBalance', params: [ `0x${index.toString(16).padStart(40, '0')}`, 'latest' ] }
+  ));
+  const pieces = [ [ 0, 100 ], [ 100, 200 ], [ 200, 250 ] ].map(([ start, end ]) => (
+    calls.slice(start, end).map((call, offset) => ({ ...call, id: start + offset, jsonrpc: '2.0' as const }))
+  ));
+  return {
+    calls,
+    pieces,
+    request: jsonRpc.preparePostBatch({ endpoint: `http://node-provider.test.local/${network}`, calls }),
+  };
+}
+
+// a provider's answer to a piece: every balance is the call's id
+function answersTo(piece: jsonRpc.Request[]): string {
+  return JSON.stringify(piece.map(({ id }) => ({ id, jsonrpc: '2.0', result: `0x${id.toString(16)}` })));
+}
+
+/*
+ * With no other provider, nothing can answer the calls of a piece that
+ * failed, and an answer made up for them would read as the node failing each
+ * call. The batch fails whole, to be retried, once every piece has been
+ * answered or has failed: none is left in flight when the proxy answers.
+ */
+test('a failed piece fails the batch when no other provider can answer it', async () => {
+  const env = makeTestEnv({});
+  env.settings = { ...env.settings, retryIndividualFailedRpcs: true };
+  // scroll has a single provider, so there is nothing to fall back on
+  const { pieces, request } = balanceBatch('scroll-mainnet');
+  const endpoints = providers.instantiate(env);
+  for (const [ index, piece ] of pieces.entries()) {
+    const expectation = fetch.expect(endpoints['scroll-mainnet'][0].uri, {
+      method: 'POST',
+      body: { type: 'json', value: piece },
+    });
+    if (index === 0) {
+      expectation.returns('bad gateway', { status: 502 });
+    } else {
+      expectation.returns(answersTo(piece));
+    }
+  }
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('retry-after'), `${env.settings.defaultRetryAfterUpstreamErrorSeconds}`);
+  assert.equal(await response.text(), 'upstream error');
+});
+
+/*
+ * A provider that fails one piece of a batch has still answered the others.
+ * Those answers are kept, and only the failed piece's calls are asked of the
+ * fallback provider, which takes over the network for the next requests as
+ * it does when a whole request fails. Either setting that has the proxy retry
+ * for its clients does so: retrying the calls that failed, or retrying a
+ * request that failed.
+ */
+for (const retry of [ 'retryIndividualFailedRpcs', 'retryWithActiveFallback' ] as const) {
+  test(`a failed piece is asked of the fallback provider, and the answered pieces are kept (${retry})`, async () => {
+    const env = makeTestEnv({});
+    env.settings = { ...env.settings, [retry]: true };
+    const { calls, pieces, request } = balanceBatch('ethereum-mainnet');
+    const [ primary, fallback ] = providers.instantiate(env)['ethereum-mainnet'];
+    fetch.expect(primary.uri, { method: 'POST', body: { type: 'json', value: pieces[0] } })
+      .returns('bad gateway', { status: 502 });
+    for (const piece of pieces.slice(1)) {
+      fetch.expect(primary.uri, { method: 'POST', body: { type: 'json', value: piece } })
+        .returns(answersTo(piece));
+    }
+    fetch.expect(fallback.uri, { method: 'POST', body: { type: 'json', value: pieces[0] } })
+      .returns(answersTo(pieces[0]));
+    const response = await Api.fetch(request, env);
+    assert.equal(response.status, 200);
+    const responses = (await response.json() as jsonRpc.Response[]).sort((a, b) => Number(a.id) - Number(b.id));
+    assert.deepEqual(responses.map(({ id }) => id), calls.map((_, index) => index));
+    assert.deepEqual(responses.map(({ result }) => result), calls.map((_, index) => `0x${index.toString(16)}`));
+    const active = await env.kv.get(`provider:default:ethereum-mainnet:active-fallback`);
+    assert.deepEqual(JSON.parse(active!), fallback);
+  });
+
+  test(`a failed piece the fallback provider fails too fails the batch (${retry})`, async () => {
+    const env = makeTestEnv({});
+    env.settings = { ...env.settings, [retry]: true };
+    const { pieces, request } = balanceBatch('ethereum-mainnet');
+    const [ primary, fallback ] = providers.instantiate(env)['ethereum-mainnet'];
+    fetch.expect(primary.uri, { method: 'POST', body: { type: 'json', value: pieces[0] } })
+      .returns('bad gateway', { status: 502 });
+    for (const piece of pieces.slice(1)) {
+      fetch.expect(primary.uri, { method: 'POST', body: { type: 'json', value: piece } })
+        .returns(answersTo(piece));
+    }
+    fetch.expect(fallback.uri, { method: 'POST', body: { type: 'json', value: pieces[0] } })
+      .returns('bad gateway', { status: 502 });
+    const response = await Api.fetch(request, env);
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get('retry-after'), `${env.settings.defaultRetryAfterUpstreamErrorSeconds}`);
+  });
+}
+
+/*
+ * A batch whose every piece failed is a request that failed whole, and is
+ * answered as one: the fallback provider takes over the next requests, but
+ * is not asked this one's calls. Retrying the calls that failed is for a
+ * batch the provider answered in part; retrying a request that failed whole
+ * is retryWithActiveFallback, off here.
+ */
+test('a batch whose every piece failed fails whole, and its calls are not retried', async () => {
+  const env = makeTestEnv({});
+  env.settings = { ...env.settings, retryIndividualFailedRpcs: true };
+  const { pieces, request } = balanceBatch('ethereum-mainnet');
+  const [ primary, fallback ] = providers.instantiate(env)['ethereum-mainnet'];
+  for (const piece of pieces) {
+    fetch.expect(primary.uri, { method: 'POST', body: { type: 'json', value: piece } })
+      .returns('bad gateway', { status: 502 });
+  }
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('retry-after'), `${env.settings.defaultRetryAfterUpstreamErrorSeconds}`);
+  assert.deepEqual(fetch.unexpected.map(({ url }) => url), [], 'the fallback provider is not asked');
+  const active = await env.kv.get(`provider:default:ethereum-mainnet:active-fallback`);
+  assert.deepEqual(JSON.parse(active!), fallback);
+});
+
+/*
+ * The fallback provider can fail part of what it is asked again, too. What it
+ * answers is kept: a call of the failed piece that it answered is answered,
+ * and a call the first provider failed keeps that provider's error, masked,
+ * as it would with no fallback to ask.
+ */
+test('what the fallback provider answers of the calls it is asked is kept', async t => {
+  const env = makeTestEnv({});
+  env.settings = { ...env.settings, retryIndividualFailedRpcs: true };
+  // an errored call is logged each time it is found, 200 times here
+  t.mock.method(console, 'warn', () => {});
+  const { calls, pieces, request } = balanceBatch('ethereum-mainnet');
+  const [ primary, fallback ] = providers.instantiate(env)['ethereum-mainnet'];
+  const unserved = { code: -32000, message: 'header not found' };
+  // the first piece is answered with an error for every call, the second fails, the third is answered
+  fetch.expect(primary.uri, { method: 'POST', body: { type: 'json', value: pieces[0] } })
+    .returns(JSON.stringify(pieces[0].map(({ id }) => ({ id, jsonrpc: '2.0', error: unserved }))));
+  fetch.expect(primary.uri, { method: 'POST', body: { type: 'json', value: pieces[1] } })
+    .returns('bad gateway', { status: 502 });
+  fetch.expect(primary.uri, { method: 'POST', body: { type: 'json', value: pieces[2] } })
+    .returns(answersTo(pieces[2]));
+  // the 200 calls asked again go in two pieces: the fallback fails the errored calls and answers the others
+  fetch.expect(fallback.uri, { method: 'POST', body: { type: 'json', value: pieces[0] } })
+    .returns('bad gateway', { status: 502 });
+  fetch.expect(fallback.uri, { method: 'POST', body: { type: 'json', value: pieces[1] } })
+    .returns(answersTo(pieces[1]));
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 200);
+  const responses = (await response.json() as jsonRpc.Response[]).sort((a, b) => Number(a.id) - Number(b.id));
+  assert.deepEqual(responses.map(({ id }) => id), calls.map((_, index) => index));
+  assert.deepEqual(
+    responses.slice(0, 100).map(({ error }) => error),
+    pieces[0].map(() => ({ code: -32000, message: 'upstream error' })),
+  );
+  assert.deepEqual(
+    responses.slice(100).map(({ result }) => result),
+    calls.slice(100).map((_, index) => `0x${(100 + index).toString(16)}`),
+  );
+});
+
+// the proxy retries for its clients only when a setting says so; both are off here
+test('with retries off, a failed piece fails the batch and the fallback takes over', async () => {
+  const env = makeTestEnv({});
+  const { pieces, request } = balanceBatch('ethereum-mainnet');
+  const [ primary, fallback ] = providers.instantiate(env)['ethereum-mainnet'];
+  fetch.expect(primary.uri, { method: 'POST', body: { type: 'json', value: pieces[0] } })
+    .returns('bad gateway', { status: 502 });
+  for (const piece of pieces.slice(1)) {
+    fetch.expect(primary.uri, { method: 'POST', body: { type: 'json', value: piece } })
+      .returns(answersTo(piece));
+  }
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 503);
+  const active = await env.kv.get(`provider:default:ethereum-mainnet:active-fallback`);
+  assert.deepEqual(JSON.parse(active!), fallback);
+});
+
 // CORS is handled correctly
 test('OPTIONS requests get proper CORS headers', async () => {
   const endpoint = `http://node-provider.test.local/ethereum-mainnet`;
@@ -451,6 +668,87 @@ test('upstream errors are masked from clients', async () => {
   }));
 });
 
+/*
+ * An eth_call as a client of the proxy asks it, and the answer upstream
+ * gives it: the error the call is answered with, whether a revert of the
+ * contract or a failure of the node.
+ */
+function erroredCall(network: string, error: jsonRpc.Error) {
+  const endpoint = `http://node-provider.test.local/${network}`;
+  const call: jsonRpc.Call = {
+    method: 'eth_call',
+    params: [
+      {
+        to: '0xe85dc543813b8c2cfeaac371517b925a166a9293',
+        data: '0x41976e09000000000000000000000000e3a409ed15cd53afdefdd191ad945cec528a2496',
+      },
+      'latest',
+    ],
+  };
+  return {
+    call,
+    request:  jsonRpc.preparePost({ call, endpoint }),
+    response: { id: 0, jsonrpc: '2.0', error } as jsonRpc.Response,
+  };
+}
+
+test('reverts reach clients unmasked and are not retried', async () => {
+  const env = makeTestEnv({});
+  env.settings = { ...env.settings, retryIndividualFailedRpcs: true };
+  const revert = { code: 3, message: 'execution reverted', data: '0x' };
+  const { call, request, response: rpcResponse } = erroredCall('ethereum-mainnet', revert);
+  const endpoints = providers.instantiate(env);
+  // one upstream call: the fallback provider is not asked again
+  fetch.expect(endpoints['ethereum-mainnet'][0].uri, {
+    method: 'POST',
+    body: { type: 'json', value: { id: 0, jsonrpc: '2.0', ...call } },
+  })
+    .returns(JSON.stringify(rpcResponse));
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), JSON.stringify(rpcResponse));
+});
+
+/*
+ * The provider a call is retried on can answer it with a revert where the
+ * first one failed it. That revert is the answer, as it would be from the
+ * first provider, and a client masking it as an upstream error would report a
+ * market it could have priced as broken.
+ */
+test('a revert the fallback provider answers reaches clients unmasked', async () => {
+  const env = makeTestEnv({});
+  env.settings = { ...env.settings, retryIndividualFailedRpcs: true };
+  const revert = { code: 3, message: 'execution reverted', data: '0x' };
+  const { call, request, response: failed } = erroredCall('ethereum-mainnet', { code: -32000, message: 'header not found' });
+  const endpoints = providers.instantiate(env);
+  const body = { type: 'json', value: { id: 0, jsonrpc: '2.0', ...call } } as const;
+  fetch.expect(endpoints['ethereum-mainnet'][0].uri, { method: 'POST', body }).returns(JSON.stringify(failed));
+  fetch.expect(endpoints['ethereum-mainnet'][1].uri, { method: 'POST', body }).returns(JSON.stringify({ ...failed, error: revert }));
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), JSON.stringify({ id: 0, jsonrpc: '2.0', error: revert }));
+});
+
+test('a failed rpc is still answered when no provider can retry it', async () => {
+  const env = makeTestEnv({});
+  env.settings = { ...env.settings, retryIndividualFailedRpcs: true };
+  // scroll has a single provider, so there is nothing to fall back on
+  const { call, request, response: rpcResponse } = erroredCall('scroll-mainnet', { code: -11111, message: 'what up' });
+  const endpoints = providers.instantiate(env);
+  fetch.expect(endpoints['scroll-mainnet'][0].uri, {
+    method: 'POST',
+    body: { type: 'json', value: { id: 0, jsonrpc: '2.0', ...call } },
+  })
+    .returns(JSON.stringify(rpcResponse));
+  const response = await Api.fetch(request, env);
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), JSON.stringify({
+    id: 0,
+    jsonrpc: '2.0',
+    error: { code: -32000, message: 'upstream error' },
+  }));
+});
+
 // fallback tests
 test('active fallback is selected by JSON filter object', async () => {
   const env = makeTestEnv({});
@@ -546,6 +844,105 @@ test('if provider fails, fallback with TTL', async () => {
   assert.equal(response2.status, 200);
   const bodyText = await response2.text();
   assert.equal(bodyText, JSON.stringify(rpcResponse));
+});
+
+/*
+ * An execution context as the Workers runtime gives one: its methods refuse
+ * a call made off the context ('Illegal invocation'), and it holds what is
+ * passed to waitUntil until the invocation ends.
+ */
+function makeTestContext() {
+  const deferred: Promise<unknown>[] = [];
+  const context = {
+    waitUntil(this: unknown, promise: Promise<unknown>) {
+      if (this !== context) {
+        throw new TypeError('Illegal invocation');
+      }
+      deferred.push(promise);
+    },
+    passThroughOnException() {},
+  };
+  return { context: context as unknown as ExecutionContext, deferred };
+}
+
+// whether every deferred promise settles within a moment, which the runtime waits on
+async function settles(deferred: Promise<unknown>[]): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<boolean>(resolve => { timer = setTimeout(resolve, 1000, false); });
+  try {
+    return await Promise.race([ Promise.all(deferred).then(() => true), late ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// a provider that fails the request outright, on ethereum-mainnet
+function failingMainnet(env: Env) {
+  const endpoints = providers.instantiate(env);
+  fetch.expect(endpoints['ethereum-mainnet'][0].uri, {
+    method: 'POST',
+    body: { type: 'json', value: { id: 0, jsonrpc: '2.0', method: 'eth_blockNumber', params: [] } },
+  })
+    .returns(null, { status: 500 });
+  return {
+    endpoints,
+    request: jsonRpc.preparePost({
+      endpoint: `http://node-provider.test.local/ethereum-mainnet`,
+      call: { method: 'eth_blockNumber', params: [] },
+    }),
+  };
+}
+
+test('the switch to a fallback is written after the response, through the context', async () => {
+  const env = makeTestEnv({});
+  const { context, deferred } = makeTestContext();
+  const { endpoints, request } = failingMainnet(env);
+  const response = await Api.fetch(request, env, context);
+  assert.equal(response.status, 503);
+  assert.equal(response.headers.get('retry-after'), `${env.settings.defaultRetryAfterUpstreamErrorSeconds}`);
+  assert.equal(deferred.length, 1, 'the write is deferred');
+  assert.ok(await settles(deferred), 'and settles, so the invocation is not held open');
+  const active = await env.kv.get(`provider:default:ethereum-mainnet:active-fallback`);
+  assert.deepEqual(JSON.parse(active!), endpoints['ethereum-mainnet'][1]);
+});
+
+test('a switch to a fallback that is not written is logged, and the answer stands', async t => {
+  const env = makeTestEnv({});
+  env.kv.put = async () => { throw new Error('KV PUT failed: 429 Too Many Requests'); };
+  const logged = t.mock.method(console, 'error', () => {});
+  const { context, deferred } = makeTestContext();
+  const { request } = failingMainnet(env);
+  const response = await Api.fetch(request, env, context);
+  assert.equal(response.status, 503);
+  assert.ok(await settles(deferred), 'the failed write settles too');
+  assert.match(
+    logged.mock.calls.map(call => call.arguments.map(String).join(' ')).join('\n'),
+    /deferred write failed: provider:default:ethereum-mainnet:active-fallback: KV PUT failed/,
+  );
+});
+
+test('an active fallback that matches no endpoint is deleted after the response', async () => {
+  const env = makeTestEnv({});
+  const { context, deferred } = makeTestContext();
+  const endpoints = providers.instantiate(env);
+  await env.kv.put(
+    `provider:default:ethereum-mainnet:active-fallback`,
+    JSON.stringify({ provider: 'RetiredProvider' }),
+  );
+  fetch.expect(endpoints['ethereum-mainnet'][0].uri, {
+    method: 'POST',
+    body: { type: 'json', value: { id: 0, jsonrpc: '2.0', method: 'eth_blockNumber', params: [] } },
+  })
+    .returns(JSON.stringify({ id: 0, jsonrpc: '2.0', result: '0xbeef' }));
+  const request = jsonRpc.preparePost({
+    endpoint: `http://node-provider.test.local/ethereum-mainnet`,
+    call: { method: 'eth_blockNumber', params: [] },
+  });
+  const response = await Api.fetch(request, env, context);
+  assert.equal(response.status, 200);
+  assert.equal(deferred.length, 1, 'the delete is deferred');
+  assert.ok(await settles(deferred), 'and settles');
+  assert.equal(await env.kv.get(`provider:default:ethereum-mainnet:active-fallback`), null);
 });
 
 test('if provider fails with no fallback, Retry-After', async () => {
