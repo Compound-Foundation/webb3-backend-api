@@ -1,0 +1,5 @@
+# Foundation engineering owns every path, including the CI workflows and this
+# file under /.github/.
+
+* @Compound-Foundation/foundation-engineering
+/.github/ @Compound-Foundation/foundation-engineering
