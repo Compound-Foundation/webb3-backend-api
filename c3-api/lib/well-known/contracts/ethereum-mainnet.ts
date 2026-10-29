@@ -302,6 +302,17 @@ const USDS = ERC20("USDS", <const>{
     timestamp: 1725290327,
   },
 });
+const USDG = ERC20("USDG", <const>{
+  description: "Global Dollar",
+  decimals: 6,
+  // location
+  network: "ethereum-mainnet",
+  address: "0xe343167631d89B6Ffc58B88d6b7fB0228795491D",
+  block: {
+    number: 20915336,
+    timestamp: 1728324023,
+  },
+});
 const LBTC = ERC20("LBTC", <const>{
   description: "Lombard Staked BTC",
   decimals: 8,
@@ -351,6 +362,7 @@ const erc20s = <const>[
   USDe,
   tBTC,
   USDS,
+  USDG,
   LBTC,
   pumpBTC,
 ];
@@ -1222,6 +1234,58 @@ const Comet_01iusdc = Comet(<const>{
 
 const market01iusdc = <const>[Comet_01iusdc];
 
+/*
+ * "Compound Institutional USDG" (ciUSDGv3).
+ *
+ * The second institutionally-operated market, deployed on the same
+ * institutional infrastructure as ciUSDCv3 above: same Gnosis Safe governor
+ * (0x4f05F11ca5DE8946958d58AD765F16755F23b113), same non-Timelock proxy admin
+ * (0x362739f84FFE4e5f06395301617a90f62Ee1f4cf), same collateral set (WETH,
+ * wstETH, cbBTC, WBTC) and parameters, but with USDG (Global Dollar) as the
+ * base asset, priced by the Chainlink "USDG / USD" feed.
+ *
+ * Everything in the ciUSDCv3 comment above applies here too: parameters can
+ * change without a governance proposal, and no rewards are configured
+ * (rewardConfig(ciUSDGv3) returns rewardToken == 0x0), so it is declared
+ * against the canonical CometRewards for the same reasons.
+ *
+ * Transaction history additionally requires an entry in GetAllStreamEvents()
+ * in src/transaction-history-handler/transaction-history-items-handler.ts --
+ * declaring a Comet here is not sufficient for that endpoint.
+ */
+const USDG_USD_priceFeed = PriceFeed(<const>{
+  decimals: 8,
+  // location
+  network: "ethereum-mainnet",
+  address: "0x14f0737d6b705259e521EA6E9E3506AC78dBd311",
+  block: {
+    number: 23198813,
+    timestamp: 1755892163,
+  },
+});
+
+const Comet_01iusdg = Comet(<const>{
+  displayName: "ciUSDGv3",
+  aliases: ["01-iusdg", "ciUSDGv3"],
+  base: {
+    asset: USDG,
+    priceFeed: USDG_USD_priceFeed,
+  },
+  rewards: {
+    asset: COMP,
+    contract: CometRewards,
+    priceFeed: COMP_USD_priceFeed,
+  },
+  network: "ethereum-mainnet",
+  address: "0xe58fC3D0ECcB7dE485CD1F477427b680c96436d0",
+  block: {
+    number: 26276659,
+    timestamp: 1793015291,
+  },
+});
+
+const market01iusdg = <const>[USDG_USD_priceFeed, Comet_01iusdg];
+
 // governance
 const Timelock = UntypedContract("Timelock", <const>{
   aliases: ["default"],
@@ -2000,6 +2064,7 @@ const contractData = [
   ...market01usds,
   ...market01wbtc,
   ...market01iusdc,
+  ...market01iusdg,
   // everything else...
   ...misc,
 ] as const;

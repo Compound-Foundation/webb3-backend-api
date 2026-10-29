@@ -19,6 +19,7 @@ import '../../../../shim/node-self.js';
 
 const network = 'ethereum-mainnet' as const;
 const iusdcAddress = '0x207158a267CBD2598BB3d611D8CBdEE2709F2F8C';
+const iusdgAddress = '0xe58fC3D0ECcB7dE485CD1F477427b680c96436d0';
 const cometRewardsAddress = '0x1b0e765f6224c21223aea2af16c1c46e38885a40';
 
 t.test('ciUSDCv3 is aggregated alongside the other ethereum-mainnet markets', async t => {
@@ -27,6 +28,10 @@ t.test('ciUSDCv3 is aggregated alongside the other ethereum-mainnet markets', as
   t.ok(
     contracts.some(({ address }) => address === iusdcAddress),
     'ciUSDCv3 is returned by getCometContractsForNetwork'
+  );
+  t.ok(
+    contracts.some(({ address }) => address === iusdgAddress),
+    'ciUSDGv3 is returned by getCometContractsForNetwork'
   );
   t.ok(
     contracts.some(({ displayName }) => displayName === 'cUSDCv3'),
@@ -86,5 +91,35 @@ t.test('registry lookups resolve ciUSDCv3', async t => {
     (wellKnown as any)['CometRewards']['default'].address,
     cometRewardsAddress,
     'the canonical CometRewards still owns the default alias'
+  );
+});
+
+t.test('registry lookups resolve ciUSDGv3', async t => {
+  const wellKnown = wellKnownContractsByNetwork[network];
+
+  t.equal(
+    (wellKnown as any)[iusdgAddress].displayName,
+    'ciUSDGv3',
+    'resolves by address'
+  );
+  t.equal(
+    (wellKnown as any)[iusdgAddress.toLowerCase()].displayName,
+    'ciUSDGv3',
+    'resolves by lowercased address'
+  );
+  t.equal(
+    (wellKnown as any)['Comet']['ciUSDGv3'].address,
+    iusdgAddress,
+    'resolves by displayName alias'
+  );
+  t.equal(
+    (wellKnown as any)['Comet']['01-iusdg'].address,
+    iusdgAddress,
+    'resolves by 01-iusdg alias'
+  );
+  t.equal(
+    (wellKnown as any)['Comet']['ciUSDGv3'].base.asset.symbol,
+    'USDG',
+    'the base asset is USDG'
   );
 });
