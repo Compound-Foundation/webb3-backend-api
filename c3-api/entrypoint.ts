@@ -1,5 +1,6 @@
 import fetch      from './lib/request-counting-fetch.js';
 import Quota      from './lib/quota.js';
+import * as Rate  from './lib/rate-limit.js';
 import * as Flags from './lib/flags.js';
 import * as Debug from './lib/debug-log.js';
 
@@ -55,6 +56,12 @@ interface Env extends Flags.Env, ServiceBindings {
   // quota configuration
   QUOTA_SUBREQUESTS?: number;
   QUOTA_CACHE_OPERATIONS?: number;
+  /*
+   * per-client request limit, a Workers Rate Limiting binding declared per
+   * env in wrangler.toml (local dev included). Unbound in tests, where
+   * requests are not limited.
+   */
+  RATE_LIMITER?: Rate.Limiter;
 }
 
 export { Env, ServiceBindings };
@@ -80,6 +87,24 @@ const SECURITY_HEADERS: Record<string, string> = {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    /*
+     * per-client rate limit, checked before any computation, cache read or
+     * node provider call. The 429 carries the CORS headers so a browser can
+     * read it on a GET.
+     */
+    if (await Rate.isLimited(env.RATE_LIMITER, request)) {
+      return new Response(JSON.stringify({ error: 'Too many requests' }), {
+        status: 429,
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-store',
+          // the limit window is 60 seconds
+          'Retry-After': '60',
+          ...CORS_HEADERS,
+          ...SECURITY_HEADERS,
+        },
+      });
+    }
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         status: 204,
