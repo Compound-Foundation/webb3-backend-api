@@ -12,6 +12,7 @@ import { BigFixnum } from '../../../../lib/bigfixnum.js';
 
 import * as Index      from '../../../../lib/symbolic/index.js';
 import * as Evaluator  from '../../../../lib/symbolic/evaluator.js';
+import { versionedName } from '../../../../lib/symbolic/computation.js';
 import { MemoryCache } from '../../../../lib/symbolic/cache.js';
 
 import * as KnownNetwork from '../../../../lib/well-known/networks/network.js';
@@ -142,14 +143,14 @@ t.test(`historical-market-day-summaries@startBlock:${startBlock.number}`, async 
   ));
   const cachedKeys1 = Object.keys(cache.store);
   const expectedKeys = enumerated.flatMap(({ contract, network, block }) => [
-    `marketSummary-v5:(block:${block.number};`
+    `${versionedName('marketSummary', market.marketSummary.version)}:(block:${block.number};`
       + `contract:${contract.address};network:${network})`,
-    `marketDaySummary-v5:(contract:${contract.address};`
+    `${versionedName('marketDaySummary', market.marketDaySummary.version)}:(contract:${contract.address};`
       + `date:${Eth.Timestamp.toDateString(Eth.estimateBlockTimestamp(network, block))};`
       + `network:${network})`,
   ])
   .concat([
-    `historicalMarketDaySummaries-v5:(contract:${contract.address};`
+    `${versionedName('historicalMarketDaySummaries', market.historicalMarketDaySummaries.version)}:(contract:${contract.address};`
       + `daysBack:30;`
       + `network:${network};`
       + `startDate:${Eth.Timestamp.toDateString(startBlock.timestamp)})`,
