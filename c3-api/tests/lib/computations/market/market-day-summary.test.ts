@@ -9,6 +9,7 @@ import { BigNumber } from '../../../../lib/bignumber.js';
 import { BigFixnum } from '../../../../lib/bigfixnum.js';
 
 import * as Evaluator  from '../../../../lib/symbolic/evaluator.js';
+import { versionedName } from '../../../../lib/symbolic/computation.js';
 import { MemoryCache } from '../../../../lib/symbolic/cache.js';
 
 import * as evm    from '../../../../lib/computations/evm.js';
@@ -162,7 +163,7 @@ t.test(`market-day-summary@block:16380543`, async t => {
    */
   const cachedKeys1 = Object.keys(cache.store);
   const expectedKeys = [
-    `marketSummary-v5:(block:${projected.block.number};contract:${context.contract.address};network:${context.network})`,
+    `${versionedName('marketSummary', market.marketSummary.version)}:(block:${projected.block.number};contract:${context.contract.address};network:${context.network})`,
     /*
      * FIXME(jordan): since we project(..) within compute(..), the
      * index.includes(..) check fails on the block unless it happens
