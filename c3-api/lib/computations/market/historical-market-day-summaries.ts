@@ -30,8 +30,8 @@ const {
   pull1,
 } = Compute.Functor<HistoricalMarketDaySummaries>({});
 
-const historicalMarketDaySummaries = implement({
-  version: 5,
+const historicalMarketDaySummaries: Compute.Implementation<HistoricalMarketDaySummaries> = implement({
+  version: 6,
   index: Index.Everything,
   /*
    * Key computation by materialized date for startBlock's
