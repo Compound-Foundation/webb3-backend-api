@@ -8,7 +8,7 @@
     "node": ">=19.4.0"
   },
   "dependencies": {
-    "@compound-finance/sleuth": "^1.0.1-alpha4",
+    "@compound-finance/sleuth": "git+https://github.com/Compound-Foundation/sleuth.git#c1fc9fd6ec4fdd33fb561d4b6e52ff28b1696613",
     "@ethersproject/abi": "5.6",
     "js-sha3": "0.8.0"
   },
