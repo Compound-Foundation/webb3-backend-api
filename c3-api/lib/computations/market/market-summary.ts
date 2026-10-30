@@ -57,7 +57,7 @@ type MarketSummary = Compute.Spec<{
 
 const { implement, pipe } = Compute.Functor<MarketSummary>({});
 const marketSummary = implement({
-  version: 5,
+  version: 6,
   /*
    * validate that the block requested does not predate the market
    * contract creation block.
@@ -90,8 +90,8 @@ const marketSummary = implement({
      */
     return pipe([
       {
-        borrowApr: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
-        supplyApr: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
+        borrowApr: { apiHost, nodeHost, nodeKey, block, contract, network },
+        supplyApr: { apiHost, nodeHost, nodeKey, block, contract, network },
         basePrice: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
         baseUsdPrice: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
         totalBorrow: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
