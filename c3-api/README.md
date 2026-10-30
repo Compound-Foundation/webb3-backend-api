@@ -30,6 +30,26 @@ market contract for `{contract}` and a network (e.g. mainnet) for
 
 See [API.md](./API.md) for documentation of routes with examples.
 
+## Calling the stage deployment
+
+Every deployment other than `production` (and local or test runs) answers
+only requests that carry the `X-Stage-Access-Key` header with the value of the
+worker's `STAGE_ACCESS_KEY` secret. Without the secret, the deployment answers
+every request with 403. See [src/stage-access.ts](./src/stage-access.ts).
+
+```sh
+curl -H "X-Stage-Access-Key: $STAGE_ACCESS_KEY" \
+  'https://v3-api-stage.compound.xyz/market/{network}/{contract}/summary'
+```
+
+Set or rotate the secret with the command below. The worker treats a key
+shorter than 32 characters as unset. Generate it rather than choosing it, and
+keep surrounding whitespace out of it: HTTP header values are trimmed, so such
+a key never matches.
+```sh
+printf %s "$(openssl rand -hex 32)" | npx wrangler secret put STAGE_ACCESS_KEY --env stage
+```
+
 # Testing
 
 Run unit and e2e dump tests with:
