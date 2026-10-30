@@ -345,27 +345,11 @@ async function unsafeRoute(
       && maybeWellKnownContract
       && isValidMarketEndpointSuffix(strippedEndpointSuffix)
     ) {
-      if (false
-        || strippedEndpointSuffix === 'rewards/dapp-data'
-        || strippedEndpointSuffix === 'rewards/summary'
-        || strippedEndpointSuffix === 'summary'
-      ) {
-        const handler = handlerMappings[resourceApi][strippedEndpointSuffix];
-        return handler(
-          {
-            apiHost: context.env.V3_API_HOST,
-            nodeHost: context.env.NODE_PROXY_HOST,
-            nodeKey: context.env.NODE_PROXY_KEY,
-            network: networkAlias,
-            contract: maybeWellKnownContract,
-            queryParams: url.searchParams,
-          },
-          {
-            ...context,
-            instantiateEvaluator,
-          },
-        );
-      }
+      /*
+       * Every market handler instantiates its own evaluator(s); the
+       * historical summary handler uses two, a default one for the
+       * day-bucket series and a batching one for its live newest bucket.
+       */
       const handler = handlerMappings[resourceApi][strippedEndpointSuffix];
       return handler(
         {
@@ -378,8 +362,8 @@ async function unsafeRoute(
         },
         {
           ...context,
-          evaluator: instantiateEvaluator(networkEnvironment),
-        }
+          instantiateEvaluator,
+        },
       );
     }
     return new Response(`Error: Not a valid market API endpoint`, { status: 400 });
