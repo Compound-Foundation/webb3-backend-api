@@ -8,18 +8,39 @@ used by the Compound III frontend. See [./API.md](./API.md).
 
 # Getting Started
 
-Install dependencies:
+Install dependencies with Node.js 22 or newer:
 ```sh
 npm install
 ```
 
+The worker reads the chain through the node provider proxy, so a local run
+needs one.
 
-Run a local auto-reloading development build of the worker:
+Run the node provider proxy on this machine, in a terminal of its own, with
+its provider keys in `../node-provider-proxy/.dev.vars` (see
+[Configuration](../node-provider-proxy/README.md#configuration) in its
+README). It is a package of its own, so its dependencies are installed there,
+the first time, before it starts:
 ```sh
-npm start
+cd ../node-provider-proxy
+npm install
+npm start -- --port 8788
 ```
 
-Hit an endpoint:
+Then, in a second terminal and from this directory, run a local
+auto-reloading development build of the worker bound to it:
+```sh
+npx wrangler dev --local -c wrangler.local-proxy.toml entrypoint.ts
+```
+
+[`wrangler.local-proxy.toml`](./wrangler.local-proxy.toml) is the local
+environment of `wrangler.toml` with the proxy bound to the worker, as stage
+and production bind theirs. `npm start` runs the worker without it, against
+the proxy that `NODE_PROXY_HOST` and `NODE_PROXY_KEY` in `.dev.vars` name — a
+deployed one, reached over HTTPS ([.dev.vars.example](./.dev.vars.example)).
+With neither, every read of the chain fails.
+
+Then hit an endpoint:
 ```
 curl 'http://localhost:8787/market/{network}/{contract}/summary'
 ```
@@ -49,6 +70,17 @@ npm test tests/lib/computations/market/historical-market-day-summaries.test.ts
 # ✅ this is good
 npm test dist/tests/lib/computations/market/historical-market-day-summaries.test.js
 ```
+
+Every test that needs neither a node provider nor the R2 dumps runs with one
+command, which is what CI runs.
+
+```sh
+npm run test:offline
+```
+
+[`tests/offline.sh`](./tests/offline.sh) names each test it leaves out by
+its file, and says why. A new test runs there, in whichever directory it
+lives, unless it is added to that list as one that needs either.
 
 ## How to Update E2E test dumps
 The E2E tests have been configured with dumps in order to significantly cut down on requests to

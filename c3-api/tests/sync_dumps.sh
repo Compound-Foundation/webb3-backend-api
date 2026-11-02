@@ -1,6 +1,6 @@
 #!/bin/sh
 git_root=$(git rev-parse --show-toplevel)
-dump_path="${git_root}/cloudflare/workers/c3-api/tests/dumps"
+dump_path="${git_root}/c3-api/tests/dumps"
 export RCLONE_CONFIG_DUMPSR2_TYPE=s3
 export RCLONE_CONFIG_DUMPSR2_ACCESS_KEY_ID="${CLOUDFLARE_R2_ACCESS_KEY_ID}"
 export RCLONE_CONFIG_DUMPSR2_SECRET_ACCESS_KEY="${CLOUDFLARE_R2_SECRET_ACCESS_KEY}"
