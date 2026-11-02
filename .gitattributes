@@ -1,0 +1,6 @@
+# Collapse test files and test support files in GitHub pull request diffs.
+# Reviewers can expand them manually.
+c3-api/tests/** linguist-generated
+node-provider-proxy/test/** linguist-generated
+**/__tests__/** linguist-generated
+*.test.* linguist-generated
