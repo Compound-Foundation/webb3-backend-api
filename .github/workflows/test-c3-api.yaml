@@ -1,0 +1,50 @@
+name: c3-api Build and Tests
+on:
+  push:
+    paths:
+      - 'c3-api/**'
+      # tests/lib/wrangler-local-proxy.test.ts reads the name the proxy runs
+      # under locally, which c3-api/wrangler.local-proxy.toml binds
+      - 'node-provider-proxy/wrangler.toml'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/test-c3-api.yaml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: build, offline tests, dry-run bundles
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: c3-api
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # the c3-api preinstall script also installs, builds, and tests the
+      # repo-root workspace libraries
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # every test that needs neither a node provider nor the R2 dumps
+      # (tests/offline.sh names the ones that do): the unit tests of the
+      # worker
+      - name: Offline tests
+        run: npm run test:offline
+
+      - name: Dry-run stage bundle
+        run: npx wrangler deploy --dry-run --env stage --outdir "$RUNNER_TEMP/bundle-stage"
+
+      - name: Dry-run production bundle
+        run: npx wrangler deploy --dry-run --env production --outdir "$RUNNER_TEMP/bundle-production"
