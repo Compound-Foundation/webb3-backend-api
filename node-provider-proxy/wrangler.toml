@@ -18,7 +18,7 @@ kv_namespaces = [
 ]
 
 [vars]
-# secrets
+# placeholders: real keys go in .dev.vars locally, and in wrangler secret put when deployed
 allowedAppKey = ''
 allowedHosts = []
 alchemyEthMainnet = 'ALCHEMY_XXX'
