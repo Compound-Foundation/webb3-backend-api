@@ -78,7 +78,7 @@ then the headers, then the body. To use them:
 >    block or a feed the seed has wrong before anyone waits on it, and says
 >    how long the window will be.
 > 2. Announce the window beforehand — when it opens and how long it lasts —
->    to the frontend developer and to whoever answers users.
+>    to the frontend's maintainers and to whoever answers users.
 > 3. Deploy, and run steps 1 to 6 below straight away, one after another.
 >
 > Once a version is active, a client that pages transaction history with a
@@ -194,9 +194,8 @@ but those; to check the file it asks the node 10 `eth_blockNumber`, 58
 `eth_getCode` at past blocks — each Comet at its creation block and at the
 block before — and the decimals of up to 19 feeds. Step 4 answers
 `validated`, and step 6 serves every market, none in `error`. Then compare
-`GET $API/registry/v1/active` with develop's
-`GET /market/all-networks/all-contracts/summary`: every market develop serves
-but its test markets, under the same display name, base asset name, slug, and
+`GET $API/registry/v1/active` with the markets the frontend lists today:
+every one is there, under the same display name, base asset name, slug, and
 default and institutional flags.
 
 **If not.** What step 3 refuses, its table explains. Where the file is at
@@ -826,7 +825,7 @@ never this one's: replace it as step 4 says, or the write is refused.
 
 | Field | What it is | Where the answer comes from |
 |---|---|---|
-| `displayName` | The market's label on the website: `USDC`, `ETH` for a WETH market, `USDC.e` | Agree it with the frontend developer: the website builds its market key from it |
+| `displayName` | The market's label on the website: `USDC`, `ETH` for a WETH market, `USDC.e` | Agree it with the frontend's maintainers: the website builds its market key from it |
 | `baseAsset.displayName` | The base asset's name on the website: `USD Coin`, `Ether`, `Tether` | The same |
 | `slug` | The market's key in the website's links | `null`, unless another market of the network that is not switched off has the same label; then a unique lowercase key such as `usdc-institutional` |
 | `isInstitutional` | Listed in the website's institutional section | Usually `false` |
@@ -1279,7 +1278,7 @@ whose reasons are in the draft it names.
 | `422`, `details.code` `SOURCE_TREE_TRUNCATED`, `SOURCE_CONTENT_TOO_LARGE` or `SOURCE_RESPONSE_INVALID` | GitHub answered, but with something the import cannot use, and would answer the same way again | Report it to a developer with the message; importing again does not help |
 | `422`, "validation failed", from the import, with `details.syncRunId` and `details.registryVersionId` | The import finished and its draft failed a check: the draft is `invalid`, and can no longer change. `/admin/status` raises `last-sync-failed`, and `commit-rejected` as well when every root imported | Read the draft's checks: `GET /registry/v1/admin/versions/<registryVersionId>`, under `validation`. If `all-roots-imported` failed, `GET /registry/v1/admin/sync-runs/<syncRunId>` names the roots the run gave up, and why. Otherwise correct the decisions in a held attempt (step 1 of [Describing a new market](#describing-a-new-market)) and validate it, or wait for a new commit |
 | `400`, `details.code` `OVERLAY_INVALID`, from the import or an overlay route, with a message that begins `version <id> market` or `version <id> network` — or, from `GET …/markets/<chainId>/<deploymentKey>/overlay`, with the market's key, such as `1/weth.displayName` | A decision a version stores that this release no longer takes. From the import, the version is the one on or an earlier attempt of the commit: every import fails on it before it imports a market, and spends nothing; `/admin/status` has it as `sync.lastRun.lastError`, and raises `sync-stalled` once nothing has moved for two hours. From an overlay route, it is the draft's own: every overlay write to the draft — `PUT …/overlay` and `PUT …/overlays` — reads all of its decisions first and is refused, the one that would replace that decision too, and so is the `GET` of the network or market that holds it | Report it to a developer with the message: a release that reads the decision again fixes it. The import then carries on by itself; cancelling the run does not help before that, since a new attempt reads the same decision. A draft the overlay routes refuse cannot be reviewed until then: leave it open, and do not validate it or switch it on — validation does not read the decisions again, and a version on that holds such a decision stops every import |
-| Linea WETH's reward price is about `0.009` (`reward_asset.price` in the rewards routes) | The environment was brought up before 2cf4843 — develop is one — with the COMP / ETH reward feed quoted in USD, and every later version inherited `"quote": "usd"`. The seed quotes it in the base asset | Hold a draft (`{"forceNewAttempt": true, "holdForReview": true, "reason": "quote Linea WETH's reward feed in its base asset"}`), read `…/versions/$V/markets/59144/weth/overlay`, send it back with `rewardPriceFeed.quote` `"base"`, then validate and switch it on (steps 4, 5 and 6 of the first bring-up) |
+| Linea WETH's reward price is about `0.009` (`reward_asset.price` in the rewards routes) | The environment was brought up before 2cf4843, with the COMP / ETH reward feed quoted in USD, and every later version inherited `"quote": "usd"`. The seed quotes it in the base asset | Hold a draft (`{"forceNewAttempt": true, "holdForReview": true, "reason": "quote Linea WETH's reward feed in its base asset"}`), read `…/versions/$V/markets/59144/weth/overlay`, send it back with `rewardPriceFeed.quote` `"base"`, then validate and switch it on (steps 4, 5 and 6 of the first bring-up) |
 | `CHAIN_REQUEST_FAILED` in the import | The worker cannot reach the node provider proxy, or the proxy did not serve the calls, or did not answer them within 30 seconds. The worker's log line `registry root failed` has the status the proxy answered and its URL without the key: `HTTP 503` is no provider answering the proxy, `HTTP 401` the proxy refusing `NODE_PROXY_KEY` | Fix the proxy, its binding or its key; importing again continues where it stopped |
 | A network under `chainCheck.unreadable` in `/admin/status` | The check of the chain could not read that network, for the reason it names — most often `CHAIN_REQUEST_FAILED`, as in the row above. Nothing new is known about its markets: it raises no `chain-drift` of its own and clears none, since a drift found there before stays, with the `seenAt` of the last read that found it. The warning `registry chain not read` in the worker's log has the cause | Fix the proxy for that network. The check reads it again at the next hourly invocation, until it has read every network |
 | `chain-drift` in `/admin/status` | The chain answers a market's feed or collateral otherwise than the version on stores it | [A market that changed on chain](#a-market-that-changed-on-chain) |

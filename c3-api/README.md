@@ -75,7 +75,7 @@ Migrations are numbered in the order they are applied, not by feature:
 `0001` is the Comet registry schema, `0002` marks the markets nobody has
 reviewed yet, `0003` adds how the frontend lists a market — its slug and
 whether it is institutional — and `0004` drops the columns and indexes
-nothing uses. The Agreements migration takes the next free number.
+nothing uses.
 
 Apply migrations to the local Miniflare database under `.wrangler/state`:
 ```sh
