@@ -302,12 +302,12 @@ gives no rewards contract or bulker:
 ```json
 [ {
   "chain_id": 1,
-  "comet": { "address": "0xbc37…cCe8" },
-  "deployment_key": "usdc-test-base-revert",
-  "display_name": "USDC-br",
+  "comet": { "address": "0x…" },
+  "deployment_key": "usdc-example",
+  "display_name": "USDC",
   "base_asset_name": "USD Coin",
   "is_wrapped_native": false,
-  "slug": "usdc-test-base-revert",
+  "slug": "usdc-example",
   "is_default": false,
   "is_institutional": false,
   "status": "error",

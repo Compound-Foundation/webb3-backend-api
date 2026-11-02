@@ -99,7 +99,7 @@ t.test('a chain that answers what the version stores raises no drift', async t =
 });
 
 /*
- * What Nikita found on Unichain and Linea: governance gave a collateral of a
+ * What QA found on Unichain and Linea: governance gave a collateral of a
  * WETH market another price feed after the version was imported, and the
  * source did not move.
  */
