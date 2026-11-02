@@ -75,8 +75,8 @@ type MarketLatestSummary = Compute.Spec<{
 
 const { implement, pipe } = Compute.Functor<MarketLatestSummary>({});
 const marketLatestSummary = implement({
-  // 2: with base_price, and without reserves, the rate model or each collateral's price and parameters
-  version: 2,
+  // 8: an empty market's APRs come from its Comet's rate model (#23)
+  version: 8,
   compute({ apiHost, nodeHost, nodeKey, network, contract, block }) {
     const { chainId } = Fallible.must(
       KnownNetwork.lookup({ name: network })
@@ -87,8 +87,8 @@ const marketLatestSummary = implement({
       {
         basePrice:             read,
         baseUsdPrice:          read,
-        borrowApr:             read,
-        supplyApr:             read,
+        borrowApr:             { apiHost, nodeHost, nodeKey, block, contract, network },
+        supplyApr:             { apiHost, nodeHost, nodeKey, block, contract, network },
         totalBorrow:           read,
         totalSupply:           read,
         utilization:           read,

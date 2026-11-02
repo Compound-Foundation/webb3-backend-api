@@ -8,6 +8,7 @@ import { BigNumber } from "../../../../lib/bignumber.js";
 import { BigFixnum } from "../../../../lib/bigfixnum.js";
 
 import * as Evaluator from "../../../../lib/symbolic/evaluator.js";
+import { versionedName } from '../../../../lib/symbolic/computation.js';
 import { MemoryCache } from "../../../../lib/symbolic/cache.js";
 
 import * as evm from "../../../../lib/computations/evm.js";
@@ -112,7 +113,7 @@ t.test(`market-minutely-summary@block:16380543`, async (t) => {
    */
   const cachedKeys1 = Object.keys(cache.store);
   const expectedKeys = [
-    `marketSummary-v6:(block:${projected.block.number};contract:${context.contract.key()};network:${context.network})`,
+    `${versionedName('marketSummary', market.marketSummary.version)}:(block:${projected.block.number};contract:${context.contract.key()};network:${context.network})`,
   ];
   for (const key of expectedKeys) {
     const similar = cachedKeys1.find(k => k.startsWith(key));

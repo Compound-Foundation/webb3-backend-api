@@ -13,10 +13,10 @@ type SupplyApr = Compute.Spec<{
 
 const { implement, pipe1 } = Compute.Functor<SupplyApr>({});
 const supplyApr = implement({
-  version: 0, // NOTE(jordan): 0 is "no version;" FIXME: migrate
-  compute({ apiHost, nodeHost, nodeKey, blockNumber, contract, network }) {
+  version: 1,
+  compute(ctx) {
     return pipe1([
-      { supplyRatePerSecond: { apiHost, nodeHost, nodeKey, blockNumber, contract, network } },
+      { supplyRatePerSecond: ctx },
       rate => rate.mul(Constant.secondsPerYear)
     ]);
   }
