@@ -108,7 +108,7 @@ function Api({ env, debug, flags = {} }: Context) {
     cache: new WorkersKvCache(env[`kv_mainnet`], [
       BigNumber.JsonReviver,
       BigFixnum.JsonReviver,
-    ]),
+    ], debug),
   });
 }
 
@@ -279,7 +279,18 @@ async function getTransactionHistory(
   context: Context,
 ): Promise<Response> {
   // ****************** HELPER FUNCTIONS ******************
-  const { evaluate, pull1, cache } = Api(context);
+  const { evaluate, pull1 } = Api(context);
+  /*
+   * Cursors are kept in the namespace history is cached in, but they are not
+   * a cache: a value KV cannot read or keep is computed again, and a cursor
+   * cannot be. So a cursor KV cannot read or keep fails the request, as it
+   * always has, rather than being answered as invalid, or handed out without
+   * being kept.
+   */
+  const cursorStore = new WorkersKvCache(context.env[`kv_mainnet`], [
+    BigNumber.JsonReviver,
+    BigFixnum.JsonReviver,
+  ], context.debug);
 
   async function getRawTransactionHistoryItems(
     accountAddress: Eth.Address,
@@ -601,7 +612,7 @@ async function getTransactionHistory(
 
     // Upsert cursor info before return
     const cursorHash = await sha256(JSON.stringify(cursorPayload));
-    Fallible.must(await cache.put(cursorHash, cursorPayload));
+    await cursorStore.write(cursorHash, cursorPayload);
 
     let transactionHistoryResponse: TransactionHistoryResponse = {
       done,
@@ -778,7 +789,7 @@ async function getTransactionHistory(
     ), { status: 200 });
   } else {
     // Cursor provided, parse cursor
-    const cursorPayload = Fallible.must(await cache.get<CursorPayload>(cursor));
+    const cursorPayload = await cursorStore.read<CursorPayload>(cursor);
     if (cursorPayload === null) {
       return new Response('Cursor is invalid', { status: 400 });
     } else {
