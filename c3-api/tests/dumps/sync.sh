@@ -1,7 +1,7 @@
 #!/usr/bin/env -S zsh -euo pipefail
 
 git_root=$(git rev-parse --show-toplevel)
-dump_path="${git_root}/cloudflare/workers/c3-api/tests/dumps"
+dump_path="${git_root}/c3-api/tests/dumps"
 git_branch=$(git rev-parse --abbrev-ref HEAD)
 
 # take R2_REMOTE name or configuration string from env, or default
