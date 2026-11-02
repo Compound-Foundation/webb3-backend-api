@@ -95,8 +95,8 @@ function collateralStatusOf({ asset, symbol, price }: Collateral): CollateralSta
 
 const { implement, pipe } = Compute.Functor<MarketSummary>({});
 const marketSummary = implement({
-  // 6: every price read reports a status instead of failing the summary
-  version: 6,
+  // 9: an empty market's APRs come from its Comet's rate model (#23)
+  version: 9,
   /*
    * validate that the block requested does not predate the market
    * contract creation block.
@@ -129,8 +129,8 @@ const marketSummary = implement({
      */
     return pipe([
       {
-        borrowApr: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
-        supplyApr: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
+        borrowApr: { apiHost, nodeHost, nodeKey, block, contract, network },
+        supplyApr: { apiHost, nodeHost, nodeKey, block, contract, network },
         basePrice: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
         baseUsdPrice: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },
         totalBorrow: { apiHost, nodeHost, nodeKey, blockNumber: block.number, contract, network },

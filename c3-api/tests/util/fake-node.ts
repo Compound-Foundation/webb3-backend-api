@@ -32,6 +32,15 @@ const COMET = new Interface([
   'function getUtilization() returns (uint256)',
   'function getSupplyRate(uint) returns (uint)',
   'function getBorrowRate(uint) returns (uint)',
+  // the rate model an APR is computed from (#23)
+  'function supplyKink() returns (uint)',
+  'function supplyPerSecondInterestRateBase() returns (uint)',
+  'function supplyPerSecondInterestRateSlopeLow() returns (uint)',
+  'function supplyPerSecondInterestRateSlopeHigh() returns (uint)',
+  'function borrowKink() returns (uint)',
+  'function borrowPerSecondInterestRateBase() returns (uint)',
+  'function borrowPerSecondInterestRateSlopeLow() returns (uint)',
+  'function borrowPerSecondInterestRateSlopeHigh() returns (uint)',
   'function totalsCollateral(address) view returns (uint128)',
   'function symbol() view returns (string)',
   // the rewards of a market
