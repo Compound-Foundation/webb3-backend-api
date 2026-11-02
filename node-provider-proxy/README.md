@@ -19,7 +19,7 @@ npm install
 The provider keys are secrets, and never go into `wrangler.toml`: its `[vars]` keep a placeholder for each (`ALCHEMY_XXX`, `QUICK_NODE_XXX`), and a key left at its placeholder fails its network.
 
 - Locally, they go in `.dev.vars` next to `wrangler.toml`, which git ignores: copy `.dev.vars.example` to `.dev.vars` and set one `NAME=value` per line. `npm start` reads it, and a value there takes the place of the placeholder of the same name.
-- A deployed worker takes each as a secret: `npx wrangler secret put <NAME> --env <environment>`, or `npx wrangler secret put <NAME> -c woof.wrangler.toml` for the Woof deployment.
+- A deployed worker takes each as a secret: `npx wrangler secret put <NAME> --env <environment>`.
 
 The keys, as `src/providers.ts` reads them:
 
