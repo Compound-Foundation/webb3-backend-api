@@ -171,8 +171,8 @@ subrequests. The history of every market, with none of its days cached,
 stays inside them as well: three calls to the proxy per market and one per
 network, beside four KV operations for each day of each market — about 3,600
 subrequests for the 29 markets of the source over 30 days. A `[limits]`
-section changes them for one Worker, as `woof.wrangler.toml` does for the
-woof deployment: a million subrequests and 60 seconds of CPU an invocation.
+section changes them for one Worker, for example to a million subrequests
+and 60 seconds of CPU an invocation.
 
 # The Comet Market Registry
 

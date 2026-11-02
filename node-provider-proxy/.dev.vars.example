@@ -5,8 +5,6 @@
 #
 # Deployed workers do not take these from wrangler.toml; set them with:
 #   npx wrangler secret put <NAME> --env <environment>
-# or, for the Woof deployment:
-#   npx wrangler secret put <NAME> -c woof.wrangler.toml
 
 # The Alchemy key of each network (src/providers.ts)
 # alchemyEthMainnet=
