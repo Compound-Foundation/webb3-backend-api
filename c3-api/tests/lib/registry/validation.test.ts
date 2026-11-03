@@ -100,10 +100,10 @@ t.test('history is served only by a market that names its rewards contract', asy
 });
 
 /*
- * The token a market pays is read through its rewards contract, so a market
- * whose rewards are served names that contract even where it serves nothing
- * else of them. No import writes one that does not; the check is that no
- * version is served so.
+ * The token a market pays is read through its rewards contract, which is the
+ * only place the catalog finds it, so a market whose rewards are served names
+ * that contract even where it serves nothing else of them. No import writes
+ * one that does not; the check is that no version is served so.
  */
 t.test('rewards are served only by a market that names its rewards contract', async t => {
   t.same(

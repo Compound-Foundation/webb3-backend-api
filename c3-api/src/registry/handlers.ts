@@ -158,8 +158,8 @@ async function snapshotResponse(
  *
  * A `disabled` market is part of the stored version, and an operator sees it
  * through the administrative routes, but no public read may offer one: the
- * registry's market route answers 404 for it, so listing it would advertise
- * something unusable.
+ * market routes answer 404 for it and the request catalog does not
+ * materialize it, so listing it would advertise something unusable.
  *
  * A network whose every market is disabled serves nothing. A chain the
  * source has just added arrives that way — under its canonical name, with
@@ -245,7 +245,7 @@ async function getNetworks(request: Request, context: RegistryContext, maxAge: n
 
 async function getMarkets(request: Request, context: RegistryContext, chainId: string, maxAge: number): Promise<Response> {
   const { snapshot, staleFor } = await activeSnapshot(context);
-  // the same selectability rule the market route applies
+  // the same selectability rule the market route and the catalog apply
   const network  = networkOf(selectable(snapshot), chainIdOf(chainId));
   return snapshotResponse(request, versionRef(snapshot), `markets:${network.chainId}`, () => ({
     registryVersion: versionRef(snapshot),

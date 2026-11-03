@@ -6,8 +6,9 @@ import * as Fallible from '../../fallible/fallible.js';
 
 import * as KnownNetwork from '../../well-known/networks/network.js';
 
+import type { RegistryComet } from '../../model/comet-registry.js';
+
 import { MarketDaySummary } from './market-day-summary.js';
-import { Comet, StandaloneContract } from '../../well-known/contracts/types.js';
 
 type HistoricalMarketDaySummaries = Compute.Spec<{
   name: 'historicalMarketDaySummaries';
@@ -17,7 +18,7 @@ type HistoricalMarketDaySummaries = Compute.Spec<{
     nodeHost: string;
     nodeKey: string;
     network:    KnownNetwork.Name;
-    contract:   Eth.Contract<StandaloneContract<Comet>>;
+    contract:   RegistryComet;
     daysBack:   number;
     startBlock: Eth.Block;
   };
@@ -31,7 +32,8 @@ const {
 } = Compute.Functor<HistoricalMarketDaySummaries>({});
 
 const historicalMarketDaySummaries: Compute.Implementation<HistoricalMarketDaySummaries> = implement({
-  version: 6,
+  // 9: an empty market's APRs come from its Comet's rate model (#23)
+  version: 9,
   index: Index.Everything,
   /*
    * Key computation by materialized date for startBlock's

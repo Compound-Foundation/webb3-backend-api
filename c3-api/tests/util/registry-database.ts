@@ -39,7 +39,7 @@ type Options = {
 
 /*
  * A database holding the frozen snapshot fixture as the active version, which
- * is what a route that reads the active version needs before it can answer.
+ * is what a market, account, or history route needs before it can answer.
  */
 async function activeRegistryDatabase(options: Options = {}): Promise<RegistryDatabase> {
   const { snapshot = loadRegistrySnapshotFixture(), activate = true } = options;

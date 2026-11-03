@@ -1,5 +1,4 @@
 import {
-  Comet,
   ERC20,
   PriceFeed,
   UntypedContract,
@@ -144,48 +143,6 @@ const USDT_USD_priceFeed = PriceFeed(<const>{
   },
 });
 
-const Comet_01usdc = Comet(<const>{
-  // The naming overlaps with our cUSDCv3 mainnet market, but
-  // it's fine to display, since cross-chain will always
-  // explicitly mention they're bridged to the new chain.
-  displayName: 'cUSDCv3',
-  aliases: [ '01-usdc', 'cUSDCv3' ],
-  base: {
-    asset:     USDC,
-    priceFeed: USDC_USD_priceFeed,
-  },
-  rewards: {
-    asset:    COMP,
-    contract: Comet_Rewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: 'polygon-mainnet',
-  address: '0xF25212E676D1F7F89Cd72fFEe66158f541246445',
-  block: {
-    number: 39412367,
-  },
-});
-
-const Comet_01usdt = Comet(<const>{
-  displayName: 'cUSDTv3',
-  aliases: [ '01-usdt', 'cUSDTv3' ],
-  base: {
-    asset:     USDT,
-    priceFeed: USDT_USD_priceFeed,
-  },
-  rewards: {
-    asset:    COMP,
-    contract: Comet_Rewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: 'polygon-mainnet',
-  address: '0xaeB318360f27748Acb200CE616E389A6C9409a07',
-  block: {
-    number: 58479907,
-    timestamp: 1719081789
-  },
-});
-
 const Bulker = UntypedContract('Bulker', {
   aliases: ['01-usdc', 'cUSDCv3', '01-usdt', 'cUSDTv3'],
   network: 'polygon-mainnet',
@@ -198,7 +155,6 @@ const Bulker = UntypedContract('Bulker', {
 const markets = <const>([
   CometAdmin, Comet_Rewards, CometFactory, Bulker,
   COMP_USD_priceFeed, USDC_USD_priceFeed, USDT_USD_priceFeed,
-  Comet_01usdc, Comet_01usdt
 ]);
 
 const Configurator = UntypedContract('Configurator', <const>{
