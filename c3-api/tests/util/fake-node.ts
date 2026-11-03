@@ -1,6 +1,6 @@
 import type { Test } from 'tap';
 
-import { Interface, type FunctionFragment } from '@ethersproject/abi';
+import { Interface, defaultAbiCoder, type FunctionFragment } from '@ethersproject/abi';
 import { BigNumber } from '@ethersproject/bignumber';
 
 import type { RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
@@ -11,9 +11,11 @@ import type { RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
  * snapshot describes it: its collaterals, by asset index; its base asset's
  * feed; its tokens' symbols. Of its values, a market holds one unit of every
  * collateral, its totals are accrued at the latest block, and every other
- * value is 1.0 at eight decimals, a price among them. `script` changes what
- * one read answers — a value, a revert, an error of the node, or a failure of
- * the call — and can hold a request back, for a while or for good.
+ * value is 1.0 at eight decimals, a price among them, and so is what an
+ * account holds and is owed, in the token the snapshot says the market pays.
+ * `script` changes what one read answers — a value, a revert, an error of the
+ * node, or a failure of the call — and can hold a request back, for a while
+ * or for good.
  *
  * It is the one fake node of the Comet reads, so a read the computations
  * start to make is added here once. A read it does not know fails the test,
@@ -50,6 +52,11 @@ const COMET = new Interface([
   'function baseTrackingBorrowSpeed() view returns (uint256)',
   'function trackingIndexScale() view returns (uint256)',
   'function totalsBasic() view returns (tuple(uint64 baseSupplyIndex, uint64 baseBorrowIndex, uint64 trackingSupplyIndex, uint64 trackingBorrowIndex, uint104 totalSupplyBase, uint104 totalBorrowBase, uint40 lastAccrualTime, uint8 pauseFlags))',
+  // the rewards of an account: its balances, what it is owed, and the reward configs of its markets, read through Sleuth
+  'function balanceOf(address) view returns (uint256)',
+  'function borrowBalanceOf(address) view returns (uint256)',
+  'function getRewardOwed(address,address) returns (address,uint256)',
+  'function query(bytes,bytes) view returns (bytes)',
 ]);
 
 type Block = { number: number, timestamp: number };
@@ -116,6 +123,15 @@ function fakeNode(snapshot: RegistrySnapshotV1, latest: Block, script: NodeScrip
         case 'totalsBasic': {
           const [ index, base ] = [ BigNumber.from(10).pow(15), BigNumber.from(10).pow(12) ];
           return [ [ index, index, 0, 0, base, base, latest.timestamp, 0 ] ];
+        }
+        // a market pays the token the snapshot describes: what one Comet owes, and the config of each Comet a Sleuth query names
+        case 'getRewardOwed':      return [ markets.get(argument!)!.rewardAsset!.token.address, BigNumber.from(10).pow(8) ];
+        case 'query': {
+          const [ , codedArgs ] = COMET.decodeFunctionData(fragment, data);
+          const [ , comets ] = defaultAbiCoder.decode([ 'address', 'address[]' ], `0x${(codedArgs as string).slice(10)}`);
+          return [ defaultAbiCoder.encode([ 'tuple(address token, uint64 rescaleFactor, bool shouldUpscale)[]' ], [
+            (comets as string[]).map(comet => [ markets.get(comet.toLowerCase())!.rewardAsset!.token.address, 1, false ]),
+          ]) ];
         }
         default:                   return [ BigNumber.from(10).pow(8) ];
       }

@@ -11,6 +11,7 @@ import * as KnownNetwork from '../../well-known/networks/network.js';
 import type { RegistryComet } from '../../model/comet-registry.js';
 
 import * as market            from '../market.js';
+import { baseAssetLabel }     from '../market/market-rewards.js';
 import type * as comet        from '../comet.js';
 import type * as account      from '../account.js';
 import type * as cometRewards from '../comet-rewards.js';
@@ -52,7 +53,9 @@ const accountRewards = implement({
   index: Index.BlockIndexOnIntervalSeconds(60 * 5),
   key(name, { block, ...context }) {
     const { block: projected } = Fallible.must(this.index.project({ block, ...context }));
-    return Key.toKey(name, { block: projected.number, ...context });
+    // it reports the labels of its market's rewards, which its contract's key leaves out
+    const { symbol, description } = baseAssetLabel(context.contract);
+    return Key.toKey(name, { block: projected.number, label: `${symbol}|${description}`, ...context });
   },
   compute({ apiHost, nodeHost, nodeKey, contract, network, block, account }) {
     // an account is owed rewards in the token a market pays, through the contract that pays it
