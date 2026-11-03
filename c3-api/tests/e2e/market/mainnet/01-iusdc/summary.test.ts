@@ -29,8 +29,10 @@ const { apiHost, nodeHost, nodeKey } = setupTestEnvVars();
 /*
  * ciUSDCv3 is newly deployed and nearly empty, which is the point of covering
  * it separately from 01-usdc: it exercises the low/zero-liquidity path through
- * the summary computation, where the reward APR computations short-circuit on
- * totalSupplyBase.lte(baseMinForRewards) rather than dividing by a zero supply.
+ * the summary computation (interest APRs, totals and utilization at near-zero
+ * balances). Note that /market/.../summary evaluates marketMinutelySummary
+ * only -- the reward APR computations and their baseMinForRewards guard run in
+ * the rewards endpoints and are not covered here.
  *
  * Assertions are on shape, not on values. The market is live and its balances
  * change; hardcoding today's zeros would turn the first deposit into a test
