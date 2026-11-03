@@ -228,6 +228,28 @@ namespace StepState {
  */
 const pendedKeys = new WeakMap<object, Set<string>>();
 
+/*
+ * The lookups each pending batch answers besides its items. A lookup of
+ * one item waits under that item's key, which the batch saves; any other
+ * waits under a key of its own, which the batch saves only when it
+ * carries just those items, in that order, each once. Each such lookup is
+ * kept as its key and its items' keys, in its order and with repeats.
+ */
+const pendedLookups = new WeakMap<object, Map<string, string[]>>();
+
+/*
+ * Answers the lookups a batch keeps from its items' results. One the batch
+ * saved under its own key is answered already, and one with an item not
+ * saved waits, rather than read a result that is not there.
+ */
+function answerLookups(batch: object, done: { [key: string]: unknown }) {
+  for (const [ key, itemKeys ] of pendedLookups.get(batch) ?? []) {
+    if (!(key in done) && itemKeys.every(itemKey => itemKey in done)) {
+      done[key] = itemKeys.map(itemKey => (done[itemKey] as unknown[])[0]);
+    }
+  }
+}
+
 // the error a computation that answered a Failure throws
 function failureOf(payload: unknown): Error {
   const type = (typeof(payload) === 'object' && payload !== null && 'type' in payload)
@@ -323,6 +345,8 @@ async function step<
         }
         // 0.2. check if this batch was completed at some point before
         if (key in done) {
+          // 0.2.1. answer the lookups it keeps from the items saved before
+          answerLookups(batch, done);
           stuck = false;
           D.groupEnd(); // batch
           continue;
@@ -362,6 +386,8 @@ async function step<
               });
               done[itemKey] = [ cacheResult[index] ];
             }
+            // 1.a.1.3. and answer the lookups it keeps from them
+            answerLookups(batch, done);
             D.groupEnd(); // batch
             continue;
           }
@@ -381,6 +407,33 @@ async function step<
         // 2.a. if it's a redex, queue for rewrite into a new work item
         if (Redex.cast<Scope>(result)) {
           rewrites.push([ key, indexed, result ]);
+          /* 2.a.1. and queue what else waits on this batch, to be picked from
+           * its result by position once that redex reduces: each item, as
+           * 2.b.1.2 saves it, and each lookup it keeps, as answerLookups
+           * answers it. Like those, they are not cached.
+           */
+          const positions = new Map<string, number>();
+          const picks: [ string, number[] ][] = [];
+          for (let index = 0; index < batch.items.length; index++) {
+            const itemKey = await computation.key(versionedName, {
+              frame: batch.frame,
+              items: [ batch.items[index] ],
+            });
+            positions.set(itemKey, index);
+            picks.push([ itemKey, [ index ] ]);
+          }
+          for (const [ lookupKey, itemKeys ] of pendedLookups.get(batch) ?? []) {
+            picks.push([ lookupKey, itemKeys.map(itemKey => positions.get(itemKey)!) ]);
+          }
+          for (const [ pickKey, indices ] of picks) {
+            // the redex answers the batch's own key itself
+            if (pickKey !== key) {
+              const pick = ([ whole ]: [ unknown[] ]) => (
+                indices.map(index => whole[index]) as Scope['returns']
+              );
+              next.push([ 'redex', pickKey, false, [ [ key ], pick ] ]);
+            }
+          }
           D.groupEnd(); // batch
           continue;
         }
@@ -397,6 +450,8 @@ async function step<
           });
           done[itemKey] = [ result[index] ];
         }
+        // 2.b.1.3. ...and answer the lookups it keeps from them
+        answerLookups(batch, done);
         // 2.b.2. and to the cache, if this batch is indexed
         if (indexed) {
           this.cache.put(key, result);
@@ -490,14 +545,25 @@ async function step<
             pended = new Set();
             pendedKeys.set(existing[2], pended);
           }
+          const itemKeys: string[] = [];
           for (const batchItem of context.items) {
             const itemKey = context.items.length === 1
               ? key
               : await computation.key(versionedName, { frame, items: [ batchItem ] });
+            itemKeys.push(itemKey);
             if (!pended.has(itemKey)) {
               pended.add(itemKey);
               existing[2].items.push(batchItem);
             }
+          }
+          // 1.b.1.4. keep a lookup not of one item, even one that added nothing
+          if (context.items.length !== 1) {
+            let lookups = pendedLookups.get(existing[2]);
+            if (lookups === undefined) {
+              lookups = new Map();
+              pendedLookups.set(existing[2], lookups);
+            }
+            lookups.set(key, itemKeys);
           }
           D.groupEnd(); // computation
           continue;
