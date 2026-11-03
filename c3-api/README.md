@@ -242,6 +242,22 @@ In `src/governance-handlers/proposals.ts`, there is a function called
 `hydrateCrossChainProposalsWithMoreStates` that also needs to be modified
 to support the new network.
 
+# Rate Limiting
+
+Each client IP (IPv6 by /64) gets 120 requests per 60 seconds on
+`v3-api.compound.xyz` and 60 on `v3-api-stage.compound.xyz`, on any path and
+method. Over the limit the worker returns `429` with `Retry-After: 60` and the
+usual CORS headers, before any computation or node provider call. The limit is
+a Workers Rate Limiting binding (`RATE_LIMITER`) declared per environment in
+[wrangler.toml](./wrangler.toml), so it deploys with the worker. It counts per
+Cloudflare location, not globally. `wrangler dev` applies 120/min too. If the
+binding is unbound (tests) or errors, the request is served. See
+[lib/rate-limit.ts](./lib/rate-limit.ts).
+
+A Worker that calls this API through a service binding must forward the
+original request's `CF-Connecting-IP`. Otherwise all its requests share one
+`unknown` key, and so one 120/min budget.
+
 # Request Routing
 The server accepts requests at the Cloudflare worker
 [entrypoint](./entrypoint.ts). The entrypoint configures a simple
