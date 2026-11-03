@@ -1,0 +1,34 @@
+{
+  "sha": "a34d9b571c833b5d77f052ab8e2dbdbe10df726d",
+  "truncated": false,
+  "tree": [
+    {
+      "path": "deployments/arbitrum/usdc.e/roots.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "dce14a07b5dbede757c84ffd5a0f4bf40de04624",
+      "size": 316
+    },
+    {
+      "path": "deployments/base/usdc/roots.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8cbb342769cdf50b2e45b4f757e71e8c65589dfc",
+      "size": 462
+    },
+    {
+      "path": "deployments/mainnet/institutional_usdc/roots.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "940827b6318947a520eeedb32d0035d416ed91de",
+      "size": 249
+    },
+    {
+      "path": "deployments/mainnet/usdc/roots.json",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "8cdf987c178cd0ba8af8286a4089b70c11bbcf24",
+      "size": 2003
+    }
+  ]
+}

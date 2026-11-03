@@ -21,3 +21,19 @@
 
 # Optional Blocknative API key for /legacy/mainnet/gas-price
 # BLOCK_NATIVE_API_KEY=
+
+# Comet registry admin API: the SHA-256 of the admin bearer token, as 64 hex
+# digits, never the token itself
+# COMET_REGISTRY_ADMIN_TOKEN_HASH=
+
+# Optional name the registry records as the actor of every administrative
+# change: activations and rollbacks, overlay events, and the syncs it asks
+# for. Unset, it is registry-admin:<ENVIRONMENT>
+# COMET_REGISTRY_ADMIN_ACTOR=
+
+# GitHub token the registry import reads the Comet repository with: optional
+# here, required in stage and production. Without one GitHub allows 60 API
+# requests an hour per address, which a Worker shares with every other Worker
+# leaving Cloudflare through it. A fine-grained token with read-only access
+# to public repositories, and no other permission, is enough
+# COMET_GITHUB_TOKEN=

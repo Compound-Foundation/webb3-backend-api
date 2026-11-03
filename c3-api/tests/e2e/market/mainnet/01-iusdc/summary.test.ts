@@ -1,7 +1,7 @@
 import t from 'tap';
 import * as streamInto from 'node:stream/consumers';
 
-import { MemoryKv } from '../../../../util/kv.js';
+import { makeTestEnv } from '../../../../util/test-env.js';
 
 import { wellKnownContractsByNetwork } from '../../../../../lib/eth-constants.js';
 import * as KnownNetwork from '../../../../../lib/well-known/networks/network.js';
@@ -40,16 +40,12 @@ const { apiHost, nodeHost, nodeKey } = setupTestEnvVars();
  * requires V3_API_HOST / NODE_PROXY_HOST / NODE_PROXY_KEY in the environment.
  */
 t.test(`/market/.../summary response format looks reasonable for a near-empty market`, async t => {
-  const testEnv: Env = {
-    'TALLY_API_KEY': 'test',
+  const testEnv: Env = makeTestEnv({
     'V3_API_HOST': apiHost,
     'NODE_PROXY_HOST': nodeHost,
     'NODE_PROXY_KEY': nodeKey,
-    'ENVIRONMENT': 'test',
     'MEMORY_CACHE_SEED': 'market',
-    'kv_testnet':  MemoryKv({}),
-    'kv_mainnet': MemoryKv({}),
-  };
+  });
   const network: KnownNetwork.Name = 'ethereum-mainnet';
   const contract = wellKnownContractsByNetwork[network]['Comet']['ciUSDCv3'];
   const request  = new Request(`https://${nodeHost}/market/${network}/${contract.address}/summary`);

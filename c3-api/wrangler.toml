@@ -7,6 +7,8 @@ compatibility_date = "2026-06-25"
 compatibility_flags = ["nodejs_compat"]
 # worker will not deploy to *.workers.dev built-in preview/dev environment
 workers_dev = false
+# stage and production run on the Workers Paid plan with its default limits,
+# so no environment sets [limits] (README.md, Workers Plan)
 
 # in the default env, the worker should run locally
 name = "v3-api-local"
@@ -16,12 +18,34 @@ name = "v3-api-local"
 kv_namespaces = [
     { binding = "kv_testnet", preview_id = "local:kv_testnet", id = "nil" },
     { binding = "kv_mainnet", preview_id = "local:kv_mainnet", id = "nil" },
+    # locally the id names the Miniflare store, so the registry cache gets its own
+    { binding = "kv_registry", preview_id = "local:kv_registry", id = "local:kv_registry" },
+]
+
+# [2] one application database shared by every feature and mapped to a
+# different physical database in each environment; bindings are not inherited
+# by named environments, so each environment repeats it with its own id.
+# Locally the id only names the Miniflare state under .wrangler/state
+d1_databases = [
+    { binding = "APP_DB", database_name = "c3-api-local", database_id = "local:c3-api", migrations_dir = "migrations" },
+]
+
+# [3] every registry admin request, reads included, is limited per admin
+# token and route family, and before its token is checked, per client
+# address; every environment needs its own namespace ids
+ratelimits = [
+    { name = "REGISTRY_ADMIN_RATE_LIMITER", namespace_id = "1001", simple = { limit = 30, period = 60 } },
+    { name = "REGISTRY_ADMIN_AUTH_RATE_LIMITER", namespace_id = "1002", simple = { limit = 60, period = 60 } },
 ]
 
 # [1] in deployed environments, we need service bindings in order to send
 # requests to other workers within the same Cloudflare zone -- but when
 # developing locally, we can just invoke other workers over the network
 services = []
+
+# resumable registry sync; exercise it locally with `npm run start:scheduled`
+[triggers]
+crons = ["0 * * * *"]
 
 [vars]
 DEBUG = "fetch"
@@ -32,6 +56,18 @@ NODE_PROXY_HOST = "node-proxy-endpoint_XXX"
 NODE_PROXY_KEY = "optional-node-proxy-key_XXX"
 BLOCK_NATIVE_API_KEY = "optional-BN-key_XXX"
 FLAGS_ETH_COMPUTATION_INDEX_BIAS = "default"
+# [4] comet registry source, sync, and cache settings; vars are not inherited,
+# so every environment repeats them. A number is a whole number, and empty is
+# its default; a value the registry does not take is named by the status as
+# configuration-invalid. Its secrets never go here (.dev.vars.example):
+# COMET_REGISTRY_ADMIN_TOKEN_HASH, and in stage and production COMET_GITHUB_TOKEN
+COMET_SOURCE_REPOSITORY = "Compound-Foundation/comet"
+COMET_SOURCE_REF = "main"
+COMET_UPSTREAM_CHECK_INTERVAL_S = "86400"
+COMET_SYNC_MARKETS_PER_INVOCATION = "2"
+COMET_SYNC_LEASE_SECONDS = "900"
+REGISTRY_SNAPSHOT_CACHE_TTL_S = "300"
+REGISTRY_STALE_FALLBACK_MAX_S = "3600"
 
 [[vars.URL_SERVICE_BINDING_OVERRIDES]]
 # we don't need to map any URLs to service bindings, there are none [1]
@@ -40,6 +76,14 @@ FLAGS_ETH_COMPUTATION_INDEX_BIAS = "default"
 DEBUG = ""
 ENVIRONMENT = "stage"
 MEMORY_CACHE_SEED = "stage"
+# [4]
+COMET_SOURCE_REPOSITORY = "Compound-Foundation/comet"
+COMET_SOURCE_REF = "main"
+COMET_UPSTREAM_CHECK_INTERVAL_S = "86400"
+COMET_SYNC_MARKETS_PER_INVOCATION = "2"
+COMET_SYNC_LEASE_SECONDS = "900"
+REGISTRY_SNAPSHOT_CACHE_TTL_S = "300"
+REGISTRY_STALE_FALLBACK_MAX_S = "3600"
 
 [[env.stage.vars.URL_SERVICE_BINDING_OVERRIDES]]
 host    = "node-provider-v3-api.compound.xyz"
@@ -53,15 +97,37 @@ routes = [
 kv_namespaces = [
     { binding = "kv_testnet", id = "f9a99aa9b36a4f84b0bf4988e824aa19" },
     { binding = "kv_mainnet", id = "2b5b3b5788ad42ea871470474f0221d7" },
+    # TODO: replace with the id printed by `npx wrangler kv namespace create kv_registry --env stage`
+    { binding = "kv_registry", id = "00000000000000000000000000000000" },
+]
+# [2] TODO: replace with the id printed by `npx wrangler d1 create c3-api-stage`
+d1_databases = [
+    { binding = "APP_DB", database_name = "c3-api-stage", database_id = "00000000-0000-0000-0000-000000000000", migrations_dir = "migrations" },
+]
+# [3] TODO: confirm the namespace ids are unused in the Cloudflare account
+ratelimits = [
+    { name = "REGISTRY_ADMIN_RATE_LIMITER", namespace_id = "2001", simple = { limit = 30, period = 60 } },
+    { name = "REGISTRY_ADMIN_AUTH_RATE_LIMITER", namespace_id = "2002", simple = { limit = 60, period = 60 } },
 ]
 services = [
     { binding = "node_provider_proxy", service = "node-provider-v3-api" }
 ]
 
+[env.stage.triggers]
+crons = ["0 * * * *"]
+
 [env.production.vars]
 DEBUG = ""
 ENVIRONMENT = "production"
 MEMORY_CACHE_SEED = "production"
+# [4]
+COMET_SOURCE_REPOSITORY = "Compound-Foundation/comet"
+COMET_SOURCE_REF = "main"
+COMET_UPSTREAM_CHECK_INTERVAL_S = "86400"
+COMET_SYNC_MARKETS_PER_INVOCATION = "2"
+COMET_SYNC_LEASE_SECONDS = "900"
+REGISTRY_SNAPSHOT_CACHE_TTL_S = "300"
+REGISTRY_STALE_FALLBACK_MAX_S = "3600"
 
 [[env.production.vars.URL_SERVICE_BINDING_OVERRIDES]]
 host    = "node-provider-v3-api.compound.xyz"
@@ -75,7 +141,21 @@ routes = [
 kv_namespaces = [
     { binding = "kv_testnet", id = "ecf11fcd05ef43748e06efed8ba61aaa" },
     { binding = "kv_mainnet", id = "c64ee01fd2864608bbf039e36dd45ddb" },
+    # TODO: replace with the id printed by `npx wrangler kv namespace create kv_registry --env production`
+    { binding = "kv_registry", id = "00000000000000000000000000000000" },
+]
+# [2] TODO: replace with the id printed by `npx wrangler d1 create c3-api-production`
+d1_databases = [
+    { binding = "APP_DB", database_name = "c3-api-production", database_id = "00000000-0000-0000-0000-000000000000", migrations_dir = "migrations" },
+]
+# [3] TODO: confirm the namespace ids are unused in the Cloudflare account
+ratelimits = [
+    { name = "REGISTRY_ADMIN_RATE_LIMITER", namespace_id = "3001", simple = { limit = 30, period = 60 } },
+    { name = "REGISTRY_ADMIN_AUTH_RATE_LIMITER", namespace_id = "3002", simple = { limit = 60, period = 60 } },
 ]
 services = [
     { binding = "node_provider_proxy", service = "node-provider-v3-api" }
 ]
+
+[env.production.triggers]
+crons = ["0 * * * *"]
