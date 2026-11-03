@@ -141,19 +141,21 @@ t.test(`historical-market-day-summaries@startBlock:${startBlock.number}`, async 
     { network, contract, block: startBlock },
     -30,
   ));
+  const projectedStart = Fallible.must(Index.DailyBlockIndex.project(
+    { network, contract, block: startBlock },
+  ));
   const cachedKeys1 = Object.keys(cache.store);
   const expectedKeys = enumerated.flatMap(({ contract, network, block }) => [
     `${versionedName('marketSummary', market.marketSummary.version)}:(block:${block.number};`
       + `contract:${contract.address};network:${network})`,
-    `${versionedName('marketDaySummary', market.marketDaySummary.version)}:(contract:${contract.address};`
-      + `date:${Eth.Timestamp.toDateString(Eth.estimateBlockTimestamp(network, block))};`
-      + `network:${network})`,
+    `${versionedName('marketDaySummary', market.marketDaySummary.version)}:(block:${block.number};`
+      + `contract:${contract.address};network:${network})`,
   ])
   .concat([
     `${versionedName('historicalMarketDaySummaries', market.historicalMarketDaySummaries.version)}:(contract:${contract.address};`
       + `daysBack:30;`
       + `network:${network};`
-      + `startDate:${Eth.Timestamp.toDateString(startBlock.timestamp)})`,
+      + `startBlock:${projectedStart.block.number})`,
   ]);
 
   for (const key of expectedKeys) {
