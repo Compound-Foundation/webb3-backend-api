@@ -25,10 +25,12 @@ import { setupTestEnvVars } from '../../../../util/setupTestEnvVars.js';
  * High-level test suite configuration.
  */
 const testBlocks: { [key in string]: Eth.Block.WithTimestamp } = {
+  // The pinned block must be at or after the creation block of the newest
+  // ethereum-mainnet Comet (ciUSDCv3, block 25_881_203).
   "ethereum-mainnet": {
-    number: 21_820_087,
-    timestamp: 1_739_238_359,
-    date: "2025-02-11",
+    number: 25_900_000,
+    timestamp: 1_788_477_263,
+    date: "2026-09-03",
   },
   "polygon-mainnet": {
     number: 58_479_907,
