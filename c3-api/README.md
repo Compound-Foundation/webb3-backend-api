@@ -204,11 +204,13 @@ What that means for the endpoints:
 - an address the active version does not describe is not a market, and is
   refused with `400`, on any network;
 - transaction history cursors carry the version they were issued against,
-  and the markets it reads. A cursor stays valid across versions that read
-  the same markets; one from a version that read others is refused with
-  `409 REGISTRY_VERSION_CHANGED` and the client restarts pagination. So is a
-  cursor issued before the registry, which carries no version, whatever it
-  reads;
+  the markets it reads, and the block their ranges of logs are counted
+  from. A cursor stays valid across versions that read the same markets
+  from the same blocks; one from a version that read others, or counted
+  from another block, is refused with `409 REGISTRY_VERSION_CHANGED`,
+  whatever mainnet market its `markets[]` names, and the client restarts
+  pagination. So is a cursor issued before the registry, which carries no
+  version, whatever it reads;
 - routes that resolve no market — V2 and gas price — never read `APP_DB`,
   and governance reads it only to name the markets of proposal actions,
   which the static constants do not. The proposal list, and the vote

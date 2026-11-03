@@ -495,6 +495,90 @@ t.test('a cursor issued before the registry is ended, as one of another version 
 });
 
 /*
+ * A cursor's filter was resolved against the version that issued it. A
+ * version that no longer serves the history of a market the filter names
+ * reads other streams, so it ends the cursor as it ends any other: the
+ * cursor is judged before the filter is resolved against the version now
+ * active. Otherwise the client paging that market is told the market is
+ * invalid, nothing tells it to start over, and the 409 the documentation
+ * promises is never answered. Starting over, it learns the market is not
+ * served.
+ */
+t.test('a cursor is ended before its filter is resolved against the version now active', async t => {
+  const fixture: RegistrySnapshotV1 = loadRegistrySnapshotFixture();
+  const weth: Eth.Address = '0xa17581a9e3356d9a858b789d68b4d866e593ae94';
+  const wbtc: Eth.Address = '0xe85dc543813b8c2cfeaac371517b925a166a9293';
+  // the version now active: the fixture, whose history of mainnet WETH an activation stopped serving
+  const snapshot: RegistrySnapshotV1 = {
+    ...fixture,
+    networks: fixture.networks.map(network => network.chainId !== 1 ? network : {
+      ...network,
+      markets: network.markets.map(market => market.deploymentKey !== 'weth' ? market : {
+        ...market,
+        capabilities: { ...market.capabilities, transactionHistory: false },
+      }),
+    }),
+  };
+  const registry = await activeRegistryDatabase({ snapshot });
+  t.teardown(() => registry.dispose());
+
+  // pages of one market, as the fixture's version issued them while it served the history of WETH
+  const issued = streamEventsOf(fixtureCatalog(fixture));
+  t.ok(issued.some(stream => stream.marketContractAddresses.includes(weth)),
+    'the version that issued them read WETH');
+  const payload = (market: string) => ({
+    registryVersionId: '00000000-0000-4000-8000-0000000000cc',
+    profilesByAddress: {},
+    filter:  { markets: [ `1_${market}` ], actions: [], initiatedBy: [], contractAddresses: [], networks: [] },
+    streamEvents: issued,
+    cursors: {},
+  });
+  const cursors = {
+    usdc:   cursorId('a cursor of USDC, which the version still serves'),
+    weth:   cursorId('a cursor of WETH, whose history the version took'),
+    legacy: cursorId('a cursor of WBTC issued before the registry'),
+  };
+  const seed = {
+    [cursors.usdc]:   payload(USDC),
+    [cursors.weth]:   payload(weth),
+    // the history before the registry took any Comet it knew in the filter, and read the streams it listed
+    [cursors.legacy]: {
+      profilesByAddress: {},
+      filter:            { markets: [ `1_${wbtc}` ], actions: [], initiatedBy: [], contractAddresses: [], networks: [] },
+      streamEvents:      issued,
+      cursors:           Object.fromEntries(issued.map(stream => [
+        stream.network,
+        { ...stream, blockNumber: 19_000_000, transactionHash: '0xabc' },
+      ])),
+    },
+  };
+  const env  = envWith({ APP_DB: registry.db, kv_mainnet: MemoryKv({ seed }) });
+  const page = (market: string, cursor?: string) => get(env,
+    `/account/0x420f253087044b8BCf028dd89F8fe83Ba6275E84/transaction_history?markets[]=1_${market}`
+      + (cursor === undefined ? '' : `&cursor=${cursor}`));
+
+  t.equal((await page(USDC, cursors.usdc)).status, 409,
+    'a cursor of a market the version still serves is ended, since the version reads other streams');
+
+  const ended = await page(weth, cursors.weth);
+  t.equal(ended.status, 409, 'and so is one of the market whose history the version no longer serves');
+  const error = await envelopeOf(t, ended);
+  t.equal(error.code, 'REGISTRY_VERSION_CHANGED', 'with the code that tells the client to restart pagination');
+  t.same(error.details, {
+    cursorRegistryVersionId: '00000000-0000-4000-8000-0000000000cc',
+    registryVersionId:       registry.versionId,
+  }, 'naming the version the cursor held, and the version that is active now');
+
+  const legacy = await page(wbtc, cursors.legacy);
+  t.equal(legacy.status, 409, 'as is a cursor issued before the registry whose filter names a market the version serves no history of');
+  t.equal((await envelopeOf(t, legacy)).code, 'REGISTRY_VERSION_CHANGED');
+
+  const restarted = await page(weth);
+  t.equal(restarted.status, 400, 'starting over, the client is told the market is not one whose history is served');
+  t.match(await restarted.text(), /Invalid market address/);
+});
+
+/*
  * The history names a cursor by the hex SHA-256 of what it holds, and hands
  * out no other. A value of any other form is no cursor: it is invalid as one
  * KV does not hold is, and KV is not asked for it, since workerd refuses some

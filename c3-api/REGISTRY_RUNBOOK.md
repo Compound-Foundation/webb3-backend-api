@@ -83,7 +83,11 @@ then the headers, then the body. To use them:
 >
 > Once a version is active, a client that pages transaction history with a
 > cursor it was given before is told to start over, once
-> (`409 REGISTRY_VERSION_CHANGED`).
+> (`409 REGISTRY_VERSION_CHANGED`), whatever mainnet market its `markets[]`
+> names. The history before the registry took any Comet it knew in
+> `markets[]`: the page that starts over refuses one whose history the version
+> does not serve (`400`), and a request that names a testnet one is refused
+> before its cursor is read (`400 TESTNET_NOT_SERVED`).
 
 ### The admin token
 
@@ -832,7 +836,7 @@ never this one's: replace it as step 4 says, or the write is refused.
 | `contractName` | The Comet's name, shown in governance action titles | The Comet contract's `symbol()`, for example `cUSDTv3` |
 | `status` | Whether the market is served | `enabled`; `disabled` keeps it off |
 | `isDefault` | The market the website opens first | `false` — exactly one market in the whole registry is the default |
-| `creationBlock` | Where the market's history and indexes start | The block the Comet proxy was deployed in (the explorer's "Contract Creation"). Must be above `0` for a market that is served. The write holds it against the chain — the Comet has code at that block and none at the block before it — and refuses one the chain contradicts with `422` `OVERLAY_CREATION_BLOCK_WRONG`, saying whether it is before the deployment, after it, or past the latest block |
+| `creationBlock` | Where the market's history and indexes start | The block the Comet proxy was deployed in (the explorer's "Contract Creation"). Must be above `0` for a market that is served. The write holds it against the chain — the Comet has code at that block and none at the block before it — and refuses one the chain contradicts with `422` `OVERLAY_CREATION_BLOCK_WRONG`, saying whether it is before the deployment, after it, or past the latest block. Markets whose history is served and that share a rewards contract are read together, from the earliest of their blocks: a version that moves it ends the history cursors clients hold, and each starts over once (`409`) |
 | `collateralValueQuote` | The unit the market's own price feeds answer in | Call `description()` on the base token's price feed from step 2. `X / USD` → `usd`. `Constant price feed` (WETH, wstETH) or `WBTC / BTC` → `base` |
 | `baseAsset.usdPriceFeedAddress` | The feed that turns the unit the market's feeds answer in into USD: the market summaries report it as `base_usd_price` | `null` when the quote is `usd`. When it is `base`, the USD feed of that unit on that chain: ETH / USD for a WETH market, BTC / USD for the WBTC market, whose feeds answer in BTC |
 | `baseAsset.isWrappedNative` | The base token wraps the chain's own token | `true` for WETH on Ethereum and its L2s, WPOL, WMNT, WRON |

@@ -177,6 +177,8 @@ market, `USDC.e` (`USDbC` on Base) and `USD Coin (Bridged)` for bridged USDC,
 { "chain_id": 1, "comet": { "address": "0xa175…ae94" }, "base_asset": { "symbol": "ETH", "description": "Ether", … }, … }
 ```
 
+A version that changes a label is answered as soon as it is active.
+
 `/summary` answers the same two labels as `display_name` and
 `base_asset_name` ([Market registry fields](#market-registry-fields)), but
 names each collateral by the token's own on-chain symbol (`WETH`). The
@@ -854,18 +856,28 @@ Retrieves comet transaction history for a given account address.
 
 Query parameters:
 - `limit` (optional): number of max items to retrieve. Default and max is 15.
-- `markets[]` (optional): array of markets filter to be included in the response. Default is every market whose history the active version serves. A market of a testnet is refused with `TESTNET_NOT_SERVED` ([The market registry](#the-market-registry)). (e.g. filter only Ethereum cUSDCv3 market `markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3`)
+- `markets[]` (optional): array of markets filter to be included in the response. Default is every market whose history the active version serves. A market of a testnet is refused with `TESTNET_NOT_SERVED` ([The market registry](#the-market-registry)), and one whose history the active version does not serve with a `400`, `Invalid market address …`. (e.g. filter only Ethereum cUSDCv3 market `markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3`)
 - `actions[]` (optional): array of actions to filter transactions by. Default is all actions. (e.g. filter only borrow actions `actions[]=Borrow`)
 - `cursor` (optional): The first response (with no cursor parameter) will return with a cursor value, to pass that cursor value will allow request to get more transaction history further in the past.
 
-A cursor holds a position in the logs of each market it reads. It stays
-valid across registry versions that read the same markets — a rollback, a new
-import of the same source, a market given a new label — and each page names
-the version that answered it. A version that reads other markets ends it, as
-every version ends a cursor issued before the registry, whatever that one
-reads: the request answers `409`, and the client restarts pagination without
-a cursor. `cursorRegistryVersionId` names the version the cursor was issued
-against, and is `null` for a cursor issued before the registry:
+A cursor holds a position in the logs of every market whose history its
+version serves, whatever `markets[]` keeps. Markets that share a rewards
+contract are read together, in ranges of blocks counted from the earliest
+creation block among them. A cursor stays valid across registry versions that
+read the same markets from the same blocks — a rollback, a new import of the
+same source, a market given a new label — and each page names the version
+that answered it. A version that reads other markets ends it, and so does one
+that counts their ranges from another block, as a corrected creation block
+can; every version ends a cursor issued before the registry, whatever that
+one reads. The request answers `409`, and the client restarts pagination
+without a cursor. `markets[]` is checked first as far as it can be without
+the registry, so a testnet market is refused as above, cursor or not. The
+cursor is then judged before the filter's markets are resolved against the
+active version: a version that no longer serves the history of a market the
+filter names ends the cursor with this `409` too, and the first page of the
+new pagination refuses that market. `cursorRegistryVersionId` names the
+version the cursor was issued against, and is `null` for a cursor issued
+before the registry:
 
 ```json
 {

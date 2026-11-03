@@ -1,6 +1,7 @@
 import t from 'tap';
 
 import * as Eth from '../../../lib/eth-constants.js';
+import * as Fallible from '../../../lib/fallible/fallible.js';
 
 import type { MarketV1, NetworkV1, PriceExceptionV1, RegistrySnapshotV1 } from '../../../lib/model/comet-registry.js';
 import type { RawTransactionHistoryItem } from '../../../lib/model/transaction-history/item.js';
@@ -9,6 +10,7 @@ import { BigFixnum } from '../../../lib/bigfixnum.js';
 import { BigNumber } from '../../../lib/bignumber.js';
 import { enrichTransactionHistoryItem, isBulker } from '../../../lib/computations/account/enrich-transaction-history-items.js';
 import { rawTransactionHistoryItems, tokenSymbol } from '../../../lib/computations/account/raw-transaction-history-items.js';
+import { accountRewards } from '../../../lib/computations/account/account-rewards.js';
 import { baseAssetLabel, marketRewards } from '../../../lib/computations/market/market-rewards.js';
 import { usdBasePriceFeedFor } from '../../../lib/computations/rewards/base-price-feed.js';
 import type * as account from '../../../lib/computations/account.js';
@@ -156,6 +158,56 @@ t.test('the rewards of a market name its base asset as the review does', async t
   t.equal(renamed.base.asset.symbol, 'USD₮0', 'the token carries its on-chain symbol');
   t.same(baseAssetLabel(renamed), { symbol: 'USDT', description: 'Tether' },
     'the rewards carry the market\'s reviewed name and the base asset\'s reviewed name');
+});
+
+/*
+ * An account's rewards are cached for five minutes of blocks, and carry the
+ * labels of each market's rewards. A version that only relabels a market
+ * keeps every computation that reads no label; the rewards of an account
+ * answered after it is activated carry its labels, not the ones cached a
+ * moment before, whose market digest is the same.
+ */
+t.test('the rewards of an account carry the labels of the version that answers', async t => {
+  const relabelled = catalogOf({
+    ...withMarket('usdc', market => ({
+      ...market,
+      displayName: 'USDC (main)',
+      baseAsset:   { ...market.baseAsset, displayName: 'Circle USD' },
+    })),
+    registryVersion: { ...snapshot.registryVersion, id: '00000000-0000-4000-8000-0000000000cc', checksum: 'c'.repeat(64) },
+  });
+  t.equal(relabelled.marketAt(MAINNET, USDC)!.comet.key(), catalog.marketAt(MAINNET, USDC)!.comet.key(),
+    'the relabelled market keeps its digest');
+
+  // one cache for both versions, as KV is one for every request
+  const cache = new MemoryCache({}, [ BigNumber.JsonReviver, BigFixnum.JsonReviver ]);
+  const stub  = (value: unknown) => Compute.Functor<any>({}).implement({ version: 0, compute: () => value });
+  const rate  = { status: 'success' as const, apr: BigFixnum.from({ value: 0 }) };
+  const rewardsOf = async (version: Catalog) => {
+    const { evaluate, pull1 } = Evaluator.instantiate<any>({
+      accountRewards,
+      marketRewards,
+      baseBorrowMin:    stub(BigFixnum.from({ value: 100 })),
+      supplyRewardsApr: stub(rate),
+      borrowRewardsApr: stub(rate),
+      getPrice:         stub({ status: 'success', price: BigFixnum.from({ value: 50 }) }),
+      balanceOf:        stub(BigFixnum.from({ value: 1 })),
+      borrowBalanceOf:  stub(BigFixnum.from({ value: 0 })),
+      erc20Balance:     stub(BigFixnum.from({ value: 0 })),
+      getRewardOwed:    stub(BigFixnum.from({ value: 2 })),
+    }, { cache });
+    // the latest block, as the route projects it
+    const origin = {
+      apiHost: '', nodeHost: '', nodeKey: '', network: MAINNET, contract: version.marketAt(MAINNET, USDC)!.comet,
+      account: '0x1111111111111111111111111111111111111111' as const, block: { number: 23_000_000, timestamp: 1_760_000_000 },
+    };
+    return evaluate(pull1({ accountRewards: Fallible.must(accountRewards.index.project(origin)) }));
+  };
+
+  t.match(await rewardsOf(catalog), { status: 'success', baseAsset: { symbol: 'USDC', description: 'USD Coin' } },
+    'an account\'s rewards name a market as its version does');
+  t.match(await rewardsOf(relabelled), { status: 'success', baseAsset: { symbol: 'USDC (main)', description: 'Circle USD' } },
+    'and as the version that relabels it does, once it is active, at the same block');
 });
 
 /*

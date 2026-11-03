@@ -189,7 +189,8 @@ function priceFeed(
  * is read at, which for a historical block may be one the market has since
  * moved off.
  *
- * The rewards summary does report the labels, and so keys itself by them.
+ * The rewards summary does report the labels, and so keys itself by them; so
+ * do the rewards of an account, which carry that summary.
  */
 function marketDigest(market: MarketV1, priceExceptions: PriceExceptionV1[]): string {
   const {
