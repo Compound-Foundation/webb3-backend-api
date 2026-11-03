@@ -1,0 +1,49 @@
+name: node-provider-proxy Build and Tests
+on:
+  push:
+    paths:
+      - 'node-provider-proxy/**'
+      # node-provider-proxy builds against the shared workspace libraries that
+      # live under c3-api/lib (fallible, json-rpc, well-known-*), and its tests
+      # use the fetch mock under c3-api/tests/util/mock. Each of them compiles
+      # with c3-api/tsconfig.json, and the mock loads c3-api/shim/node-self.ts
+      # through a symlink.
+      - 'c3-api/lib/**'
+      - 'c3-api/tests/util/mock/**'
+      - 'c3-api/tsconfig.json'
+      - 'c3-api/shim/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/test-node-provider-proxy.yaml'
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: build and tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: node-provider-proxy
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # the node-provider-proxy preinstall script also installs, builds, and
+      # tests the repo-root workspace libraries
+      - name: Install dependencies
+        run: npm ci
+
+      # the build's postbuild hook runs the tests through corepack, which
+      # fetches an npm release of its own; CI runs them as a step instead
+      - name: Build
+        run: npm run build --ignore-scripts
+
+      - name: Test
+        run: npm test
