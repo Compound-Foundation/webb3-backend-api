@@ -61,7 +61,8 @@ t.before(() => {
   });
 });
 
-t.test(`/${route} @ block=${testBlock.number}`, async t => {
+// SKIPPED: this route depends on the Tally API, which c3-api no longer handles.
+t.skip(`/${route} @ block=${testBlock.number}`, async t => {
   /*
    * 1. Setup
    */
