@@ -1,0 +1,1008 @@
+{
+  "reason": "first registry version: c3-api/registry/seed/production.json",
+  "networks": {
+    "1": {
+      "displayName": "Ethereum",
+      "assetDisplayOverrides": [
+        {
+          "tokenAddress": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
+          "displayAddress": "0x4c9edd5852cd905f086c759e8383e09bff1e68b3",
+          "symbol": "USDe",
+          "name": "Ethena USDe"
+        },
+        {
+          "tokenAddress": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+          "displayAddress": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+          "symbol": "wstETH",
+          "name": "Lido Wrapped Staked ETH"
+        },
+        {
+          "tokenAddress": "0xa1290d69c65a6fe4df752f95823fae25cb99e5a7",
+          "displayAddress": "0xa1290d69c65a6fe4df752f95823fae25cb99e5a7",
+          "symbol": "rsETH",
+          "name": "KelpDao Restaked ETH"
+        },
+        {
+          "tokenAddress": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+          "displayAddress": "0x0000000000000000000000000000000000000000",
+          "symbol": "ETH",
+          "name": "Ether"
+        },
+        {
+          "tokenAddress": "0xf1c9acdc66974dfb6decb12aa385b9cd01190e38",
+          "displayAddress": "0xf1c9acdc66974dfb6decb12aa385b9cd01190e38",
+          "symbol": "osETH",
+          "name": "StakeWise Staked ETH"
+        },
+        {
+          "tokenAddress": "0xfae103dc9cf190ed75350761e95403b7b8afa6c0",
+          "displayAddress": "0xfae103dc9cf190ed75350761e95403b7b8afa6c0",
+          "symbol": "rswETH",
+          "name": "Restaked Swell ETH"
+        }
+      ],
+      "unwrappedCollateralAssets": [
+        {
+          "wrappedTokenAddress": "0x7f39c581f595b53c5cb19bd0b3f8da6c935e2ca0",
+          "tokenAddress": "0xae7ab96520de3a18e5e111b5eaab095312d7fe84",
+          "symbol": "stETH",
+          "name": "Lido Staked ETH"
+        }
+      ],
+      "priceExceptions": [
+        {
+          "kind": "fixed_price",
+          "priceFeedAddress": "0x351a133fd850ea81ed8a782016e308acbaddec91",
+          "price": {
+            "value": "102447384",
+            "decimals": 8
+          },
+          "provenance": "PumpBTC / BTC exchange-rate feed (cWBTCv3 collateral) reverts since 2026-09-03; last answer of the retired aggregator 0x918c6cde1cdd940934820b8fa3a2c8b26a60736c (c3-api b7bb889)",
+          "expiresAt": null
+        },
+        {
+          "kind": "zero_price",
+          "priceFeedAddress": "0xe3a409ed15cd53afdefdd191ad945cec528a2496",
+          "provenance": "Deprecated wUSDM / USD feed (cUSDTv3 collateral) reverts; priced at zero by c3-api before the registry",
+          "expiresAt": null
+        }
+      ]
+    },
+    "10": {
+      "displayName": "Optimism",
+      "assetDisplayOverrides": [
+        {
+          "tokenAddress": "0x4200000000000000000000000000000000000006",
+          "displayAddress": "0x0000000000000000000000000000000000000000",
+          "symbol": "ETH",
+          "name": "Ether"
+        },
+        {
+          "tokenAddress": "0x87eee96d50fb761ad85b1c982d28a042169d61b1",
+          "displayAddress": "0x87eee96d50fb761ad85b1c982d28a042169d61b1",
+          "symbol": "wrsETH",
+          "name": "Wrapped rsETH"
+        }
+      ],
+      "unwrappedCollateralAssets": [],
+      "priceExceptions": [
+        {
+          "kind": "zero_price",
+          "priceFeedAddress": "0x66228d797eb83ecf3465297751f6b1d4d42b7627",
+          "provenance": "Deprecated feed priced at zero by c3-api asset-price.ts before the registry",
+          "expiresAt": null
+        },
+        {
+          "kind": "zero_price",
+          "priceFeedAddress": "0x7e86318cc4bc539043f204b39ce0ebed9f0050dc",
+          "provenance": "Deprecated feed priced at zero by c3-api asset-price.ts before the registry; the branch that carried it applied to every network, which the registry makes explicit per network",
+          "expiresAt": null
+        }
+      ]
+    },
+    "130": {
+      "displayName": "Unichain",
+      "assetDisplayOverrides": [
+        {
+          "tokenAddress": "0x4200000000000000000000000000000000000006",
+          "displayAddress": "0x0000000000000000000000000000000000000000",
+          "symbol": "ETH",
+          "name": "Ether"
+        }
+      ],
+      "unwrappedCollateralAssets": [],
+      "priceExceptions": []
+    },
+    "137": {
+      "displayName": "Polygon",
+      "assetDisplayOverrides": [
+        {
+          "tokenAddress": "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",
+          "displayAddress": "0x0000000000000000000000000000000000000000",
+          "symbol": "POL",
+          "name": "Polygon"
+        },
+        {
+          "tokenAddress": "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+          "displayAddress": "0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6",
+          "symbol": "WBTC",
+          "name": "Wrapped Bitcoin"
+        },
+        {
+          "tokenAddress": "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
+          "displayAddress": "0x2791bca1f2de4661ed88a30c99a7a9449aa84174",
+          "symbol": "USDC.e",
+          "name": "Bridged USDC"
+        },
+        {
+          "tokenAddress": "0xfa68fb4628dff1028cfec22b4162fccd0d45efb6",
+          "displayAddress": "0xfa68fb4628dff1028cfec22b4162fccd0d45efb6",
+          "symbol": "MaticX",
+          "name": "Stader MaticX"
+        }
+      ],
+      "unwrappedCollateralAssets": [],
+      "priceExceptions": []
+    },
+    "2020": {
+      "displayName": "Ronin",
+      "assetDisplayOverrides": [
+        {
+          "tokenAddress": "0xe514d9deb7966c8be0ca922de8a064264ea6bcd4",
+          "displayAddress": "0x0000000000000000000000000000000000000000",
+          "symbol": "RON",
+          "name": "Ronin"
+        }
+      ],
+      "unwrappedCollateralAssets": [],
+      "priceExceptions": []
+    },
+    "5000": {
+      "displayName": "Mantle",
+      "assetDisplayOverrides": [
+        {
+          "tokenAddress": "0xc96de26018a54d51c097160568752c4e3bd6c364",
+          "displayAddress": "0xc96de26018a54d51c097160568752c4e3bd6c364",
+          "symbol": "FBTC",
+          "name": "FunctionBTC"
+        },
+        {
+          "tokenAddress": "0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111",
+          "displayAddress": "0xdeaddeaddeaddeaddeaddeaddeaddeaddead1111",
+          "symbol": "ETH",
+          "name": "Ether"
+        }
+      ],
+      "unwrappedCollateralAssets": [],
+      "priceExceptions": []
+    },
+    "8453": {
+      "displayName": "Base",
+      "assetDisplayOverrides": [
+        {
+          "tokenAddress": "0x4200000000000000000000000000000000000006",
+          "displayAddress": "0x0000000000000000000000000000000000000000",
+          "symbol": "ETH",
+          "name": "Ether"
+        },
+        {
+          "tokenAddress": "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",
+          "displayAddress": "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca",
+          "symbol": "USDbC",
+          "name": "Bridged USDC"
+        },
+        {
+          "tokenAddress": "0xedfa23602d0ec14714057867a78d01e94176bea0",
+          "displayAddress": "0xedfa23602d0ec14714057867a78d01e94176bea0",
+          "symbol": "wrsETH",
+          "name": "Wrapped rsETH"
+        }
+      ],
+      "unwrappedCollateralAssets": [],
+      "priceExceptions": []
+    },
+    "42161": {
+      "displayName": "Arbitrum",
+      "assetDisplayOverrides": [
+        {
+          "tokenAddress": "0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f",
+          "displayAddress": "0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f",
+          "symbol": "WBTC",
+          "name": "Wrapped Bitcoin"
+        },
+        {
+          "tokenAddress": "0x5979d7b546e38e414f7e9822514be443a4800529",
+          "displayAddress": "0x5979d7b546e38e414f7e9822514be443a4800529",
+          "symbol": "wstETH",
+          "name": "Lido Wrapped Staked ETH"
+        },
+        {
+          "tokenAddress": "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
+          "displayAddress": "0x0000000000000000000000000000000000000000",
+          "symbol": "ETH",
+          "name": "Ether"
+        },
+        {
+          "tokenAddress": "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8",
+          "displayAddress": "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8",
+          "symbol": "USDC.e",
+          "name": "Bridged USDC"
+        }
+      ],
+      "unwrappedCollateralAssets": [],
+      "priceExceptions": [
+        {
+          "kind": "zero_price",
+          "priceFeedAddress": "0x13cdfb7db5e2f58e122b2e789b59de13645349c4",
+          "provenance": "Deprecated feed priced at zero by c3-api asset-price.ts before the registry",
+          "expiresAt": null
+        }
+      ]
+    },
+    "59144": {
+      "displayName": "Linea",
+      "assetDisplayOverrides": [
+        {
+          "tokenAddress": "0xe5d7c2a44ffddf6b295a15c148167daaaf5cf34f",
+          "displayAddress": "0x0000000000000000000000000000000000000000",
+          "symbol": "ETH",
+          "name": "Ether"
+        }
+      ],
+      "unwrappedCollateralAssets": [],
+      "priceExceptions": []
+    },
+    "534352": {
+      "displayName": "Scroll",
+      "assetDisplayOverrides": [
+        {
+          "tokenAddress": "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4",
+          "displayAddress": "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4",
+          "symbol": "USDC",
+          "name": "USDC"
+        },
+        {
+          "tokenAddress": "0x5300000000000000000000000000000000000004",
+          "displayAddress": "0x0000000000000000000000000000000000000000",
+          "symbol": "ETH",
+          "name": "Ether"
+        },
+        {
+          "tokenAddress": "0xf610a9dfb7c89644979b4a0f27063e9e7d7cda32",
+          "displayAddress": "0xf610a9dfb7c89644979b4a0f27063e9e7d7cda32",
+          "symbol": "wstETH",
+          "name": "Lido Wrapped Staked ETH"
+        }
+      ],
+      "unwrappedCollateralAssets": [],
+      "priceExceptions": []
+    }
+  },
+  "markets": {
+    "1/institutional_usdc": {
+      "displayName": "USDC",
+      "slug": "usdc-institutional",
+      "contractName": "ciUSDCv3",
+      "isDefault": false,
+      "isInstitutional": true,
+      "status": "enabled",
+      "creationBlock": 25881203,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": false,
+        "accountRewards": false,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "USDC Institutional",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": null
+    },
+    "1/usdc": {
+      "displayName": "USDC",
+      "slug": null,
+      "contractName": "cUSDCv3",
+      "isDefault": true,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 15331586,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "USD Coin",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0xdbd020caef83efd542f4de03e3cf0c28a4428bd5",
+        "quote": "usd"
+      }
+    },
+    "1/usds": {
+      "displayName": "USDS",
+      "slug": null,
+      "contractName": "cUSDSv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 20987551,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "USDS",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0xdbd020caef83efd542f4de03e3cf0c28a4428bd5",
+        "quote": "usd"
+      }
+    },
+    "1/usdt": {
+      "displayName": "USDT",
+      "slug": null,
+      "contractName": "cUSDTv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 20190637,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "Tether",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0xdbd020caef83efd542f4de03e3cf0c28a4428bd5",
+        "quote": "usd"
+      }
+    },
+    "1/wbtc": {
+      "displayName": "WBTC",
+      "slug": null,
+      "contractName": "cWBTCv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 21820087,
+      "collateralValueQuote": "base",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "Wrapped BTC",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": "0xf4030086522a5beea4988f8ca5b36dbc97bee88c"
+      },
+      "rewardPriceFeed": {
+        "address": "0xdbd020caef83efd542f4de03e3cf0c28a4428bd5",
+        "quote": "usd"
+      }
+    },
+    "1/weth": {
+      "displayName": "ETH",
+      "slug": null,
+      "contractName": "cWETHv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 16400710,
+      "collateralValueQuote": "base",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "Ether",
+        "isWrappedNative": true,
+        "usdPriceFeedAddress": "0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419"
+      },
+      "rewardPriceFeed": {
+        "address": "0x1b39ee86ec5979ba5c322b826b3ecb8c79991699",
+        "quote": "base"
+      }
+    },
+    "1/wsteth": {
+      "displayName": "wstETH",
+      "slug": null,
+      "contractName": "cwstETHv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 20683535,
+      "collateralValueQuote": "base",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "Lido Wrapped Staked ETH",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": "0x164b276057258d81941e97b0a900d4c7b358bce0"
+      },
+      "rewardPriceFeed": {
+        "address": "0xdbd020caef83efd542f4de03e3cf0c28a4428bd5",
+        "quote": "usd"
+      }
+    },
+    "10/usdc": {
+      "displayName": "USDC",
+      "slug": null,
+      "contractName": "cUSDCv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 118406276,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "USD Coin",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0xe1011160d78a80e2eebd60c228eef7af4dfcd4d7",
+        "quote": "usd"
+      }
+    },
+    "10/usdt": {
+      "displayName": "USDT",
+      "slug": null,
+      "contractName": "cUSDTv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 120295564,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "Tether",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0xe1011160d78a80e2eebd60c228eef7af4dfcd4d7",
+        "quote": "usd"
+      }
+    },
+    "10/weth": {
+      "displayName": "ETH",
+      "slug": null,
+      "contractName": "cWETHv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 122730232,
+      "collateralValueQuote": "base",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "Ether",
+        "isWrappedNative": true,
+        "usdPriceFeedAddress": "0x13e3ee699d1909e989722e753853ae30b17e08c5"
+      },
+      "rewardPriceFeed": {
+        "address": "0xe1011160d78a80e2eebd60c228eef7af4dfcd4d7",
+        "quote": "usd"
+      }
+    },
+    "130/usdc": {
+      "displayName": "USDC",
+      "slug": null,
+      "contractName": "cUSDCv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 9170496,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "USD Coin",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0xb81131b6368b3f0a83af09db4e39ac23da96c2db",
+        "quote": "usd"
+      }
+    },
+    "130/weth": {
+      "displayName": "ETH",
+      "slug": null,
+      "contractName": "cWETHv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 15416769,
+      "collateralValueQuote": "base",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "Ether",
+        "isWrappedNative": true,
+        "usdPriceFeedAddress": "0xe8d9fbc10e00ecc9f0694617075fdaf657a76fb2"
+      },
+      "rewardPriceFeed": {
+        "address": "0xb81131b6368b3f0a83af09db4e39ac23da96c2db",
+        "quote": "usd"
+      }
+    },
+    "137/usdc": {
+      "displayName": "USDC.e",
+      "slug": null,
+      "contractName": "cUSDCv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 39412367,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "USD Coin (Bridged)",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0x2a8758b7257102461bc958279054e372c2b1bde6",
+        "quote": "usd"
+      }
+    },
+    "137/usdt": {
+      "displayName": "USDT0",
+      "slug": null,
+      "contractName": "cUSDTv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 58479907,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "Tether",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0x2a8758b7257102461bc958279054e372c2b1bde6",
+        "quote": "usd"
+      }
+    },
+    "2020/weth": {
+      "displayName": "WETH",
+      "slug": null,
+      "contractName": "cWETHv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 43343876,
+      "collateralValueQuote": "base",
+      "capabilities": {
+        "rewards": false,
+        "accountRewards": false,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "Wrapped Ether",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": "0x5d173813b4505701e79e654b36a95e6c1fad4448"
+      },
+      "rewardPriceFeed": null
+    },
+    "2020/wron": {
+      "displayName": "RON",
+      "slug": null,
+      "contractName": "cWRONv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 44084652,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": false,
+        "accountRewards": false,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "Ronin",
+        "isWrappedNative": true,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": null
+    },
+    "5000/usde": {
+      "displayName": "USDe",
+      "slug": null,
+      "contractName": "cUSDev3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 70789050,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "Ethena USDe",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0x0cd478875450bcdc75e16ff6084af3a4782610b9",
+        "quote": "usd"
+      }
+    },
+    "8453/aero": {
+      "displayName": "AERO",
+      "slug": null,
+      "contractName": "cAEROv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 20852405,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "Aero",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0x9dda783de64a9d1a60c49ca761ebe528c35ba428",
+        "quote": "usd"
+      }
+    },
+    "8453/usdbc": {
+      "displayName": "USDbC",
+      "slug": null,
+      "contractName": "cUSDbCv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 2197588,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "USD Coin (Bridged)",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0x9dda783de64a9d1a60c49ca761ebe528c35ba428",
+        "quote": "usd"
+      }
+    },
+    "8453/usdc": {
+      "displayName": "USDC",
+      "slug": null,
+      "contractName": "cUSDCv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 11699480,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "USD Coin",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0x9dda783de64a9d1a60c49ca761ebe528c35ba428",
+        "quote": "usd"
+      }
+    },
+    "8453/usds": {
+      "displayName": "USDS",
+      "slug": null,
+      "contractName": "cUSDSv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 26046502,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "USDS",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0x9dda783de64a9d1a60c49ca761ebe528c35ba428",
+        "quote": "usd"
+      }
+    },
+    "8453/weth": {
+      "displayName": "ETH",
+      "slug": null,
+      "contractName": "cWETHv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 2495303,
+      "collateralValueQuote": "base",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "Ether",
+        "isWrappedNative": true,
+        "usdPriceFeedAddress": "0x71041dddad3595f9ced3dccfbe3d1f4b0a16bb70"
+      },
+      "rewardPriceFeed": {
+        "address": "0x9dda783de64a9d1a60c49ca761ebe528c35ba428",
+        "quote": "usd"
+      }
+    },
+    "42161/usdc": {
+      "displayName": "USDC",
+      "slug": null,
+      "contractName": "cUSDCv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 122080500,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "USD Coin",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0xe7c53ffd03eb6cef7d208bc4c13446c76d1e5884",
+        "quote": "usd"
+      }
+    },
+    "42161/usdc.e": {
+      "displayName": "USDC.e",
+      "slug": null,
+      "contractName": "cUSDC.ev3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 87335214,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": true
+      },
+      "baseAsset": {
+        "displayName": "USD Coin (Bridged)",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0xe7c53ffd03eb6cef7d208bc4c13446c76d1e5884",
+        "quote": "usd"
+      }
+    },
+    "42161/usdt": {
+      "displayName": "USD₮0",
+      "slug": null,
+      "contractName": "cUSDTv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 223796350,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "Tether",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0xe7c53ffd03eb6cef7d208bc4c13446c76d1e5884",
+        "quote": "usd"
+      }
+    },
+    "42161/weth": {
+      "displayName": "ETH",
+      "slug": null,
+      "contractName": "cWETHv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 219386101,
+      "collateralValueQuote": "base",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "Ether",
+        "isWrappedNative": true,
+        "usdPriceFeedAddress": "0x639fe6ab55c921f74e7fac1ee960c0b6293ba612"
+      },
+      "rewardPriceFeed": {
+        "address": "0xe7c53ffd03eb6cef7d208bc4c13446c76d1e5884",
+        "quote": "usd"
+      }
+    },
+    "59144/usdc": {
+      "displayName": "USDC",
+      "slug": null,
+      "contractName": "cUSDCv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 15197719,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "USD Coin",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": {
+        "address": "0xc0068a2f7e4847df9c3a34b27ccc07b7e15e0458",
+        "quote": "usd"
+      }
+    },
+    "59144/weth": {
+      "displayName": "ETH",
+      "slug": null,
+      "contractName": "cWETHv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 20601032,
+      "collateralValueQuote": "base",
+      "capabilities": {
+        "rewards": true,
+        "accountRewards": true,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "Ether",
+        "isWrappedNative": true,
+        "usdPriceFeedAddress": "0x3c6cd9cc7c7a4c2cf5a82734cd249d7d593354da"
+      },
+      "rewardPriceFeed": {
+        "address": "0x6af327313876ef9a5d342105747ebf3aa2543547",
+        "quote": "base"
+      }
+    },
+    "534352/usdc": {
+      "displayName": "USDC",
+      "slug": null,
+      "contractName": "cUSDCv3",
+      "isDefault": false,
+      "isInstitutional": false,
+      "status": "enabled",
+      "creationBlock": 3397674,
+      "collateralValueQuote": "usd",
+      "capabilities": {
+        "rewards": false,
+        "accountRewards": false,
+        "transactionHistory": false
+      },
+      "baseAsset": {
+        "displayName": "USD Coin",
+        "isWrappedNative": false,
+        "usdPriceFeedAddress": null
+      },
+      "rewardPriceFeed": null
+    }
+  },
+  "expectedDigests": {
+    "1": null,
+    "10": null,
+    "130": null,
+    "137": null,
+    "2020": null,
+    "5000": null,
+    "8453": null,
+    "42161": null,
+    "59144": null,
+    "534352": null,
+    "1/institutional_usdc": null,
+    "1/usdc": null,
+    "1/usds": null,
+    "1/usdt": null,
+    "1/wbtc": null,
+    "1/weth": null,
+    "1/wsteth": null,
+    "10/usdc": null,
+    "10/usdt": null,
+    "10/weth": null,
+    "130/usdc": null,
+    "130/weth": null,
+    "137/usdc": null,
+    "137/usdt": null,
+    "2020/weth": null,
+    "2020/wron": null,
+    "5000/usde": null,
+    "8453/aero": null,
+    "8453/usdbc": null,
+    "8453/usdc": null,
+    "8453/usds": null,
+    "8453/weth": null,
+    "42161/usdc": null,
+    "42161/usdc.e": null,
+    "42161/usdt": null,
+    "42161/weth": null,
+    "59144/usdc": null,
+    "59144/weth": null,
+    "534352/usdc": null
+  }
+}

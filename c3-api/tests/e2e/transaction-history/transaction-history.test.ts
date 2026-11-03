@@ -24,6 +24,7 @@ import C3Api, { Env } from '../../../entrypoint.js';
 import * as mock     from '../../util/mock/mock.js';
 import * as jsonUtil from '../../util/json.js';
 import { MemoryKv, encodeSeed } from '../../util/kv.js';
+import { makeTestEnv } from '../../util/test-env.js';
 
 /* tests are running in node.js, so we need to shim in the 'self' object
  * that workers scripts depend upon.
@@ -34,15 +35,12 @@ import { setupTestEnvVars } from '../../util/setupTestEnvVars.js';
 
 const { apiHost, nodeHost, nodeKey } = setupTestEnvVars();
 
-const globalEnv: Omit<Env, `kv_${string}`> = {
-  'ENVIRONMENT': 'test',
-  'TALLY_API_KEY': 'test',
+const globalEnv = makeTestEnv({
   'V3_API_HOST': apiHost,
   'NODE_PROXY_HOST': nodeHost,
   'NODE_PROXY_KEY': nodeKey,
   'MEMORY_CACHE_SEED': 'transaction-history',
-  ...process.env,
-};
+}, process.env);
 const flags = Flags.parseWithDefaults(globalEnv);
 
 /* FIXME(base-mainnet): add base-mainnet for transaction history tests
@@ -119,9 +117,9 @@ t.test(`transaction history`, async t => {
    * Set up the test env, seeding in-memory test KVs with the cache seed.
    */
   const testEnv: Env = {
+    ...globalEnv,
     'kv_testnet': MemoryKv({ seed }),
     'kv_mainnet': MemoryKv({ seed }),
-    ...globalEnv,
   };
 
   /*
