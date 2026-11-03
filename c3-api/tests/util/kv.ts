@@ -37,9 +37,11 @@ function encodeSeed(seed: CacheSeed | StorageMap): StorageMap {
 }
 
 function MemoryKv({ seed = {} }: { seed?: CacheSeed | StorageMap }): KVNamespace<string> {
-  // Copy the seed so each KV instance owns an independent store (the same
-  // encoded seed is reused across multiple bindings in some tests).
-  const store: StorageMap = new Map(encodeSeed(seed));
+  // NOTE: when `seed` is already a StorageMap the KV uses it directly rather
+  // than copying it, as Miniflare's MemoryStorage did. Tests rely on this to
+  // read newly-cached entries back out of the seed map when regenerating
+  // cache seeds, and to share one store across multiple bindings.
+  const store: StorageMap = encodeSeed(seed);
 
   const memoryKv = {
     async get(key: string): Promise<string | null> {

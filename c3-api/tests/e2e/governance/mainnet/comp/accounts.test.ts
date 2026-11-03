@@ -50,7 +50,8 @@ t.before(() => {
   global.fetch = mock.fetch({ passthrough: flags.testAllowFetchPassthrough });
 });
 
-t.test(`/${route}`, async t => {
+// SKIPPED: this route depends on the Tally API, which c3-api no longer handles.
+t.skip(`/${route}`, async t => {
   /*
    * 1. Setup
    */
