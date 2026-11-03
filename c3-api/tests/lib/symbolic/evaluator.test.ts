@@ -4,6 +4,7 @@ import * as Flags      from '../../../lib/flags.js';
 import * as Debug      from '../../../lib/debug-log.js';
 import * as Fallible   from '../../../lib/fallible/fallible.js';
 import * as Index      from '../../../lib/symbolic/index.js';
+import * as Cache      from '../../../lib/symbolic/cache.js';
 import * as Compute    from '../../../lib/symbolic/computation.js';
 import * as Workingset from '../../../lib/symbolic/evaluator/workingset.js';
 
@@ -347,4 +348,203 @@ t.test('WorkingsetEvaluator: a computation that fails is not logged by the step 
   await t.rejects(evaluator.evaluate(evaluator.pull1({ refuse: 1 })), /Failure: Fetch.InsufficientQuota/);
   t.equal(lines.filter(line => line.includes('Failure: Fetch.InsufficientQuota')).length, 1,
     'the trace names the failure once, beside the state it failed in');
+});
+
+/*
+ * A batch computation that doubles each call and records the calls of each
+ * batch it is sent. The EVM computations make one call a lookup, an item of
+ * evmRpc, but a lookup of a batch computation may hold several, the same
+ * call among them twice. The routes evaluate with batching on, as here.
+ */
+type Twice = Compute.Batch.Spec<{
+  name: 'twice',
+  frame: { network: string },
+  item: number,
+  returns: number[],
+}>;
+
+const sent: number[][] = [];
+const twice = Compute.Batch.Functor<Twice>({}).implement({
+  version: 1,
+  async compute({ items }) {
+    sent.push([ ...items ]);
+    return items.map(v => v * 2);
+  },
+});
+
+// the calls of each batch sent, sorted: their order follows the work queue
+const sortedSent = () => sent.map(items => [ ...items ].sort((a, b) => a - b));
+
+/*
+ * A computation that makes its calls through a lookup of the batch
+ * computation, as ethCall does, so the lookup reaches the batch a step
+ * after one the root makes.
+ */
+type Later = Compute.Spec<{
+  name: 'later',
+  depends: [ Twice ],
+  expects: number[],
+  returns: number[],
+}>;
+
+const frame = { network: 'mainnet' };
+const { implement: implementLater, pull1: pullTwice } = Compute.Functor<Later>({});
+const later = implementLater({
+  version: 1,
+  compute: items => pullTwice({ twice: { frame, items } }),
+});
+
+// an evaluator that batches, with nothing sent yet
+function batchingEvaluator(cache: Cache.Cache = Cache.NoopCache, index = twice.index) {
+  sent.length = 0;
+  return Workingset.Evaluator<Later>({ twice: { ...twice, index }, later }, {
+    flags: { ...Flags.parse(process.env), batchingEnabled: true },
+    cache,
+  });
+}
+
+t.test('WorkingsetEvaluator: a batched lookup of a repeated call answers it each time', async t => {
+  const evaluator = batchingEvaluator();
+  t.strictSame(await evaluator.evaluate(evaluator.pull1({ twice: { frame, items: [ 2, 2 ] } })), [ 4, 4 ],
+    '[2,2] is answered [4,4]');
+  t.strictSame(sent, [ [ 2 ] ], 'and sends the call once');
+});
+
+t.test('WorkingsetEvaluator: a batched lookup is answered in its order, with its repeats', async t => {
+  const cases: [ items: number[], calls: number[] ][] = [
+    [ [ 3, 3, 4 ], [ 3, 4 ] ],
+    [ [ 4, 3, 4 ], [ 4, 3 ] ],
+    [ [ 1, 2 ], [ 1, 2 ] ],
+  ];
+  for (const [ items, calls ] of cases) {
+    const evaluator = batchingEvaluator();
+    t.strictSame(await evaluator.evaluate(evaluator.pull1({ twice: { frame, items } })), items.map(v => v * 2),
+      `${JSON.stringify(items)} is answered in its order`);
+    t.strictSame(sent, [ calls ], 'and sends each call once');
+  }
+});
+
+t.test('WorkingsetEvaluator: lookups that share a batch are each answered from it', async t => {
+  // the first lookup starts the batch, and each other adds the calls it does not carry yet
+  const cases: [ lookups: number[][], calls: number[] ][] = [
+    [ [ [ 1 ], [ 2, 1 ] ], [ 1, 2 ] ],
+    [ [ [ 2 ], [ 1, 2 ] ], [ 1, 2 ] ],
+    [ [ [ 1, 2 ], [ 2 ] ], [ 1, 2 ] ],
+    [ [ [ 1, 2 ], [ 1, 2 ] ], [ 1, 2 ] ],
+    [ [ [ 2, 2 ], [ 2, 3 ], [ 3, 2, 3 ], [ 1 ] ], [ 1, 2, 3 ] ],
+  ];
+  for (const [ lookups, calls ] of cases) {
+    const evaluator = batchingEvaluator();
+    t.strictSame(
+      await evaluator.evaluate(evaluator.split(lookups.map(items => evaluator.pull1({ twice: { frame, items } })))),
+      lookups.map(items => items.map(v => v * 2)),
+      `${JSON.stringify(lookups)} are each answered`,
+    );
+    t.strictSame(sortedSent(), [ calls ], 'from one batch that sends each call once');
+  }
+});
+
+t.test('WorkingsetEvaluator: a batched lookup made in a later step is answered', async t => {
+  // while the batch that carries its calls waits, it joins that batch
+  const cases: [ items: number[], calls: number[] ][] = [
+    [ [ 2 ], [ 2 ] ],
+    [ [ 1, 2 ], [ 1, 2 ] ],
+    [ [ 2, 2 ], [ 2 ] ],
+  ];
+  for (const [ items, calls ] of cases) {
+    const evaluator = batchingEvaluator();
+    t.strictSame(await evaluator.evaluate(evaluator.split([
+      evaluator.pull1({ twice: { frame, items: [ 2 ] } }),
+      evaluator.pull1({ later: items }),
+    ])), [ [ 4 ], items.map(v => v * 2) ], `${JSON.stringify(items)} a step later is answered`);
+    t.strictSame(sortedSent(), [ calls ], 'from the batch it joined, which sends each call once');
+  }
+  // once that batch ran, it is answered from what the batch saved
+  const evaluator = batchingEvaluator();
+  t.strictSame(await evaluator.evaluate(evaluator.split([
+    evaluator.pull1({ twice: { frame, items: [ 2 ] } }),
+    evaluator.pipe1([ { twice: { frame, items: [ 3 ] } }, () => evaluator.pull1({ twice: { frame, items: [ 2, 2 ] } }) ]),
+  ])), [ [ 4 ], [ 4, 4 ] ], '[2,2] after the batch of [2] ran is answered');
+  t.strictSame(sortedSent(), [ [ 2, 3 ] ], 'and sends nothing more');
+});
+
+t.test('WorkingsetEvaluator: a batch read from the cache answers its lookups', async t => {
+  /* A batch computation is indexed by nothing (batch.ts), so the evaluator
+   * reads a batch from the cache only for one given an index of its own.
+   */
+  const cache = new Cache.Memory({});
+  let evaluator = batchingEvaluator(cache, Index.Everything);
+  t.strictSame(await evaluator.evaluate(evaluator.pull1({ twice: { frame, items: [ 2 ] } })), [ 4 ],
+    'an earlier evaluation caches the batch of [2]');
+  evaluator = batchingEvaluator(cache, Index.Everything);
+  t.strictSame(await evaluator.evaluate(evaluator.pull1({ twice: { frame, items: [ 2, 2 ] } })), [ 4, 4 ],
+    '[2,2] is answered from it');
+  t.strictSame(sent, [], 'without a call');
+  t.equal(Object.keys(cache.store).length, 1, 'and caches nothing more');
+  // lookups of one call each, evaluated again, read the batch they shared
+  const shared = new Cache.Memory({});
+  const evaluateShared = () => {
+    const evaluator = batchingEvaluator(shared, Index.Everything);
+    return evaluator.evaluate(evaluator.split([
+      evaluator.pull1({ twice: { frame, items: [ 1 ] } }),
+      evaluator.pull1({ twice: { frame, items: [ 2 ] } }),
+    ]));
+  };
+  t.strictSame(await evaluateShared(), [ [ 2 ], [ 4 ] ], '[1] and [2] are answered');
+  t.strictSame(sortedSent(), [ [ 1, 2 ] ], 'from one batch');
+  t.strictSame(await evaluateShared(), [ [ 2 ], [ 4 ] ], 'and again');
+  t.strictSame(sent, [], 'from that batch in the cache');
+});
+
+/*
+ * A batch computation that answers a redex rather than its results, as any
+ * computation may: the evaluator reduces it under the batch's key. evmRpc
+ * answers its results.
+ */
+type TwiceValue = Compute.Batch.Spec<{
+  name: 'twiceValue',
+  frame: { network: string },
+  item: number,
+  returns: number[],
+}>;
+
+const { implement: implementTwiceValue, value } = Compute.Batch.Functor<TwiceValue>({});
+const twiceValue = implementTwiceValue({
+  version: 1,
+  async compute({ items }) {
+    sent.push([ ...items ]);
+    return value(items.map(v => v * 2));
+  },
+});
+
+t.test('WorkingsetEvaluator: a batch that answers a redex answers its lookups once it reduces', async t => {
+  const evaluatorOf = (cache: Cache.Cache = Cache.NoopCache, index = twiceValue.index) => {
+    sent.length = 0;
+    return Workingset.Evaluator<TwiceValue>({ twiceValue: { ...twiceValue, index } }, {
+      flags: { ...Flags.parse(process.env), batchingEnabled: true },
+      cache,
+    });
+  };
+  const cases: [ lookups: number[][], calls: number[] ][] = [
+    [ [ [ 2, 2 ] ], [ 2 ] ],
+    [ [ [ 3, 3, 4 ] ], [ 3, 4 ] ],
+    [ [ [ 1 ], [ 2 ] ], [ 1, 2 ] ],
+    [ [ [ 2, 2 ], [ 2 ] ], [ 2 ] ],
+    [ [ [ 1, 2 ], [ 2, 1 ], [ 1 ] ], [ 1, 2 ] ],
+  ];
+  for (const [ lookups, calls ] of cases) {
+    const evaluator = evaluatorOf();
+    t.strictSame(
+      await evaluator.evaluate(evaluator.split(lookups.map(items => evaluator.pull1({ twiceValue: { frame, items } })))),
+      lookups.map(items => items.map(v => v * 2)),
+      `${JSON.stringify(lookups)} are each answered`,
+    );
+    t.strictSame(sortedSent(), [ calls ], 'from one batch that sends each call once');
+  }
+  // what the batch's result answers besides its own key stays out of the cache
+  const cache = new Cache.Memory({});
+  const evaluator = evaluatorOf(cache, Index.Everything);
+  t.strictSame(await evaluator.evaluate(evaluator.pull1({ twiceValue: { frame, items: [ 3, 3, 4 ] } })), [ 6, 6, 8 ],
+    'an indexed batch answers its lookups too');
+  t.equal(Object.keys(cache.store).length, 1, 'and caches only its own result');
 });
