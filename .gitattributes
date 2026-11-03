@@ -1,3 +1,10 @@
+# Collapse test files and test support files in GitHub pull request diffs.
+# Reviewers can expand them manually.
+c3-api/tests/** linguist-generated
+node-provider-proxy/test/** linguist-generated
+**/__tests__/** linguist-generated
+*.test.* linguist-generated
+
 # Text is stored and checked out with LF line endings on every platform, so
 # a Windows checkout reads the same bytes the tests and the workers do.
 * text=auto eol=lf
