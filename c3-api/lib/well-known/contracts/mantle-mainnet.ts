@@ -1,5 +1,4 @@
 import {
-  Comet,
   ERC20,
   PriceFeed,
   UntypedContract,
@@ -110,26 +109,6 @@ const COMP_USD_priceFeed = PriceFeed(<const>{
   },
 });
 
-const Comet_01usde = Comet(<const>{
-  displayName: 'cUSDev3',
-  aliases: [ '01-usde', 'cUSDev3' ],
-  base: {
-    asset:     USDe,
-    priceFeed: USDe_USD_priceFeed,
-  },
-  rewards: {
-    asset:    COMP,
-    contract: Comet_01usde_Rewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: 'mantle-mainnet',
-  address: '0x606174f62cd968d8e684c645080fa694c1D7786E',
-  block: {
-    number: 70789050,
-    timestamp: 1729708412
-  },
-});
-
 const Bulker_01usde = UntypedContract('Bulker', <const>{
   aliases: ['01-usde', 'cUSDev3'],
   network: 'mantle-mainnet',
@@ -142,7 +121,7 @@ const Bulker_01usde = UntypedContract('Bulker', <const>{
 
 const market01usde = <const>([
   CometAdmin, Comet_01usde_Rewards, CometFactory, Bulker_01usde,
-  USDe_USD_priceFeed, COMP_USD_priceFeed, Comet_01usde,
+  USDe_USD_priceFeed, COMP_USD_priceFeed,
 ]);
 
 const Configurator = UntypedContract('Configurator', <const>{

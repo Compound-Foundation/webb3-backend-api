@@ -65,10 +65,11 @@ function activeReader(deps: CacheDeps): () => Promise<CachedSnapshot | null> {
 
 /*
  * What a public answer that failed after the active version was read says of
- * that version: whether a chain or a market is known depends on the version,
- * so a 404 that does not name it cannot be told apart from one an older
- * version gave. A version the cache served because D1 could not be reached is
- * named with its age, and the answer may not be kept.
+ * that version, as a legacy route's failure does: whether a chain or a market
+ * is known depends on the version, so a 404 that does not name it cannot be
+ * told apart from one an older version gave. A version the cache served
+ * because D1 could not be reached is named with its age, and the answer may
+ * not be kept.
  */
 function servedHeaders({ snapshot, staleFor }: CachedSnapshot): Record<string, string> {
   return registryHeaders(snapshot.registryVersion, staleFor);
