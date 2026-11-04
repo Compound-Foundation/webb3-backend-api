@@ -7,8 +7,9 @@ import { unstable_readConfig } from 'wrangler';
  * proxy running on the same machine (README, Getting Started): the default
  * environment of wrangler.toml, with the proxy bound to the worker the way
  * stage and production bind theirs. Everything else has to stay
- * wrangler.toml's, so a binding or a setting changed in one and not the other
- * fails here.
+ * wrangler.toml's — above all the local database, which
+ * `npm run d1:migrate:local` prepares through wrangler.toml — so a binding or
+ * a setting changed in one and not the other fails here.
  */
 const BINDING = 'node_provider_proxy';
 
@@ -46,5 +47,6 @@ t.test('the proxy node-provider-proxy runs locally is bound to the worker', asyn
 });
 
 t.test('everything else is the default environment of wrangler.toml', async t => {
-  t.same(settingsOf(proxied), settingsOf(local), 'every binding and setting');
+  t.same(proxied.d1_databases, local.d1_databases, 'the local database that npm run d1:migrate:local prepares');
+  t.same(settingsOf(proxied), settingsOf(local), 'and every other binding and setting');
 });

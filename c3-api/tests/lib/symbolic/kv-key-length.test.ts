@@ -49,6 +49,7 @@ t.test('the KV double refuses a key the runtime refuses, as the runtime does', a
   });
 
   await t.rejects(kv.get(key), refused('GET'));
+  await t.rejects(kv.getWithMetadata(key), refused('GET'));
   await t.rejects(kv.put(key, 'value'), refused('PUT'));
   await t.rejects(kv.delete(key), refused('DELETE'));
   await t.rejects(kv.list({ prefix: key }), refused('GET'), 'a listing is a GET, and its prefix a key');

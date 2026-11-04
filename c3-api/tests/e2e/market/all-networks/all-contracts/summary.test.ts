@@ -1,7 +1,7 @@
 import t from "tap";
 import * as streamInto from "node:stream/consumers";
 
-import { MemoryKv } from "../../../../util/kv.js";
+import { makeTestEnv } from "../../../../util/test-env.js";
 import * as Debug from "../../../../../lib/debug-log.js";
 import * as Flags from "../../../../../lib/flags.js";
 import * as Eth from "../../../../../lib/eth-constants.js";
@@ -24,16 +24,12 @@ testDebug.log({ flags });
 const { apiHost, nodeHost, nodeKey } = setupTestEnvVars();
 
 t.test(`/market/all-networks/all-contracts/summary`, async (t) => {
-  const testEnv: Env = Object.assign(
+  const testEnv: Env = makeTestEnv(
     {
-      TALLY_API_KEY: "test",
       V3_API_HOST: apiHost,
       NODE_PROXY_HOST: nodeHost,
       NODE_PROXY_KEY: nodeKey,
-      ENVIRONMENT: "test",
       MEMORY_CACHE_SEED: "market",
-      kv_testnet: MemoryKv({}),
-      kv_mainnet: MemoryKv({}),
     },
     process.env
   );

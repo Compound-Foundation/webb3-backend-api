@@ -1,7 +1,9 @@
 #!/bin/sh
 #
 # Runs every compiled test that needs neither a node provider nor the R2 test
-# dumps: the unit tests of the worker. This is what CI runs.
+# dumps: the registry suites, which run the worker in workerd with local D1,
+# KV and rate-limit bindings, and the unit tests of everything else. This is
+# what CI runs.
 #
 # A test runs here unless it is excluded below by its own file name, so a new
 # test is covered by default, in whichever directory it lives. One that reads
