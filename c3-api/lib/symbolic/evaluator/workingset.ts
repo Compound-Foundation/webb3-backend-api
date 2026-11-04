@@ -222,6 +222,42 @@ namespace StepState {
   };
 }
 
+/*
+ * The keys of the items each pending batch carries, so a batch that grows
+ * over several steps takes each item once.
+ */
+const pendedKeys = new WeakMap<object, Set<string>>();
+
+/*
+ * The lookups each pending batch answers besides its items. A lookup of
+ * one item waits under that item's key, which the batch saves; any other
+ * waits under a key of its own, which the batch saves only when it
+ * carries just those items, in that order, each once. Each such lookup is
+ * kept as its key and its items' keys, in its order and with repeats.
+ */
+const pendedLookups = new WeakMap<object, Map<string, string[]>>();
+
+/*
+ * Answers the lookups a batch keeps from its items' results. One the batch
+ * saved under its own key is answered already, and one with an item not
+ * saved waits, rather than read a result that is not there.
+ */
+function answerLookups(batch: object, done: { [key: string]: unknown }) {
+  for (const [ key, itemKeys ] of pendedLookups.get(batch) ?? []) {
+    if (!(key in done) && itemKeys.every(itemKey => itemKey in done)) {
+      done[key] = itemKeys.map(itemKey => (done[itemKey] as unknown[])[0]);
+    }
+  }
+}
+
+// the error a computation that answered a Failure throws
+function failureOf(payload: unknown): Error {
+  const type = (typeof(payload) === 'object' && payload !== null && 'type' in payload)
+    ? String((payload as { type: unknown }).type)
+    : 'unknown';
+  return new Error(`Failure: ${type}`, { cause: payload });
+}
+
 async function step<
   Scope extends Compute.Spec,
   Return,
@@ -243,6 +279,40 @@ async function step<
   let work: WorkItem<Scope>[] = todo.slice();
   let next: WorkItem<Scope>[] = [];
   let rewrites: RewriteItem<Scope>[] = [];
+  /*
+   * Start the cache read of every indexed computation of this step at once.
+   * The loop below takes one item at a time, and awaiting each read in turn
+   * made a step that holds, say, every market of a network as slow as the
+   * sum of their reads. readOnce is the one way this step reads the cache:
+   * a key is read once however many items share it, and a read the loop
+   * never gets to, because an item before it threw, must not reject
+   * unobserved, so each one is observed as it starts and awaited below.
+   */
+  const keys  = new Map<WorkItem<Scope>, string>();
+  const reads = new Map<string, ReturnType<typeof this.cache.get<{/*unknown*/}>>>();
+  const readOnce = (key: string) => {
+    let read = reads.get(key);
+    if (read === undefined) {
+      read = this.cache.get<{/*unknown*/}>(key);
+      read.catch(() => {});
+      reads.set(key, read);
+    }
+    return read;
+  };
+  await Promise.all(work.map(async (candidate) => {
+    if (candidate[0] !== 'computation') {
+      return;
+    }
+    const [ _, name, context ] = candidate;
+    const computation = this.computations[name];
+    const key = await computation.key(Compute.versionedName(name, computation.version), context);
+    keys.set(candidate, key);
+    if (!(key in done) && computation.index.includes(context)) {
+      readOnce(key);
+    }
+  }));
+  // keys of the computations an item of this step already took on
+  const started = new Set<string>();
   // process every work item and try to step-evaluate it
   /* NOTE(jordan): by iterating backwards we are more likely to make
    * progress, because the last items on the work queue are the leaves
@@ -275,6 +345,8 @@ async function step<
         }
         // 0.2. check if this batch was completed at some point before
         if (key in done) {
+          // 0.2.1. answer the lookups it keeps from the items saved before
+          answerLookups(batch, done);
           stuck = false;
           D.groupEnd(); // batch
           continue;
@@ -314,6 +386,8 @@ async function step<
               });
               done[itemKey] = [ cacheResult[index] ];
             }
+            // 1.a.1.3. and answer the lookups it keeps from them
+            answerLookups(batch, done);
             D.groupEnd(); // batch
             continue;
           }
@@ -326,14 +400,40 @@ async function step<
         }
         const outcome = await computation.compute(batch, D, name);
         if (Fallible.isFailure(outcome)) {
-          /* do something dude
-           */
-          throw new Error(`bad vibes`);
+          // logged once, by whoever answers the failure: evaluate traces it with the state
+          throw failureOf(Fallible.unwrap(outcome));
         }
         const result = Fallible.must(outcome);
         // 2.a. if it's a redex, queue for rewrite into a new work item
         if (Redex.cast<Scope>(result)) {
           rewrites.push([ key, indexed, result ]);
+          /* 2.a.1. and queue what else waits on this batch, to be picked from
+           * its result by position once that redex reduces: each item, as
+           * 2.b.1.2 saves it, and each lookup it keeps, as answerLookups
+           * answers it. Like those, they are not cached.
+           */
+          const positions = new Map<string, number>();
+          const picks: [ string, number[] ][] = [];
+          for (let index = 0; index < batch.items.length; index++) {
+            const itemKey = await computation.key(versionedName, {
+              frame: batch.frame,
+              items: [ batch.items[index] ],
+            });
+            positions.set(itemKey, index);
+            picks.push([ itemKey, [ index ] ]);
+          }
+          for (const [ lookupKey, itemKeys ] of pendedLookups.get(batch) ?? []) {
+            picks.push([ lookupKey, itemKeys.map(itemKey => positions.get(itemKey)!) ]);
+          }
+          for (const [ pickKey, indices ] of picks) {
+            // the redex answers the batch's own key itself
+            if (pickKey !== key) {
+              const pick = ([ whole ]: [ unknown[] ]) => (
+                indices.map(index => whole[index]) as Scope['returns']
+              );
+              next.push([ 'redex', pickKey, false, [ [ key ], pick ] ]);
+            }
+          }
           D.groupEnd(); // batch
           continue;
         }
@@ -350,6 +450,8 @@ async function step<
           });
           done[itemKey] = [ result[index] ];
         }
+        // 2.b.1.3. ...and answer the lookups it keeps from them
+        answerLookups(batch, done);
         // 2.b.2. and to the cache, if this batch is indexed
         if (indexed) {
           this.cache.put(key, result);
@@ -363,7 +465,8 @@ async function step<
         const [ _, name, context ] = item;
         const computation = this.computations[name];
         const versionedName = Compute.versionedName(name, computation.version);
-        const key = await computation.key(versionedName, context);
+        // every computation item of this step was keyed above
+        const key = keys.get(item)!;
         D.group(`computation { key: ${key} }`);
         // 0. check if this work was already done by a later item
         if (key in done) {
@@ -372,10 +475,21 @@ async function step<
           D.groupEnd(); // computation
           continue;
         }
+        /* 0.1. or is being done by one: another item with the same key
+         * already read it, and computes it or waits in a batch for it.
+         * Doing it again would compute it twice, and send its calls to the
+         * node twice in the same batch.
+         */
+        if (started.has(key)) {
+          D.log('! already started in this step. skipping.');
+          D.groupEnd(); // computation
+          continue;
+        }
+        started.add(key);
         // 1.a. if indexed, try to read a result from cache
         const indexed = computation.index.includes(context);
         if (indexed) {
-          const cacheResult = await this.cache.get<{/*unknown*/}>(key);
+          const cacheResult = await readOnce(key);
           if (Fallible.isFailure(cacheResult)) {
             const payload = Fallible.unwrap(cacheResult);
             this.debug.error(`Failure: ${payload.type}`, { failure: payload });
@@ -419,8 +533,38 @@ async function step<
           } else {
             D.log(`→ in batch  { hash: ${batchHash} }`); // manually aligned
           }
-          // 1.b.1.3. push all the items in this batch onto pend
-          existing[2].items.push(...context.items);
+          /* 1.b.1.3. push the items the pending batch does not carry yet.
+           * Two computations can make the same call in different steps —
+           * a market reads its utilization twice — and a batch that grows
+           * over several steps would otherwise send it twice. An item is
+           * known by the key its result is saved under once the batch runs
+           * (2.b.1.2), which a duplicate shares.
+           */
+          let pended = pendedKeys.get(existing[2]);
+          if (pended === undefined) {
+            pended = new Set();
+            pendedKeys.set(existing[2], pended);
+          }
+          const itemKeys: string[] = [];
+          for (const batchItem of context.items) {
+            const itemKey = context.items.length === 1
+              ? key
+              : await computation.key(versionedName, { frame, items: [ batchItem ] });
+            itemKeys.push(itemKey);
+            if (!pended.has(itemKey)) {
+              pended.add(itemKey);
+              existing[2].items.push(batchItem);
+            }
+          }
+          // 1.b.1.4. keep a lookup not of one item, even one that added nothing
+          if (context.items.length !== 1) {
+            let lookups = pendedLookups.get(existing[2]);
+            if (lookups === undefined) {
+              lookups = new Map();
+              pendedLookups.set(existing[2], lookups);
+            }
+            lookups.set(key, itemKeys);
+          }
           D.groupEnd(); // computation
           continue;
         }
@@ -428,9 +572,8 @@ async function step<
         stuck = false;
         const outcome = await computation.compute(context, D, name);
         if (Fallible.isFailure(outcome)) {
-          /* do something dude
-           */
-          throw new Error(`bad vibes`);
+          // logged once, by whoever answers the failure: evaluate traces it with the state
+          throw failureOf(Fallible.unwrap(outcome));
         }
         const result = Fallible.must(outcome);
         // 2.a. if it's a redex, queue for rewrite into a new work item
