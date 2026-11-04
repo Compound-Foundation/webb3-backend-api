@@ -322,8 +322,8 @@ t.test('WorkingsetEvaluator: a computation that fails says why', async t => {
 });
 
 /*
- * A failure is logged once, by whoever answers it: the router, with its
- * cause. Tracing the evaluator (DEBUG=eval) shows it once more, with
+ * A failure is logged once, by whoever answers it: the router, under the
+ * request's id. Tracing the evaluator (DEBUG=eval) shows it once more, with
  * the state the evaluation failed in; the step that ran the computation does
  * not write it a third time.
  */

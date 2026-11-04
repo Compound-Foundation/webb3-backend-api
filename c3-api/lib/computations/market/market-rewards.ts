@@ -1,39 +1,46 @@
 import * as Eth      from '../../eth-constants.js';
 import * as Fallible from '../../fallible/fallible.js';
 
+import { BigFixnum } from '../../bigfixnum.js';
+
+import type { RegistryComet } from '../../model/comet-registry.js';
+
 import * as Key     from '../../symbolic/key.js';
 import * as Index   from '../../symbolic/index.js';
 import * as Compute from '../../symbolic/computation.js';
 
 import * as KnownNetwork from '../../well-known/networks/network.js';
-import {
-  Comet,
-  PriceFeed,
-  StandaloneContract,
-} from '../../well-known/contracts/types.js';
 
 import {
   GetPrice,
   BaseBorrowMin,
+  BaseUsdPrice,
+  type PriceError,
+  type PriceRead,
 } from '../comet.js';
+
+import type { MarketIdentity } from './market-summary.js';
 
 import {
   BorrowRewardsApr,
   SupplyRewardsApr,
 } from '../rewards.js';
+import { convertsRewardPriceToUsd } from '../rewards/base-price-feed.js';
 
 type MarketRewards = Compute.Spec<{
   name: 'marketRewards';
-  depends: [BaseBorrowMin, SupplyRewardsApr, BorrowRewardsApr, GetPrice];
+  depends: [BaseBorrowMin, SupplyRewardsApr, BorrowRewardsApr, GetPrice, BaseUsdPrice];
   expects: {
     apiHost: string;
     nodeHost: string;
     nodeKey: string;
     block: Eth.Block;
     network: KnownNetwork.Name; // network on which market is deployed
-    contract: Eth.Contract<StandaloneContract<Comet>>; // comet contract for the market
+    contract: RegistryComet; // comet contract for the market
   };
-  returns: {
+  // a price the rewards are valued in that reverts leaves only what identifies the market
+  returns: MarketIdentity & PriceError | {
+    status: 'success';
     chainId: number;
     comet: {
       address: Eth.Address;
@@ -61,166 +68,189 @@ type MarketRewards = Compute.Spec<{
   };
 }>;
 
+/*
+ * The base asset of a market as its reviewed decisions name it, not as its
+ * token reports itself on chain. Tokens get renamed — Tether's USDT is USD₮0
+ * on Arbitrum and USDT0 on Polygon — and bridged USDC calls itself plain USDC
+ * beside the native market of the same network, so the on-chain symbol would
+ * give two markets of one network the same label.
+ */
+function baseAssetLabel(contract: RegistryComet): { symbol: string, description: string } {
+  const market = contract.registry.market;
+  return {
+    symbol:      market.displayName,
+    description: market.baseAsset.displayName,
+  };
+}
+
 const { implement, pipe } = Compute.Functor<MarketRewards>({});
 const marketRewards = implement({
-  version: 3,
+  // 5: a price that reverts is reported as the market's status
+  version: 5,
   index: Index.MinutelyBlockIndex,
   key(name, { block, ...context }) {
     const { block: projected } = Fallible.must(this.index.project({ block, ...context }));
-    return Key.toKey(name, { block: projected.number, ...context });
+    // the summary reports the market's labels, which its contract's key leaves out
+    const { symbol, description } = baseAssetLabel(context.contract);
+    return Key.toKey(name, { block: projected.number, label: `${symbol}|${description}`, ...context });
   },
   compute({ apiHost, nodeHost, nodeKey, contract, network, block }) {
-    const projected = Fallible.must(this.index.project({ 
-        apiHost, nodeHost, nodeKey, contract, network, block 
+    const projected = Fallible.must(this.index.project({
+        apiHost, nodeHost, nodeKey, contract, network, block
       }));
+    const blockNumber = projected.block.number;
+    const { chainId } = Fallible.must(
+      KnownNetwork.lookup({ name: network })
+    );
 
-    // scroll-mainnet does not have a real rewards contract
-    if (network === 'scroll-mainnet') {
-      return pipe([
-        {
-          baseBorrowMin: { apiHost, nodeHost, nodeKey, contract, network, blockNumber: projected.block.number },
-          supplyRewardsApr: {
-            apiHost,
-            nodeHost,
-            nodeKey, 
-            contract,
-            network,
-            blockNumber: projected.block.number,
-            rewardsTokenPriceFeed: contract.rewards.priceFeed,
-          },
-          borrowRewardsApr: {
-            apiHost,
-            nodeHost,
-            nodeKey, 
-            contract,
-            network,
-            blockNumber: projected.block.number,
-            rewardsTokenPriceFeed: contract.rewards.priceFeed,
-          },
-        },
-        ({
-          baseBorrowMin,
-          supplyRewardsApr,
-          borrowRewardsApr,
-        }) => {
-          const { chainId } = Fallible.must(
-            KnownNetwork.lookup({ name: network })
-          );
-          const baseAssetDescription =
-            (contract.base.asset.description as string | undefined) ?? null;
-          const rewardAssetDescription =
-            (contract.rewards.asset.description as string | undefined) ?? null;
+    const market      = contract.registry.market;
+    const rewardAsset = market.rewardAsset;
 
-          return {
-            chainId,
-            comet: {
-              address: contract.address,
-            },
-            cometRewards: {
-              address: contract.rewards.contract.address,
-            },
-            baseAsset: {
-              address: contract.base.asset.address,
-              decimals: contract.base.asset.decimals,
-              description: baseAssetDescription,
-              symbol: contract.base.asset.symbol,
-              minBorrow: baseBorrowMin.toString(),
-              priceFeed: contract.base.priceFeed.address,
-            },
-            rewardAsset: {
-              address: contract.rewards.asset.address,
-              decimals: contract.rewards.asset.decimals,
-              description: rewardAssetDescription,
-              price: "0.0",
-              symbol: contract.rewards.asset.symbol,
-            },
-            earnRewardsApr: supplyRewardsApr.toString(),
-            borrowRewardsApr: borrowRewardsApr.toString(),
-          };
-        },
-      ]);
+    /*
+     * The token the market pays and the contract that pays it. A market the
+     * rewards are valued for has both: the routes ask only about markets
+     * whose rewards or account rewards are served, and a version serves
+     * neither without a reward token, which only a rewards contract names.
+     */
+    const rewards = contract.rewards;
+    if (rewards?.asset === undefined) {
+      throw new Error(`invariant violated: ${contract.address} pays no reward token`);
     }
+    const rewardToken = rewards.asset;
 
-    const rewardsPriceFeed: Eth.Contract<StandaloneContract<PriceFeed>> =
-      Eth.wellKnownContractsByNetwork[network]['PriceFeed']['COMP-USD'];
+    /*
+     * The feed that prices the reward token, as the registry states it. A
+     * market without one — Scroll, which has no COMP feed — is reported with
+     * no reward price and no reward rate rather than by name. A reward price
+     * its feed states in the market's base asset is converted to USD, so every
+     * market reports its reward price in the same unit (base-price-feed.ts).
+     */
+    const rewardPriceFeed = rewardAsset?.priceFeed ?? null;
+    const convertsToUsd   = convertsRewardPriceToUsd(contract);
+
+    const baseBorrowMin = { apiHost, nodeHost, nodeKey, contract, network, blockNumber };
 
     /*
      * Aggregate and format summary data for display.
      */
-    return pipe([
-      {
-        baseBorrowMin: { apiHost, nodeHost, nodeKey, contract, network, blockNumber: projected.block.number },
-        supplyRewardsApr: {
-          apiHost,
-          nodeHost,
-          nodeKey, 
-          contract,
-          network,
-          blockNumber: projected.block.number,
-          rewardsTokenPriceFeed: contract.rewards.priceFeed,
-        },
-        borrowRewardsApr: {
-          apiHost,
-          nodeHost,
-          nodeKey, 
-          contract,
-          network,
-          blockNumber: projected.block.number,
-          rewardsTokenPriceFeed: contract.rewards.priceFeed,
-        },
-        getPrice: {
-          apiHost,
-          nodeHost,
-          nodeKey, 
-          contract,
-          network,
-          priceFeed: rewardsPriceFeed,
-          blockNumber: projected.block.number,
-        },
+    const summary = (
+      { baseBorrowMin, supplyRewardsApr, borrowRewardsApr }: {
+        baseBorrowMin:    BigFixnum,
+        supplyRewardsApr: BigFixnum,
+        borrowRewardsApr: BigFixnum,
       },
-      ({
-        baseBorrowMin,
-        supplyRewardsApr,
-        borrowRewardsApr,
-        getPrice: rewardAssetPrice,
-      }) => {
-        const { chainId } = Fallible.must(
-          KnownNetwork.lookup({ name: network })
-        );
-        const baseAssetDescription =
-          (contract.base.asset.description as string | undefined) ?? null;
-        const rewardAssetDescription =
-          (contract.rewards.asset.description as string | undefined) ?? null;
+      rewardAssetPrice: string,
+    ): MarketRewards['returns'] => {
+      const baseAsset = baseAssetLabel(contract);
+      const rewardAssetDescription =
+        (rewardToken.description as string | undefined) ?? null;
 
-        return {
-          chainId,
-          comet: {
-            address: contract.address,
-          },
-          cometRewards: {
-            address: contract.rewards.contract.address,
-          },
-          baseAsset: {
-            address: contract.base.asset.address,
-            decimals: contract.base.asset.decimals,
-            description: baseAssetDescription,
-            symbol: contract.base.asset.symbol,
-            minBorrow: baseBorrowMin.toString(),
-            priceFeed: contract.base.priceFeed.address,
-          },
-          rewardAsset: {
-            address: contract.rewards.asset.address,
-            decimals: contract.rewards.asset.decimals,
-            description: rewardAssetDescription,
-            price: rewardAssetPrice.toString(),
-            symbol: contract.rewards.asset.symbol,
-          },
-          earnRewardsApr: supplyRewardsApr.toString(),
-          borrowRewardsApr: borrowRewardsApr.toString(),
-        };
+      return {
+        status: 'success',
+        chainId,
+        comet: {
+          address: contract.address,
+        },
+        cometRewards: {
+          address: rewards.contract.address,
+        },
+        baseAsset: {
+          address: contract.base.asset.address,
+          decimals: contract.base.asset.decimals,
+          description: baseAsset.description,
+          symbol: baseAsset.symbol,
+          minBorrow: baseBorrowMin.toString(),
+          priceFeed: contract.base.priceFeed.address,
+        },
+        rewardAsset: {
+          address: rewardToken.address,
+          decimals: rewardToken.decimals,
+          description: rewardAssetDescription,
+          price: rewardAssetPrice,
+          symbol: rewardToken.symbol,
+        },
+        earnRewardsApr: supplyRewardsApr.toString(),
+        borrowRewardsApr: borrowRewardsApr.toString(),
+      };
+    };
+
+    /*
+     * Without a feed there is nothing to value the rewards in, and nothing
+     * for the APR computations to read. Only the minimum borrow is read; the
+     * rates are zero.
+     */
+    if (rewardPriceFeed === null) {
+      const none = BigFixnum.from({ value: 0 });
+      return pipe([
+        { baseBorrowMin },
+        ({ baseBorrowMin }) => summary({ baseBorrowMin, supplyRewardsApr: none, borrowRewardsApr: none }, '0.0'),
+      ]);
+    }
+
+    const apr = { apiHost, nodeHost, nodeKey, contract, network, blockNumber, rewardsTokenPriceFeed: rewardPriceFeed };
+    const reads = {
+      baseBorrowMin,
+      supplyRewardsApr: apr,
+      borrowRewardsApr: apr,
+      getPrice: {
+        apiHost,
+        nodeHost,
+        nodeKey,
+        contract,
+        network,
+        priceFeed: rewardPriceFeed,
+        blockNumber,
       },
+    };
+
+    /*
+     * The first price that reverts is the market's answer, in the order the
+     * rewards are valued: the reward price, the rates measured with it, and
+     * the USD price that converts it.
+     */
+    const reported = (
+      { getPrice: rewardAssetPrice, baseBorrowMin, supplyRewardsApr, borrowRewardsApr }: {
+        getPrice:         PriceRead,
+        baseBorrowMin:    BigFixnum,
+        supplyRewardsApr: SupplyRewardsApr['returns'],
+        borrowRewardsApr: BorrowRewardsApr['returns'],
+      },
+      baseAssetUsdPrice: PriceRead | null,
+    ): MarketRewards['returns'] => {
+      const failure = ({ status, message }: PriceError): MarketRewards['returns'] => (
+        { chainId, comet: { address: contract.address }, status, message }
+      );
+      if (rewardAssetPrice.status === 'error') {
+        return failure(rewardAssetPrice);
+      }
+      if (supplyRewardsApr.status === 'error') {
+        return failure(supplyRewardsApr);
+      }
+      if (borrowRewardsApr.status === 'error') {
+        return failure(borrowRewardsApr);
+      }
+      const results = { baseBorrowMin, supplyRewardsApr: supplyRewardsApr.apr, borrowRewardsApr: borrowRewardsApr.apr };
+      if (baseAssetUsdPrice === null) {
+        return summary(results, rewardAssetPrice.price.toString());
+      }
+      return baseAssetUsdPrice.status === 'error'
+        ? failure(baseAssetUsdPrice)
+        : summary(results, rewardAssetPrice.price.mul(baseAssetUsdPrice.price).toString());
+    };
+
+    /*
+     * The USD price that converts the reward price is read beside the rest,
+     * not once both rates are in: a round of its own would hold up every
+     * market of its network, which are read together.
+     */
+    if (!convertsToUsd) {
+      return pipe([ reads, results => reported(results, null) ]);
+    }
+    return pipe([
+      { ...reads, baseUsdPrice: { apiHost, nodeHost, nodeKey, contract, network, blockNumber } },
+      ({ baseUsdPrice, ...results }) => reported(results, baseUsdPrice),
     ]);
   },
 });
 
-export { MarketRewards, marketRewards };
+export { MarketRewards, baseAssetLabel, marketRewards };

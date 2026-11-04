@@ -15,13 +15,15 @@ import { makeTestEnv } from '../../util/test-env.js';
 import '../../../shim/node-self.js';
 
 /*
- * What the registry answers when its KV namespace does not answer, through the
- * worker's own entry point. KV is an optimization: without it every read is
+ * What the API answers when its KV namespace does not answer, through the
+ * worker's own entry point. KV is an optimization: without it every route is
  * answered out of D1, a command that committed is answered as committed, and
  * the Cron's upkeep fails nothing. The status is what says the cache is gone,
  * and with it the older version a database outage would be answered from.
  */
 const ADMIN_TOKEN = 'registry-admin-token-for-tests';
+const MAINNET     = 'ethereum-mainnet';
+const UNKNOWN     = '0x1111111111111111111111111111111111111111';
 
 type Envelope = { error: { code: string, message: string, requestId: string } };
 
@@ -72,6 +74,10 @@ t.test('a namespace that does not answer leaves every read to the database', asy
   t.equal(active.status, 200, 'the registry route answers');
   t.equal(active.headers.get('x-registry-version'), registry.versionId, 'with the version on');
   t.equal(active.headers.get('x-registry-stale'), null, 'as current, not as an older version');
+
+  const market = await get(env, `/market/${MAINNET}/${UNKNOWN}/summary`);
+  t.equal(market.status, 400, 'a market route resolves against the same version');
+  t.equal(market.headers.get('x-registry-version'), registry.versionId);
 
   t.ok(logs.includes('warn: registry snapshot cache unreadable'), 'the log warns that the cache did not answer');
   t.notOk(logs.some(line => line.startsWith('error:')), 'and says nothing of it as an error');
@@ -185,7 +191,7 @@ t.test('a database that cannot be reached, with a namespace that does not answer
   t.equal((await cached.list({ prefix: 'snapshot:' })).keys.length, 1, 'and the bytes of the version on');
   reachable = false;
 
-  for (const path of [ '/registry/v1/active' ]) {
+  for (const path of [ '/registry/v1/active', `/market/${MAINNET}/${UNKNOWN}/summary` ]) {
     const response = await get(env, path);
     t.equal(response.status, 503, `${path} answers 503`);
     const { error } = await response.json() as Envelope;

@@ -13,6 +13,7 @@ import * as KnownNetwork from '../well-known/networks/network.js';
 import type { Expand, OrDefault } from '../type-utilities.js';
 
 import * as evm from './evm.js';
+import { type Reverted, isReverted } from './evm/eth-call.js';
 
 // specification
 
@@ -62,6 +63,10 @@ interface Options<
    * ethCall (d) parses the result.
    */
   parser: (result: AbiResult, context: Spec['expects']) => Return,
+  /* what a revert of the call answers; without it, a revert fails the
+   * computation, as any other error of the call does.
+   */
+  reverted?: (revert: Reverted['reverted'], context: Spec['expects']) => Return,
   signature: Eth.ReadableFunctionSignature,
   parameters?: (context: Spec['expects']) => readonly [ ...ParameterIn<Spec>[] ],
   // or, you can write a custom compute and do it yourself
@@ -76,6 +81,7 @@ interface Implementation<
 {
   coder: ReturnType<typeof getCoder>,
   parser: Options<Spec, Return>['parser'],
+  reverted: Options<Spec, Return>['reverted'],
   parameters: (context: Spec['expects']) => readonly ParameterOut<Spec>[],
 }
 
@@ -86,6 +92,7 @@ function Functor<Spec extends SpecBase>({}: {}) {
     implement<Return extends Compute.Returns<Spec>>(
       {
         parser,
+        reverted,
         version,
         signature,
         compute    = makeDefaultCompute<Spec, Return>(factories),
@@ -98,6 +105,7 @@ function Functor<Spec extends SpecBase>({}: {}) {
         key,
         index,
         parser,
+        reverted,
         version,
         parameters: wrapStrings(parameters),
         coder: getCoder(signature),
@@ -157,6 +165,12 @@ function makeDefaultCompute<
         return factories.pipe<Redex.LookupObject<evm.EthCall>>([
           { ethCall: { apiHost, nodeHost, nodeKey, network, contract, blockNumber, data } },
           ({ ethCall: abiResult }) => {
+            if (isReverted(abiResult)) {
+              if (this.reverted === undefined) {
+                throw new Error(`ethCall: call error: ${JSON.stringify(abiResult.reverted)}`);
+              }
+              return this.reverted(abiResult.reverted, context);
+            }
             return this.parser(this.coder.decode(abiResult), context);
           },
         ]);

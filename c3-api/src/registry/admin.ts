@@ -423,8 +423,8 @@ function refuseRewardFeedWithoutReward(key: string, row: MarketTarget, overlay: 
  * document writes it. One the network already holds exactly as it is was
  * decided before, not by this document: a network overlay is replaced whole,
  * so every later change to the network sends it again, and it is kept as it
- * is — imports clone it the same way — so this is not a check validation
- * makes either.
+ * is — imports clone it the same way, and the catalog stops applying it on
+ * its own — so this is not a check validation makes either.
  */
 function refuseExpired(overlay: NetworkOverlay, held: NetworkOverlay | undefined, scope: string, at: number): void {
   const kept    = new Set((held?.priceExceptions ?? []).map(exception => JSON.stringify(exception)));
@@ -641,12 +641,16 @@ async function writeOverlays(
   }
 
   /*
-   * The creation block is where every index of a market starts. A document
-   * that changes it has it checked against the chain, with one read per
-   * network, whether or not it serves the market: a later document that
-   * switches the market on and keeps the block then serves one that was
-   * checked. A document that keeps the block reads nothing for it, as one
-   * that keeps its feeds does, and a block of 0 states none.
+   * The creation block is where every index of a market starts. One past the
+   * latest block leaves none of the market's values to read, and the market
+   * routes and the rewards of an account answer it as an error until the
+   * chain reaches it (market.ts, unreachedMarket); one before the deployment
+   * fails the history routes that read the market, those over every network
+   * among them. A document that changes it has it checked against the chain,
+   * with one read per network, whether or not it serves the market: a later
+   * document that switches the market on and keeps the block then serves one
+   * that was checked. A document that keeps the block reads nothing for it,
+   * as one that keeps its feeds does, and a block of 0 states none.
    */
   const creations = new Map<string, Parameters<CreationReader>[1]>();
   for (const { key, row, overlay } of changedMarkets) {

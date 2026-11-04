@@ -34,11 +34,11 @@ import type { VersionRef } from './version-headers.js';
  * reached at all, and then it says so, with the age of what it served, so a
  * caller is never told an old version is the current one.
  *
- * The registry's routes read the active version through one entry,
- * activeSnapshot, so they degrade the same way: a database that could not be
- * reached, with nothing within the window to fall back on, is
- * RegistryUnavailable, which every route of the registry answers with 503;
- * one that answered with a fault is raised as it is, and answered 500.
+ * The registry's own routes and the market routes read the active version
+ * through the same entry, activeSnapshot, so they degrade the same way: a
+ * database that could not be reached, with nothing within the window to fall
+ * back on, is RegistryUnavailable, which every route answers with 503; one
+ * that answered with a fault is raised as it is, and answered 500.
  */
 type CachedSnapshot = {
   snapshot: RegistrySnapshotV1,
@@ -73,10 +73,11 @@ type PinnedVersion = {
 
 /*
  * The registry could not be read: nothing is active, or D1 did not answer
- * and nothing within the fallback window is cached. Every route of the
- * registry answers it with 503, since there is nothing else to answer from.
- * The reason tells the two apart for a route that answers them differently;
- * why D1 did not answer is the cause, for the logs.
+ * and nothing within the fallback window is cached. Every route answers it
+ * with 503 — after the cutover there is nothing else to answer from, and
+ * silently answering from the static constants would serve markets nobody
+ * reviewed or activated. The reason tells the two apart for a route that
+ * answers them differently; why D1 did not answer is the cause, for the logs.
  */
 type UnavailableReason = 'not_active' | 'unreadable';
 
@@ -172,11 +173,11 @@ function referenceOf(version: RegistryVersionRow, checksum: string): RegistryVer
  * one registry, not of every database an isolate might hold.
  *
  * The version the pointer named last has a place of its own. Every public
- * read wants it, while the versions sessions pinned are read by id on an
- * anonymous route: in one shared set, a client reading a few old versions
- * would push the active one out, and every request after it would read KV
- * again. The pinned versions share the other places, the one read last kept
- * longest.
+ * read and every market route wants it, while the versions sessions pinned
+ * are read by id on an anonymous route: in one shared set, a client reading a
+ * few old versions would push the active one out, and every request after it
+ * would read KV and build its catalog again. The pinned versions share the
+ * other places, the one read last kept longest.
  */
 type Held = {
   active: { ref: string, snapshot: RegistrySnapshotV1 } | null,

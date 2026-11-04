@@ -80,7 +80,11 @@ const getRewardConfigsSleuth = implement({
     // meaning it's probably safe to just get the first one?
     // (If we do introduce separate reward contracts per Comet on
     // the same network, then choosing 1st won't work.)
-    const cometRewardAddress = cometMarkets[0].rewards.contract.address;
+    const rewards = cometMarkets[0].rewards;
+    if (rewards === undefined) {
+      throw new Error(`invariant violated: ${cometMarkets[0].address} has no rewards contract`);
+    }
+    const cometRewardAddress = rewards.contract.address;
     const cometAddresses = cometMarkets.map((comet) => comet.address);
 
     const iface = new Interface([query.fn]);

@@ -256,8 +256,9 @@ t.test('the convenience reads serve the same objects as the snapshot', async t =
 
 /*
  * Whether chain 999 or a market is known depends on the version that
- * answered, so a public read that fails after the version was read names it.
- * An answer given before any version was read names none.
+ * answered, so a public read that fails after the version was read names it,
+ * as a legacy route's failure does. An answer given before any version was
+ * read names none.
  */
 t.test('a public read that fails after the version was read names the version', async t => {
   const db        = await freshDatabase();
@@ -295,8 +296,9 @@ t.test('a public read that fails after the version was read names the version', 
 
 /*
  * A disabled market is part of the stored version and visible to an operator,
- * but no public read may offer one: the market route refuses it, so listing it
- * would advertise something unusable.
+ * but no public read may offer one: the market route refuses it and the
+ * request catalog does not materialize it, so listing it would advertise
+ * something unusable.
  */
 t.test('a disabled market is not served by any public read', async t => {
   const db = await freshDatabase();

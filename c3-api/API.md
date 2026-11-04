@@ -1,4 +1,234 @@
 # Endpoints
+
+## The market registry
+
+Markets, tokens, and price feeds come from one activated registry version.
+Every response whose content depends on it carries the version that answered:
+
+```
+X-Registry-Version:  8f1e0f3c-3b7a-4e8f-9a1b-1f0f0b9a2c44
+X-Registry-Checksum: 1bd74ebe00d845e0fa5e648b22a2c39e60d9a62bf6c58190320fa01cd9a26a4a
+```
+
+Endpoints that resolve a market answer `503` with the code
+`REGISTRY_NOT_ACTIVE` when no version is active, and `400` for an address the
+active version does not describe. The registry's own endpoints are documented
+under [Registry v1](#registry-v1).
+
+When the database cannot be reached, a response may instead be computed from
+the version that was active the last time it could. It then carries its age
+in seconds and is not cacheable:
+
+```
+X-Registry-Stale: 137
+Cache-Control:    no-store
+```
+
+A client that must not act on an older version refuses such a response; one
+that only reads can use it. How long that is allowed is per environment, and
+a `503` with the code `UPSTREAM_UNAVAILABLE` is the answer once the window has
+passed. These endpoints and the registry's own fail the same way.
+
+Testnets are not served: the registry imports mainnets only. A request that
+names one is answered `400` in the [envelope](#errors), with the code
+`TESTNET_NOT_SERVED` and a message naming what named it, rather than with
+nothing or with mainnet data. It is refused before the registry is read, so
+it is answered so while no version is active, or the database cannot be
+reached, too:
+
+- a testnet as the `{network}` of a market route, such as
+  `/market/sepolia/all/summary`;
+- `testnets=include` on a route over every network
+  (`/market/all-networks/all-contracts/…`) or on `/account/{address}/rewards`;
+- a testnet market in the `markets[]` of the transaction history.
+
+```json
+{ "error": { "code": "TESTNET_NOT_SERVED", "message": "testnets are not served: ethereum-sepolia", "requestId": "4f6c1a2e-…" } }
+```
+
+Any other value of `testnets` leaves them out, as it always has.
+
+## Errors
+
+An error is answered as JSON in one envelope, whichever endpoint answers it:
+
+```json
+{ "error": { "code": "REGISTRY_NOT_ACTIVE", "message": "No active registry snapshot is available", "requestId": "4f6c1a2e-…" } }
+```
+
+`code` is what a client branches on, `message` is for a person, and
+`requestId` names the request in the worker's log: quote it when you report
+one. Every `5xx`, `401` and `403` answer is logged under it, and so is the
+outcome of every import an administrative sync runs; any other answer says
+all there is to say about it, and is not logged. `details`, when present,
+says more about the failure, such as the version a cursor was issued
+against. A path no endpoint matches is a `404` with the code `NOT_FOUND` —
+but one of four segments or more outside `/registry/v1/` is taken by the
+pattern of the market and governance endpoints,
+`/{resource}/{network}/{contract}/{endpoint}`, and answered as a malformed
+parameter of theirs is (below), with a `400` such as `Error: Bad network …`
+or `Error: Not a valid resource API`.
+
+Outside the registry, a request a node provider did not serve is a `503`
+with the code `UPSTREAM_UNAVAILABLE`: the node provider proxy failed it or
+could not be reached, or answered a call with an error that is not a revert,
+such as a rate limit. It can succeed later — after the seconds `Retry-After`
+names, when the proxy said, which a browser can read. A call the contract
+reverted is its answer instead: a price read reports it as a
+[status](#market-status), and any other call that reverts fails the request
+with a `500`. The registry's endpoints say how they answer either under
+[Registry v1](#registry-v1).
+
+A `500` is answered with the code `INTERNAL` and the message `the request
+could not be completed`, never with what failed — a database error, or what
+an upstream API such as Tally answered: that is in the log, under the
+`requestId`. A request with a malformed parameter is the exception to the
+envelope: the market, governance and account endpoints still answer it with
+a `400` and a short message — a line of plain text, or `{"error": "…"}`
+from some market endpoints.
+
+## Market status
+
+Every price is read through its feed's `latestRoundData`, which reverts once
+Chainlink retires the feed. So every market a market route answers — the
+summaries, their history, the rewards routes and `/account/{address}/rewards`
+— carries a `status`:
+
+- `success`: everything was read.
+- `partially` (summaries and history only): the base asset was priced, and at
+  least one collateral was not — its feed reverted, or the Comet holds
+  another asset at its index than the registry version describes. The totals
+  leave that collateral out, and `collaterals` says which it was.
+- `error`: the base asset could not be priced, or — for the rewards routes —
+  a price the rewards are valued in: the reward token's, the base asset's, or
+  the USD price a base-quoted reward is converted with. `/summary` still
+  reports every field that does not need a price that failed — the section
+  on `/summary` below says which — and its `total_collateral_value` leaves
+  out a collateral that could not be priced, as in `partially`. Elsewhere —
+  on the other routes, and on each such day of a history — only what
+  identifies the market is reported, with the node's message:
+
+```json
+{ "chain_id": 1, "comet": { "address": "0xe85d…9293" }, "status": "error", "message": "execution reverted" }
+```
+
+`/market/{network}/{address}/rewards/summary` names no market in its answer,
+so its `error` is `{ "status": "error", "message": … }` alone.
+
+A summary lists every collateral with its own status:
+
+```json
+"status": "partially",
+"collaterals": [
+  { "address": "0xc00e…6888", "symbol": "COMP",  "status": "success" },
+  { "address": "0x57f5…7812", "symbol": "wUSDM", "status": "error", "message": "execution reverted" }
+]
+```
+
+A history reports this per day, with the day's `date` and `timestamp`. A
+market is read in full again once a registry version that says how to price
+the feed is active.
+
+A market whose `creationBlock` in the active version is past the latest
+block of its chain is `error` too, on every market route and on
+`/account/{address}/rewards`, asked for alone or among others, and in a
+history on every day. None of its values can be read, since every index of
+a market starts at its creation block, and the other markets are answered
+as usual. The message names the block:
+
+```json
+{ "chain_id": 1, "comet": { "address": "0x3Afd…0840" }, "status": "error", "message": "creationBlock 33400000 is past the latest block, 23400000" }
+```
+
+`/summary` answers it with what the registry version says of the market as
+well, as it answers every market, since none of that is read: the rewards
+contract and the bulker in `comet`, and the market's keys and labels after
+it ([Market registry fields](#market-registry-fields)):
+
+```json
+{ "chain_id": 1, "comet": { "address": "0x3Afd…0840", "rewards": "0x1B0e…5a40", "bulker": "0xa397…00c7" }, "deployment_key": "usdt", "display_name": "USDT", "base_asset_name": "Tether", "is_wrapped_native": false, "is_default": false, "is_institutional": false, "status": "error", "message": "creationBlock 33400000 is past the latest block, 23400000" }
+```
+
+Writing an overlay refuses such a block, but a version can hold one that
+write never checked — inherited by an import from an overlay written before
+it did, say. The market is answered so until a version with the right block
+is active, or until the chain reaches the block. From then on it is read
+again, but its history repeats the day of that block for every day before
+it, so the block still needs correcting.
+
+Only these report a status this way: a node that does not answer still fails
+the whole request, with `503 UPSTREAM_UNAVAILABLE`, and so does any other call
+that reverts, with `500 INTERNAL` ([Errors](#errors)).
+
+```json
+{ "address": "0x1f98…f984", "symbol": "UNI", "status": "error", "message": "asset 3 of the Comet is 0x…, not the UNI the registry version describes" }
+```
+
+## Market labels
+
+The rewards routes — `/market/all-networks/all-contracts/rewards/dapp-data`
+and `/account/{address}/rewards` — name each market by the labels the registry
+gives it: `base_asset.symbol` is the market's label and
+`base_asset.description` its base asset's name — `ETH` and `Ether` for a WETH
+market, `USDC.e` (`USDbC` on Base) and `USD Coin (Bridged)` for bridged USDC,
+`USD₮0` where Tether renamed its token:
+
+```json
+{ "chain_id": 1, "comet": { "address": "0xa175…ae94" }, "base_asset": { "symbol": "ETH", "description": "Ether", … }, … }
+```
+
+A version that changes a label is answered as soon as it is active.
+
+`/summary` answers the same two labels as `display_name` and
+`base_asset_name` ([Market registry fields](#market-registry-fields)), but
+names each collateral by the token's own on-chain symbol (`WETH`). The
+history does too, except where the network renames a token in place: bridged
+USDC is `USDC.e` there, although its `symbol()` answers `USDC`. One token can
+therefore appear under two names across the API, so match a market by
+`chain_id` and `comet.address`, never by its symbol.
+
+## Market registry fields
+
+`/summary` answers, beside what it read of each market, what the active
+registry version says of it, as `/registry/v1/active` serves the market.
+`comet` names the market's Comet (`address`), then its rewards contract
+(`rewards`) and its bulker (`bulker`): the market's `contracts.rewards` and
+`contracts.bulker`. The rest comes right after `comet`, before `status`:
+
+- `deployment_key` (`deploymentKey`): the market's key in the version, unique
+  within its chain; with `chain_id` it names the market, such as `usdc`
+- `display_name` (`displayName`): its label, such as `USDC`, `ETH` for a
+  WETH market, or `USDC.e` — what the rewards routes answer as
+  `base_asset.symbol`
+- `base_asset_name` (`baseAsset.displayName`): its base asset's name, such
+  as `USD Coin` or `Ether` — their `base_asset.description`
+- `is_wrapped_native` (`baseAsset.isWrappedNative`): whether its base token
+  wraps the chain's own token, as WETH does
+- `slug`: the key the website links the market by, where the version gives
+  one; without one the website links it by its label, so two markets of a
+  network with the same label are told apart by a slug
+- `is_default` (`isDefault`): whether it is the market the website opens
+  first
+- `is_institutional` (`isInstitutional`): whether the website lists it in
+  its institutional section
+
+```json
+{ "chain_id": 1, "comet": { "address": "0xc3d6…cdc3", "rewards": "0x1B0e…5a40", "bulker": "0xa397…00c7" }, "deployment_key": "usdc", "display_name": "USDC", "base_asset_name": "USD Coin", "is_wrapped_native": false, "is_default": true, "is_institutional": false, "status": "success", … }
+```
+
+Each address is checksummed, as `address` is, where `/registry/v1/active`
+writes it lowercase. What the version has none of — a rewards contract, a
+bulker or a slug, which `/registry/v1/active` answers as `null` — is left
+out. None of it is read, so every market has it whatever its `status`, one
+the chain has not reached too ([Market status](#market-status)), and a
+version that changes it is answered as soon as it is active.
+
+Everywhere else `comet` is the Comet's `address` alone. The rewards routes
+answer the rewards contract as `comet_rewards.address`, and the two labels
+as `base_asset.symbol` and `base_asset.description`
+([Market labels](#market-labels)). A day of a history answers none of it,
+and `/market/{network}/{address}/rewards/summary` names no market.
+
 ## Pagination
 
 Many endpoints are paginated for convenience. If an endpoint is paginated,
@@ -16,30 +246,135 @@ endpoint and `GET`ting it again.
 ### description:
 
 Point-in-time summary at the current block of various market statistics:
-- Total collateral value (in USD)
-- Total borrow value (in USD)
+- Total collateral, supply and borrow value, in the unit the market's price
+  feeds answer in: USD, or the base asset for a market quoted in it, such as
+  ETH for a WETH market
 - Borrow APR
 - Supply APR
+- Utilization, as the Comet answers it: a fraction scaled by 10^18
+- The base asset's price in USD (`base_usd_price`)
+- The base asset's price in the unit the market's price feeds answer in
+  (`base_price`): what `total_supply_value` and `total_borrow_value` are
+  valued at, so either divided by it is an amount of the base asset. It is
+  `1.0` through a constant feed, as on a WETH or wstETH market, and WBTC in
+  BTC on the WBTC market (`0.9984988`, say), whose feeds answer in BTC and
+  whose `base_usd_price` is the price of BTC. On a market quoted in USD it is
+  the same number as `base_usd_price` while both are read through one feed
+  (below), but a total is still divided by `base_price`. It is written as
+  `base_usd_price` is, and not rounded
+- What the active registry version says of the market: its rewards contract
+  and its bulker beside its Comet, in `comet`, and its keys and labels — see
+  [Market registry fields](#market-registry-fields)
+- What could be priced: `status`, and `collaterals` with each collateral's
+  own status — see [Market status](#market-status)
+
+Every form of the route answers a list: of the one market `{address}` names;
+for `all-contracts`, of every market the active version serves on
+`{network}`, an empty one where it serves none; and of every market of every
+network for `/market/all-networks/all-contracts/summary`.
+
+The collaterals are those the active registry version describes for the
+market, in the order the Comet numbers them, and named as the version names
+them: a collateral the Comet listed after the version was imported is left
+out until a version describes it, and the registry's chain check raises it
+meanwhile ([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#a-market-that-changed-on-chain)).
+Where the Comet now holds another asset at a collateral's index, that
+collateral is `error`, and its `message` names the asset the Comet holds
+there. Each is priced through the feed the Comet reads for it at the block
+summarized. A history lists instead the collaterals its Comet listed on each
+day, named by their token's `symbol()`.
+
+The base asset has two prices: its price in the market's unit,
+`base_price`, through the base feed the Comet names, which values
+`total_borrow_value` and `total_supply_value`; and its price in USD,
+`base_usd_price`, through the feed the registry version names for it — on a
+market quoted in USD, that same base feed while the version agrees with the
+chain, so both fail together. The market is `error` where either could not
+be read, with the node's message for the first where it failed, otherwise
+for the second, and still reports every field that does not need a price
+that failed: it leaves out `base_price`, `total_borrow_value` and
+`total_supply_value` where the first failed, and `base_usd_price` where the
+second did. The totals stay in the market's unit: on a market quoted in its
+base asset they are in the unit its feeds answer in — ETH, wstETH or
+BTC — and without `base_usd_price` nothing here converts them to USD.
+`total_collateral_value` leaves out each collateral that is `error`, as in
+`partially`. A USDC market whose base feed reverts, and which the version
+gives no rewards contract or bulker:
+
+```json
+[ {
+  "chain_id": 1,
+  "comet": { "address": "0x…" },
+  "deployment_key": "usdc-example",
+  "display_name": "USDC",
+  "base_asset_name": "USD Coin",
+  "is_wrapped_native": false,
+  "slug": "usdc-example",
+  "is_default": false,
+  "is_institutional": false,
+  "status": "error",
+  "message": "execution reverted",
+  "borrow_apr": "0.014999999976144",
+  "supply_apr": "0.0",
+  "total_collateral_value": "0.0",
+  "utilization": "0",
+  "collateral_asset_symbols": [ "USDT", "WETH" ],
+  "collaterals": [
+    { "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "symbol": "USDT", "status": "success" },
+    { "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "symbol": "WETH", "status": "success" }
+  ]
+} ]
+```
 
 ```sh
 $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3/summary'
 ```
 ```json
-{
-  "date": "2022-09-12",
-  "timestamp": 1663006848,
-  "total_collateral_value": "736406396.32667881067597418742582842",
-  "total_borrow_value": "291934.5637828698",
+[ {
+  "chain_id": 1,
+  "comet": {
+    "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
+    "rewards": "0x1B0e765F6224C21223AeA2af16c1C46E38885a40",
+    "bulker": "0xa397a8C2086C554B531c02E29f3291c9704B00c7"
+  },
+  "deployment_key": "usdc",
+  "display_name": "USDC",
+  "base_asset_name": "USD Coin",
+  "is_wrapped_native": false,
+  "is_default": true,
+  "is_institutional": false,
+  "status": "success",
   "borrow_apr": "0.024456245200128",
-  "supply_apr": "0.008780799134304"
-}
+  "supply_apr": "0.008780799134304",
+  "total_borrow_value": "291934.56378333468",
+  "total_supply_value": "802511.31504732864",
+  "total_collateral_value": "736406.32667881067597418742582842",
+  "utilization": "363775913612426560",
+  "base_usd_price": "0.99996",
+  "base_price": "0.99996",
+  "collateral_asset_symbols": [ "COMP", "WBTC", "WETH", "UNI", "LINK" ],
+  "collaterals": [
+    { "address": "0xc00e94Cb662C3520282E6f5717214004A7f26888", "symbol": "COMP", "status": "success" },
+    { "address": "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599", "symbol": "WBTC", "status": "success" },
+    { "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "symbol": "WETH", "status": "success" },
+    { "address": "0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984", "symbol": "UNI",  "status": "success" },
+    { "address": "0x514910771AF9Ca656af840dff83E8264EcF986CA", "symbol": "LINK", "status": "success" }
+  ]
+} ]
 ```
 
 ## `/market/{network}/{address}/historical/summary`
 ### description:
 
-30 days of historical `/summary`s, starting from the current day, sampling
-a single block per-day.
+30 days of historical `/summary`s — two in stage, and one in a local run —
+one block sampled per day, oldest first, up to the most recent day sampled.
+Each day carries its `date` and `timestamp`, and the fields of the summary
+but `base_price` and what the registry version says of the market
+([Market registry fields](#market-registry-fields)): its `comet` is the
+Comet's `address` alone.
+
+A day whose base asset could not be priced reports only what identifies the
+market, with the node's message ([Market status](#market-status)).
 
 ```sh
 $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3/historical/summary'
@@ -47,23 +382,57 @@ $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3
 ```json
 [
   {
-    "date": "2022-09-12",
-    "timestamp": 1663006848,
-    "total_collateral_value": "736406396.32667881067597418742582842",
-    "total_borrow_value": "291934.5637828698",
-    "borrow_apr": "0.024456245200128",
-    "supply_apr": "0.008780799134304"
+    "chain_id": 1,
+    "comet": {
+      "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3"
+    },
+    "status": "success",
+    "borrow_apr": "0.014999999976144",
+    "supply_apr": "0.0",
+    "total_borrow_value": "0.0",
+    "total_supply_value": "0.0",
+    "total_collateral_value": "0.0",
+    "utilization": "0",
+    "base_usd_price": "1.0",
+    "collateral_asset_symbols": [ "COMP", "WBTC", "WETH", "UNI", "LINK" ],
+    "collaterals": [
+      { "address": "0xc00e94Cb662C3520282E6f5717214004A7f26888", "symbol": "COMP", "status": "success" },
+      ...
+    ],
+    "timestamp": 1660504680,
+    "date": "2022-08-14"
   },
   ...,
   {
-    "date": "2022-08-14",
-    "timestamp": 1660504680,
-    "total_collateral_value": "0.0",
-    "total_borrow_value": "0.0",
-    "borrow_apr": "0.014999999976144",
-    "supply_apr": "0.0"
+    "chain_id": 1,
+    "comet": {
+      "address": "0xc3d688B66703497DAA19211EEdff47f25384cdc3"
+    },
+    "status": "success",
+    "borrow_apr": "0.024456245200128",
+    "supply_apr": "0.008780799134304",
+    ...,
+    "timestamp": 1663006848,
+    "date": "2022-09-12"
   }
 ]
+```
+
+Every day reads the base asset's USD price from the feed the active version
+names: a day before that feed was deployed — before governance moved the
+market to it, say — answers `error` ([Market status](#market-status)). A
+collateral the version remaps to another feed (`deprecated_price_remap`) is
+read from that feed, and where it does not answer — on a day before it was
+deployed — from the feed its Comet named that day; the collateral is
+`error`, and the day `partially`, only when neither answers.
+
+A market whose creation block is past the latest block has no day to
+sample ([Market status](#market-status)). It reports the same days as the
+other markets of its network, each as its `error` with the day's `date` and
+`timestamp`:
+
+```json
+{ "chain_id": 1, "comet": { "address": "0x3Afd…0840" }, "status": "error", "message": "creationBlock 33400000 is past the latest block, 23400000", "timestamp": 1758012347, "date": "2025-09-16" }
 ```
 
 ## `/market/{network}/{address}/rewards/summary`
@@ -72,11 +441,25 @@ $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3
 Point-in-time summary at the most-recently-sampled block (which may not be
 the 'latest' block per se) of rewards rates and APRs for a v3 market.
 
+A market the active registry version gives no rewards — the Scroll and Ronin
+markets, and a Comet with no rewards configured, such as mainnet ciUSDCv3 —
+answers `404` rather than a summary, because there is no reward price to
+value its rewards with:
+
+```json
+{ "error": { "code": "REWARDS_NOT_AVAILABLE", "message": "Rewards are not available for this market", "requestId": "4f6c1a2e-…" } }
+```
+
+`/market/{network}/{address}/rewards/dapp-data` lists the markets whose
+rewards can be valued and leaves the others out, so for such a market it
+answers an empty list rather than `404`.
+
 ```sh
 $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3/rewards/summary'
 ```
 ```json
 {
+  "status": "success",
   "supply_rewards_apr": "0.01753045422122093652885",
   "borrow_rewards_apr": "0",
   "supply_rewards_rate_per_second": "0.000011574074074",
@@ -91,8 +474,8 @@ Aggregate of all governance proposals across Governors alpha and bravo.
 
 Query parameters:
 - Pagination: `page_size`, `page_number`
-- `proposal_ids[]=123,...` [optional] - filter proposals to only those
-  having one of the given ids.
+- `proposal_ids=123,124,...` [optional] - filter proposals to only those
+  having one of the given ids, separated by commas in one parameter.
 
 ```sh
 $ curl 'localhost:8787/governance/mainnet/all/proposals'
@@ -260,10 +643,14 @@ ordered by their delegated voting power (not by their actual COMP
 balance).
 
 Query parameters:
-- Pagination:
-  - `page_size` [default 5]
-  - `page_number`
-  - `addresses` - account addresses to filter down to from all accounts
+- Pagination, which is checked and not applied: without `addresses`, the
+  answer is the 20 accounts with the most voting power, as Tally ranks them.
+  - `page_size` - at most 20
+  - `page_number` - `1` only
+- `addresses` - account addresses to filter down to from all accounts
+
+A `page_size` over 20, another `page_number` or an address that is not one
+is a `400` with a line of plain text.
 
 ```sh
 $ curl 'localhost:8787/governance/mainnet/comp/accounts'
@@ -331,6 +718,7 @@ $ curl 'localhost:8787/governance/mainnet/comp/accounts'
     "proposals_voted": 79,
     "total_delegates": 25
     }
+    ...
   ]
 }
 ```
@@ -468,9 +856,45 @@ Retrieves comet transaction history for a given account address.
 
 Query parameters:
 - `limit` (optional): number of max items to retrieve. Default and max is 15.
-- `markets[]` (optional): array of markets filter to be included in the response. Default is all non-testnet markets. (e.g. filter only Ethereum cUSDCv3 market `markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3`)
+- `markets[]` (optional): array of markets filter to be included in the response. Default is every market whose history the active version serves. A market of a testnet is refused with `TESTNET_NOT_SERVED` ([The market registry](#the-market-registry)), and one whose history the active version does not serve with a `400`, `Invalid market address …`. (e.g. filter only Ethereum cUSDCv3 market `markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3`)
 - `actions[]` (optional): array of actions to filter transactions by. Default is all actions. (e.g. filter only borrow actions `actions[]=Borrow`)
 - `cursor` (optional): The first response (with no cursor parameter) will return with a cursor value, to pass that cursor value will allow request to get more transaction history further in the past.
+
+A cursor holds a position in the logs of every market whose history its
+version serves, whatever `markets[]` keeps. Markets that share a rewards
+contract are read together, in ranges of blocks counted from the earliest
+creation block among them. A cursor stays valid across registry versions that
+read the same markets from the same blocks — a rollback, a new import of the
+same source, a market given a new label — and each page names the version
+that answered it. A version that reads other markets ends it, and so does one
+that counts their ranges from another block, as a corrected creation block
+can; every version ends a cursor issued before the registry, whatever that
+one reads. The request answers `409`, and the client restarts pagination
+without a cursor. `markets[]` is checked first as far as it can be without
+the registry, so a testnet market is refused as above, cursor or not. The
+cursor is then judged before the filter's markets are resolved against the
+active version: a version that no longer serves the history of a market the
+filter names ends the cursor with this `409` too, and the first page of the
+new pagination refuses that market. `cursorRegistryVersionId` names the
+version the cursor was issued against, and is `null` for a cursor issued
+before the registry:
+
+```json
+{
+  "error": {
+    "code": "REGISTRY_VERSION_CHANGED",
+    "message": "the markets of the registry changed; restart pagination without a cursor",
+    "requestId": "4f6c1a2e-...",
+    "details": {
+      "cursorRegistryVersionId": "8f1e0f3c-...",
+      "registryVersionId": "b2c4d6e8-..."
+    }
+  }
+}
+```
+
+A value that is not a cursor this API handed out is a `400` with the text
+`Cursor is invalid`.
 
 ```sh
 $ curl 'localhost:8787/account/0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5/transaction_history?limit=30&actions[]=Borrow&markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3'
@@ -548,32 +972,25 @@ $ curl 'localhost:8787/account/0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5/transa
 # Registry v1
 
 Everything under `/registry/v1` is answered by the registry, including its
-errors, which are JSON in one envelope:
+errors, which use the [envelope](#errors) every endpoint uses:
 
 ```json
 { "error": { "code": "CONFLICT", "message": "...", "requestId": "...", "details": { "code": "SYNC_ALREADY_RUNNING" } } }
 ```
 
-`code` is what a client branches on, `message` is for a person, and
-`requestId` names the request in the worker's log: quote it when you report
-one. Every `5xx`, `401` and `403` answer is logged under it, and so is the
-outcome of every import an administrative sync runs; any other answer says
-all there is to say about it, and is not logged. `details`, when present,
-says more about the failure. A `500` is answered with the code `INTERNAL` and
-the message `the request could not be completed`, never with what failed,
-such as a database error: that is in the log, under the `requestId`.
-
 `error.code` is the kind of answer: `BAD_REQUEST` (400), `UNAUTHORIZED`
 (401), `FORBIDDEN` (403), `NOT_FOUND` (404), `METHOD_NOT_ALLOWED` (405),
 `CONFLICT` (409), `PAYLOAD_TOO_LARGE` (413), `UNPROCESSABLE` (422),
 `RATE_LIMITED` (429), `REGISTRY_NOT_ACTIVE` (503), `UPSTREAM_UNAVAILABLE` (503)
-and `INTERNAL` (500). A failure the registry names more precisely — an
-import, a chain read, an overlay — carries its own code in `details.code`,
-such as `SYNC_ALREADY_RUNNING` or `OVERLAY_FEED_UNREADABLE`, under the kind of
-answer it is; a monitor matches `details.code` for those. Besides
+and `INTERNAL` (500); the market endpoints add `REWARDS_NOT_AVAILABLE` (404),
+`REGISTRY_VERSION_CHANGED` (409) and `TESTNET_NOT_SERVED` (400), described
+with them. A failure the registry names more precisely — an import, a chain
+read, an overlay — carries its own code in `details.code`, such as
+`SYNC_ALREADY_RUNNING` or `OVERLAY_FEED_UNREADABLE`, under the kind of answer
+it is; a monitor matches `details.code` for those. Besides
 `REGISTRY_NOT_ACTIVE`, only a source or a node provider that did not answer,
-and a database that could not be reached, are a `503`: those are the answers
-worth trying again.
+and a database that could not be reached, are a `503`, here as on every
+endpoint ([Errors](#errors)): those are the answers worth trying again.
 
 Public reads are cacheable and carry `ETag`, `X-Registry-Version` and
 `X-Registry-Checksum`, which a browser can read, and answer `304` to an
@@ -587,20 +1004,6 @@ comes from the cache because the database cannot be reached. They answer
 `503 UPSTREAM_UNAVAILABLE` when the database cannot be reached and no older
 version may be served instead. A path is matched with or without a trailing
 slash.
-
-When the database cannot be reached, a public read may instead be answered
-from the version that was active the last time it could. It then carries its
-age in seconds and is not cacheable:
-
-```
-X-Registry-Stale: 137
-Cache-Control:    no-store
-```
-
-A client that must not act on an older version refuses such a response; one
-that only reads can use it. How long that is allowed is per environment, and
-a `503` with the code `UPSTREAM_UNAVAILABLE` is the answer once the window has
-passed.
 
 A public read that fails after the active version was read names that
 version in the same two headers: a chain or a market it does not serve
@@ -892,7 +1295,7 @@ can check that it is empty without knowing the registry's rules:
 | Alert | Means |
 |---|---|
 | `configuration-invalid` | a registry setting is set to something it does not take — a number that is not a whole number in its range, or a repository or ref that names no source; `configuration.invalid` names each. The import refuses to start while one of its own is invalid, and a read takes the default in its place |
-| `no-active-version` | nothing is activated, so the registry's public reads answer `503` |
+| `no-active-version` | nothing is activated, so every market route answers `503` |
 | `candidate-awaiting-review` | a draft is held for review and no import is running: somebody has to review it and validate it, or discard it |
 | `candidate-awaiting-activation` | a version newer than any ever switched on validated, and is waiting to be — what the scheduled import produces for a new commit; `candidates.validated` lists it. It holds until a version at least that new is switched on |
 | `candidate-drops-markets` | a version `candidates.validated` lists would stop serving a market the active version serves: its `unserved` names each, by its key in the active version — a deployment the source dropped, renamed to a key nobody has reviewed, or whose key it gave to another Comet, or a market a review switched off. Nothing holds such a version back, and it can be switched on; `GET /registry/v1/admin/versions/{version_id}/changes` says where each Comet went (`markets.unserved`). It holds until a version at least that new is switched on |
@@ -1147,9 +1550,9 @@ the activation.
 ## `POST /registry/v1/admin/versions/{version_id}/activate`
 ### description:
 
-Makes a validated version the one the registry serves. Requires a `reason`,
-which is stored with the audit event. Activating the version that is already
-active changes nothing.
+Makes a validated version the one the API serves. Requires a `reason`, which
+is stored with the audit event. Activating the version that is already active
+changes nothing.
 
 `expectedActiveVersionId` — [optional] — the version the move is decided
 against, or `null` when nothing is on yet. When it is no longer the version
@@ -1291,13 +1694,19 @@ rewards contract names no reward token is refused with `409`.
 A `creationBlock` the document changes is held against the chain, unless it
 is `0`: it must be the block the market's Comet was deployed in — the Comet
 has code at that block and none at the block before it — and not past the
-chain's latest block. A block the chain contradicts is refused with `422` and
-`details.code` `OVERLAY_CREATION_BLOCK_WRONG`, whose message names the block
-and says whether it is before the deployment, after it, or past the latest
-block, and nothing is written; a node provider that did not answer is `503`,
-worth trying again. A document that keeps the block the version holds reads
-nothing of the chain for it, and a market switched off is held to the same
-rule, so switching it on later keeps a block that was checked.
+chain's latest block. Every index of the market starts there. One past the
+latest block leaves none of the market's values to read, and the market
+routes and `/account/{address}/rewards` answer it as `error` until the chain
+reaches it ([Market status](#market-status)); one before the deployment
+fails the history routes that read the market, those over all networks among
+them, while the market is younger than the days they report. A block the
+chain contradicts is refused with `422` and `details.code`
+`OVERLAY_CREATION_BLOCK_WRONG`, whose message names the block and says
+whether it is before the deployment, after it, or past the latest block, and
+nothing is written; a node provider that did not answer is `503`, worth
+trying again. A document that keeps the block the version holds reads nothing
+of the chain for it, and a market switched off is held to the same rule, so
+switching it on later keeps a block that was checked.
 
 It also states how the frontend lists the market. `displayName` is its label,
 `slug` — lowercase letters, digits, dots and hyphens, or `null` — is what the

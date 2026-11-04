@@ -19,23 +19,29 @@ type ApiErrorCode = (
   | 'UNPROCESSABLE'
   | 'RATE_LIMITED'
   | 'REGISTRY_NOT_ACTIVE'
+  | 'REGISTRY_VERSION_CHANGED'
+  | 'REWARDS_NOT_AVAILABLE'
+  | 'TESTNET_NOT_SERVED'
   | 'UPSTREAM_UNAVAILABLE'
   | 'INTERNAL'
 );
 
 const STATUS: Record<ApiErrorCode, number> = {
-  BAD_REQUEST:          400,
-  UNAUTHORIZED:         401,
-  FORBIDDEN:            403,
-  NOT_FOUND:            404,
-  METHOD_NOT_ALLOWED:   405,
-  CONFLICT:             409,
-  PAYLOAD_TOO_LARGE:    413,
-  UNPROCESSABLE:        422,
-  RATE_LIMITED:         429,
-  REGISTRY_NOT_ACTIVE:  503,
-  UPSTREAM_UNAVAILABLE: 503,
-  INTERNAL:             500,
+  BAD_REQUEST:              400,
+  UNAUTHORIZED:             401,
+  FORBIDDEN:                403,
+  NOT_FOUND:                404,
+  METHOD_NOT_ALLOWED:       405,
+  CONFLICT:                 409,
+  PAYLOAD_TOO_LARGE:        413,
+  UNPROCESSABLE:            422,
+  RATE_LIMITED:             429,
+  REGISTRY_NOT_ACTIVE:      503,
+  REGISTRY_VERSION_CHANGED: 409,
+  REWARDS_NOT_AVAILABLE:    404,
+  TESTNET_NOT_SERVED:       400,
+  UPSTREAM_UNAVAILABLE:     503,
+  INTERNAL:                 500,
 };
 
 class ApiError extends Error {
@@ -75,9 +81,8 @@ function methodNotAllowed(method: string, pathname: string, allowed: string[]): 
 }
 
 /*
- * The answer to a request a node provider did not serve, on every route of the
- * registry: worth trying again, after as long as the node provider proxy
- * asked, when it said.
+ * The answer to a request a node provider did not serve, on every route: worth
+ * trying again, after as long as the node provider proxy asked, when it said.
  */
 function nodeUnavailable(error: NotServed): ApiError {
   const retryAfter: Record<string, string> = error.retryAfter === null ? {} : { 'Retry-After': String(error.retryAfter) };
@@ -105,9 +110,9 @@ function errorBody(error: ApiError, requestId: string): Record<string, unknown> 
 }
 
 /*
- * The one shape every error answer of the registry takes, whichever of its
- * routers answers it: the envelope as JSON, with the headers the error needs
- * to mean what it says.
+ * The one shape every error answer of the API takes, whichever router
+ * answers it: the envelope as JSON, with the headers the error needs to mean
+ * what it says.
  */
 function errorResponse(error: ApiError, requestId: string, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(errorBody(error, requestId)), {

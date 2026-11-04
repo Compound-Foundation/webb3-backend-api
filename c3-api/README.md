@@ -13,8 +13,8 @@ Install dependencies with Node.js 22 or newer:
 npm install
 ```
 
-The worker reads the chain through the node provider proxy, and the registry
-keeps its markets in the worker's D1 database, so a local run needs both.
+The worker reads its markets from the registry in its D1 database, and the
+chain through the node provider proxy, so a local run needs both.
 
 Create the local database, with every migration applied:
 ```sh
@@ -45,21 +45,21 @@ the proxy that `NODE_PROXY_HOST` and `NODE_PROXY_KEY` in `.dev.vars` name — a
 deployed one, reached over HTTPS ([.dev.vars.example](./.dev.vars.example)).
 With neither, every read of the chain fails.
 
-Then hit an endpoint:
-```
-curl 'http://localhost:8787/market/{network}/{contract}/summary'
-```
-
-Substituting a [well-known address](./lib/eth-constants.ts) to a Comet
-market contract for `{contract}` and a network (e.g. mainnet) for
-`{network}`.
-
-The registry's public reads answer `503 REGISTRY_NOT_ACTIVE` until a registry
+Every market route answers `503 REGISTRY_NOT_ACTIVE` until a registry
 version is active. Bring one up as an operator brings up an environment: put
 the hash of an admin token of your own into `.dev.vars` before starting the
 worker ([The admin token](./REGISTRY_RUNBOOK.md#the-admin-token)), and follow
 [Bringing an environment up for the first time](./REGISTRY_RUNBOOK.md#bringing-an-environment-up-for-the-first-time)
 with `API=http://localhost:8787`.
+
+Then hit an endpoint:
+```
+curl 'http://localhost:8787/market/{network}/{contract}/summary'
+```
+
+Substituting the address of a Comet the active version serves for
+`{contract}` — `/registry/v1/networks/{chain_id}/markets` lists them — and a
+network (e.g. mainnet) for `{network}`.
 
 See [API.md](./API.md) for documentation of routes with examples.
 
@@ -165,19 +165,70 @@ its root from GitHub, three rounds of reads from the node, three D1
 statements or batches — and about thirty for the run.
 
 `wrangler.toml` sets no `[limits]`, so stage and production have the plan's
-defaults: an import of the whole source stays far inside its subrequests. A
-`[limits]` section changes them for one Worker, for example to a million
-subrequests and 60 seconds of CPU an invocation.
+defaults: an import of the whole source, or the summary of every market — four
+calls to the node provider proxy per network — stays far inside its
+subrequests. The history of every market, with none of its days cached,
+stays inside them as well: three calls to the proxy per market and one per
+network, beside four KV operations for each day of each market — about 3,600
+subrequests for the 29 markets of the source over 30 days. A `[limits]`
+section changes them for one Worker, for example to a million subrequests
+and 60 seconds of CPU an invocation.
 
 # The Comet Market Registry
 
-Markets, their tokens, and their price feeds are kept in `APP_DB` as versions
-of the registry, each imported from Compound's source and the chain and
-validated before an operator activates it. The registry's public reads under
-`/registry/v1` serve the active version, and report which version answered
-in `X-Registry-Version` and `X-Registry-Checksum` on the response. No other
-route reads it: the market, account, governance and transaction history
-routes serve the markets of the static constants.
+Markets, their tokens, and their price feeds come from the registry in
+`APP_DB`, not from the static constants. One activated version answers a
+whole request: the router that answers it loads the version once, hands the
+same catalog to every computation of that request, and reports which version
+answered in `X-Registry-Version` and `X-Registry-Checksum` on the response.
+
+A computation takes a market in one form: the Comet the catalog materialized
+for it (`RegistryComet`, in
+[lib/model/comet-registry.ts](./lib/model/comet-registry.ts)) — the contract
+shape the static constants used, carrying the version's description of the
+market. Its units, its labels, its reward feed and the price exceptions of
+its network are read from that description, and every computation that
+reads it, or hands its market to one that does, is typed to take nothing
+else. The constants name no market of a mainnet any more, but their `Comet`
+key still types a Comet read from them as `['Comet'][alias]`, and such a read
+does not compile there: [the consumers test](./tests/lib/registry/consumers.test.ts)
+holds one of that type to every refusal. What the compiler cannot type — a
+cast, or a name computed at run time — it cannot refuse either.
+
+What that means for the endpoints:
+
+- a route that resolves a market — `/market/...`, `/account/.../rewards`,
+  `/account/.../transaction_history` — answers `503` when no version is
+  active. There is no static market list to fall back to, and serving one
+  nobody reviewed would be worse than failing;
+- an address the active version does not describe is not a market, and is
+  refused with `400`, on any network;
+- transaction history cursors carry the version they were issued against,
+  the markets it reads, and the block their ranges of logs are counted
+  from. A cursor stays valid across versions that read the same markets
+  from the same blocks; one from a version that read others, or counted
+  from another block, is refused with `409 REGISTRY_VERSION_CHANGED`,
+  whatever mainnet market its `markets[]` names, and the client restarts
+  pagination. So is a cursor issued before the registry, which carries no
+  version, whatever it reads;
+- routes that resolve no market — V2 and gas price — never read `APP_DB`,
+  and governance reads it only to name the markets of proposal actions,
+  which the static constants do not. The proposal list, and the vote
+  receipts with their proposals (`with_proposal_data`), describe the
+  actions of the page they answer again, with the markets of the active
+  version merged in, so they read the registry once on every request that
+  answers an action. The version names the markets it serves, with their
+  base and reward tokens, and the disabled markets it holds without serving
+  them, each by its contract name, or its label where it has none, linked
+  at its address checksummed. A Comet the active version does not hold
+  shows as its address. While the registry cannot be read, so does every
+  market: the actions keep the description the proposal list computed,
+  which names no market, or the constants' name where the list cached it
+  before they stopped naming markets; the answer is given all the same. A
+  governance path that names a Comet as its contract, such as
+  `/governance/ethereum-mainnet/{comet}/proposals`, is refused with `400`
+  `Error: Contract address not known`, as any address the constants do not
+  know is.
 
 A commit can be imported more than once — discovery tries again after an
 attempt that did not import every root, each time later, and an operator can
@@ -218,12 +269,13 @@ default, and an import that would still write a second default is refused as
 
 A version never changes once it exists, and only the pointer to the active
 one moves. So a request reads the pointer from D1 — one statement — and
-everything else from somewhere cheaper. The registry's own routes read it
-this way:
+everything else from somewhere cheaper. The registry's own routes and the
+market routes read it the same way:
 
-- the isolate holds in memory the versions it has served, and reuses them
-  for as long as the pointer names them. The active version has a place of
-  its own, so reading pinned versions by id never pushes it out;
+- the isolate holds in memory the versions it has served, and the catalog it
+  built from each, and reuses them for as long as the pointer names them. The
+  active version has a place of its own, so reading pinned versions by id
+  never pushes it out;
 - the bytes of a version are cached in the `kv_registry` namespace under a key
   that names the version and its checksum, so an isolate that has never seen
   it pays a KV read rather than hydrating the snapshot out of D1. What KV
@@ -251,17 +303,16 @@ response carries `X-Registry-Stale` with its age in seconds and
 mistakes it for the current version; the outage itself is logged as an
 error, once a minute per isolate. Set the window to `0` in an environment that
 would rather fail than answer from an older version. Past the window, or with
-nothing cached, every route of the registry answers
-`503 UPSTREAM_UNAVAILABLE`. A D1 that answers "no version is active" is an
-answer, not an outage: it is served as `503 REGISTRY_NOT_ACTIVE`, never from
-the cache; and a D1 that answers with a fault, such as a table a migration
-has not created yet, is a `500`, never masked by the cache.
+nothing cached, every route answers `503 UPSTREAM_UNAVAILABLE`. A D1 that
+answers "no version is active" is an answer, not an outage: it is served as
+`503 REGISTRY_NOT_ACTIVE`, never from the cache; and a D1 that answers with a
+fault, such as a table a migration has not created yet, is a `500`, never
+masked by the cache.
 
-An operator changes what the registry serves by importing, reviewing,
-validating and activating a version; see the admin routes in
-[./API.md](./API.md). The step-by-step procedure, with what to expect at each
-step and what to do when something else happens, is
-[./REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md).
+An operator changes what the API serves by importing, reviewing, validating
+and activating a version; see the admin routes in [./API.md](./API.md). The
+step-by-step procedure, with what to expect at each step and what to do when
+something else happens, is [./REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md).
 
 ## Bringing a registry up from nothing
 
@@ -281,9 +332,10 @@ candidate open instead of validating it, because a version of nothing but
 unreviewed markets could only end invalid.
 
 There are ten networks and twenty-nine markets to review, and every value is
-one this API already acts on: the static constants name the markets and their
-feeds, branches in the code decide their capabilities, quote units and price
-exceptions, and the frontend lists them under its labels.
+one this API acted on before the registry: the static constants named the
+markets and their feeds, the branches the registry replaced decided their
+capabilities, quote units and price exceptions, and the frontend lists them
+under its labels.
 Those decisions are checked in as the body of `PUT /versions/{id}/overlays`,
 [`registry/seed/production.json`](./registry/seed/README.md), with each
 market's Comet beside it in `production.comets.json`. The operator checks
@@ -443,6 +495,33 @@ TEST_FLAGS_ALLOW_FETCH_PASSTHROUGH=true TEST_FLAGS_REGENERATE_DUMP=true npm test
 TEST_FLAGS_REGENERATE_CACHE_SEED=true npm test <path to test file>
 ```
 
+Every branch reads the dumps from the same place in R2. Two tests pin the
+SHA-256 of their expectation in `EXPECTATION_SHA256`, and their dumps are
+named by it: the all-networks historical summary
+([`historical-summary.test.ts`](./tests/e2e/market/all-networks/all-contracts/historical-summary.test.ts))
+and the historical market day summaries
+([`historical-market-day-summaries.test.ts`](./tests/lib/computations/market/historical-market-day-summaries.test.ts)).
+Regenerating them writes new files, named by the new hash, and the test
+prints the hash; pin it in the test, run the test again without the flags,
+upload the files with the sync script below, and commit the pin. A dump that
+changed in R2 without its pin fails the test instead of being compared
+against, and a branch that regenerates these dumps never replaces the ones
+another branch pins. The other tests' dumps are not pinned: each is one file
+for every branch, and regenerating it replaces it for all of them, so a test
+is pinned this way before a change to its output is recorded.
+
+A regeneration reads the chain without a cache seed, which takes minutes, so
+it needs a longer timeout than tap's default of 30 seconds. Name the tests
+whose dumps you regenerate:
+
+```sh
+npm run build
+TEST_FLAGS_ALLOW_FETCH_PASSTHROUGH=true TEST_FLAGS_REGENERATE_DUMP=true TEST_FLAGS_REGENERATE_CACHE_SEED=true \
+  npx tap --disable-coverage --timeout=900 \
+  dist/tests/e2e/market/all-networks/all-contracts/historical-summary.test.js \
+  dist/tests/lib/computations/market/historical-market-day-summaries.test.js
+```
+
 At this point, you should now have some updated dump files. Due to the large size of these files, we don't
 store them in git. Instead, they are stored in a cloudflare R2 bucket. To update the files in the bucket, we
 have a script that does a bidirectional sync with `rclone`. First install `rclone`
@@ -478,12 +557,16 @@ After setting that up, you can now run the sync script. This will update the fil
 # Network Compatibility
 
 The API should support any EVM-compatible networks where Comet is
-deployed:
+deployed. It serves the mainnets the registry imports from Compound's
+source — Ethereum, Polygon, Arbitrum, Optimism, Base, Scroll, Mantle, Linea,
+Unichain and Ronin (`src/registry/source/roots.ts`).
 
-- Ethereum mainnet, [maybe: sepolia]
-- Polygon mainnet, mumbai
-- Optimism mainnet, goerli
-- Arbitrum mainnet (one), goerli (goerli-rollup)
+Testnets are not served: the registry does not import them, so no market of
+one can be resolved. A request that names one — a testnet network of a
+market route, `testnets=include`, or a testnet market in the transaction
+history — is answered `400` with the code `TESTNET_NOT_SERVED`
+([API.md](./API.md#the-market-registry)). Which networks are testnets is what
+`lib/well-known/networks` defines.
 
 ## Adding a New Network
 
@@ -560,14 +643,17 @@ per-network, but in general should not exceed ~3hrs (10,800s).
 4. Add well-known contracts
 
 Under `lib/well-known/contracts` each network has a module where the
-well-known ERC-20, Comet, PriceFeed, and other contracts on that network
-are described.
+well-known contracts on that network are described.
 
-Usually, a new network will need, at minimum, `PriceFeed`s for the base
-asset and for bridged `COMP`; ERC-20s for the base asset, for bridged
-`COMP`, and for every supported collateral asset on every configured
-deployment of Comet; and one `Comet` contract for each deployed market on
-that network.
+Markets do not belong there any more. Comet deployments, their base,
+collateral and reward tokens, and their price feeds come from the Comet
+registry: add the network to the allowlist in
+`src/registry/source/roots.ts`, import it, review its overlay, and activate
+the version. Nothing about a new market requires a Worker release.
+
+What a new network still needs here is everything the registry does not
+describe: the governance contracts, a `BridgeReceiver` corollary where
+governance is bridged, and any V2 or tooling contracts the API names.
 
 See `lib/well-known/contracts/polygon-mainnet.ts` for an example.
 
@@ -937,6 +1023,10 @@ method, but by providing:
 1. An ABI signature, like `function getPrice(address) returns (uint256)`
 2. A transformation from context to function parameters
 3. A parser from the raw ABI response into the desired return type
+4. Optionally, what a revert of the call answers (`reverted`). Without it a
+   revert fails the computation, as any other error of the call does; the
+   real `getPrice` answers one, to report a price feed Chainlink retired
+   instead of failing every summary that reads it
 
 Behind the scenes, a `compute` function is generated for you that uses the
 implemented methods to abstract away the boilerplate involved in invoking

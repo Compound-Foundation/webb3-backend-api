@@ -95,14 +95,9 @@ const READABLE: Record<string, string> = {
   'Access-Control-Expose-Headers': 'ETag, X-Registry-Version, X-Registry-Checksum, X-Registry-Stale, Retry-After',
 };
 
-// the legacy routes answer every origin, and expose nothing
-const LEGACY: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-};
-
 const CORS = {
-  legacy:          LEGACY,
-  legacyPreflight: { ...LEGACY, 'Access-Control-Allow-Methods': 'GET' },
+  legacy:          READABLE,
+  legacyPreflight: { ...READABLE, 'Access-Control-Allow-Methods': 'GET' },
   public:          READABLE,
   publicPreflight: {
     ...READABLE,
@@ -149,10 +144,10 @@ function quiet(t: Test): void {
  * what its router decided.
  *
  * The values alone cannot show that neither overwrites the other's: the
- * legacy routes' only header is one the public registry headers hold as well,
- * so an entrypoint that set it again over the registry's would leave every
- * value as it found it. So every header set is watched as well, and no CORS
- * header may be set over one the response already carries.
+ * public registry headers are the legacy routes' own, so an entrypoint that
+ * set them again over the registry's would leave every value as it found it.
+ * So every header set is watched as well, and no CORS header may be set over
+ * one the response already carries.
  */
 t.test(`every response carries the CORS headers of its route, and no others`, async t => {
   quiet(t);
@@ -225,11 +220,8 @@ t.test(`an answer carries exactly the headers of its route`, async t => {
     return Object.fromEntries(response.headers);
   };
 
-  t.same(
-    await headersOf('/not-a-real-endpoint', 'GET', 404),
-    { ...secured, ...lowercased(CORS.legacy), 'content-type': 'text/plain;charset=UTF-8' },
-    'a legacy route that matches nothing',
-  );
+  t.same(await headersOf('/not-a-real-endpoint', 'GET', 404), { ...secured, ...lowercased(CORS.legacy), ...json },
+    'a legacy route that matches nothing');
   t.same(
     await headersOf(`/market/mainnet/0xc3d688b66703497daa19211eedff47f25384cdc3/sumary`, 'GET', 400),
     { ...secured, ...lowercased(CORS.legacy), 'content-type': 'text/plain;charset=UTF-8' },

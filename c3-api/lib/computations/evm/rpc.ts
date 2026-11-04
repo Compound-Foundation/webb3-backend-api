@@ -33,4 +33,14 @@ const evmRpc = Compute.Batch.Functor<EvmRpc>({}).implement({
   },
 });
 
-export { EvmRpc, evmRpc };
+/*
+ * A call the node answered with an error that is not a revert: a rate limit,
+ * a block it does not have, its own failure, or the proxy's mask over any of
+ * them. The contract said nothing, so the node did not serve the call, as when
+ * it fails the whole request.
+ */
+function notServed(method: string, error: jsonRpc.Error): jsonRpc.NotServed {
+  return new jsonRpc.NotServed(`${method}: call error: ${jsonRpc.formatError(error)}`, { cause: error });
+}
+
+export { EvmRpc, evmRpc, notServed };
