@@ -59,8 +59,9 @@ FLAGS_ETH_COMPUTATION_INDEX_BIAS = "default"
 # [4] comet registry source, sync, and cache settings; vars are not inherited,
 # so every environment repeats them. A number is a whole number, and empty is
 # its default; a value the registry does not take is named by the status as
-# configuration-invalid. Its secrets never go here (.dev.vars.example):
-# COMET_REGISTRY_ADMIN_TOKEN_HASH, and in stage and production COMET_GITHUB_TOKEN
+# configuration-invalid. Its secrets never go here (.dev.vars.example): the
+# admin tokens, COMET_REGISTRY_ADMIN_TOKENS, and in stage and production
+# COMET_GITHUB_TOKEN
 COMET_SOURCE_REPOSITORY = "Compound-Foundation/comet"
 COMET_SOURCE_REF = "main"
 COMET_UPSTREAM_CHECK_INTERVAL_S = "86400"

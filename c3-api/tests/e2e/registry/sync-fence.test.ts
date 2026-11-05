@@ -24,6 +24,7 @@ import {
 } from '../../../src/registry/sync.js';
 
 import { applyMigrations } from '../../util/d1.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * The sync fence against real local D1. A Cron invocation can be interrupted
@@ -31,7 +32,7 @@ import { applyMigrations } from '../../util/d1.js';
  * invocations overlapping, a lease taken over mid-import, and a result
  * arriving from an invocation that has already been replaced.
  */
-const server = createTestHarness({ workers: [ { configPath: './wrangler.toml' } ] });
+const server = createTestHarness({ workers: [ registryWorker() ] });
 
 t.before(async () => {
   await server.listen();

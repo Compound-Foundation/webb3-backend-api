@@ -46,6 +46,7 @@ import {
   seedCandidate,
   validateSeeded,
 } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * The whole import, end to end against real local D1: discovery, the fenced
@@ -53,7 +54,7 @@ import {
  * validation. GitHub and the chain are stubbed from recorded fixtures, so the
  * test exercises the orchestration rather than the network.
  */
-const server = createTestHarness({ workers: [ { configPath: './wrangler.toml' } ] });
+const server = createTestHarness({ workers: [ registryWorker() ] });
 
 t.before(async () => {
   await server.listen();
@@ -1459,7 +1460,7 @@ t.test('an invocation that fails gives the run back at once', async t => {
   t.same([ run?.lease_owner, run?.lease_expires_at, run?.last_error ], [ null, null, null ],
     'the run is given back, without an error of its own');
 
-  const asked = await runInvocation(deps(db, roots), { requestedBy: 'registry-admin:test' });
+  const asked = await runInvocation(deps(db, roots), { requestedBy: 'test-admin' });
   t.same([ asked.kind, asked.runId ], [ 'imported', run?.id ], 'and a request sent at once continues it');
 });
 
@@ -1559,25 +1560,25 @@ t.test('a run that fails the same way every time says why, and an operator can e
   t.match(status.sync.lastRun?.lastError, /^OVERLAY_INVALID: /, 'and says why');
 
   await t.rejects(
-    runInvocation(deps(db, roots), { forceNewAttempt: true, reason: 'start over', requestedBy: 'registry-admin:test' }),
+    runInvocation(deps(db, roots), { forceNewAttempt: true, reason: 'start over', requestedBy: 'test-admin' }),
     { code: 'SYNC_ALREADY_RUNNING' },
     'a new attempt is refused while the run is running',
   );
 
-  t.equal((await cancelRun(db, run!.id, { actor: 'registry-admin:test', reason: 'a stored name no longer parses' })).cancelled, true,
+  t.equal((await cancelRun(db, run!.id, { actor: 'test-admin', reason: 'a stored name no longer parses' })).cancelled, true,
     'so an operator ends it');
   t.same(
     await db.prepare(`SELECT status, outcome, last_error, lease_owner FROM sync_runs WHERE id = ?1`).bind(run?.id).first(),
-    { status: 'failed', outcome: null, last_error: 'cancelled by registry-admin:test: a stored name no longer parses', lease_owner: null },
+    { status: 'failed', outcome: null, last_error: 'cancelled by test-admin: a stored name no longer parses', lease_owner: null },
     'saying who did, and why',
   );
   const cancelled = await registryStatus(env, cacheDepsOf(env));
   t.ok(cancelled.alerts.includes('last-sync-failed'), 'which the status raises as a failed run');
-  t.match(cancelled.sync.lastRun?.lastError, /^cancelled by registry-admin:test: /, 'with who ended it');
+  t.match(cancelled.sync.lastRun?.lastError, /^cancelled by test-admin: /, 'with who ended it');
 
   await rename(name!);
   const forced = await runInvocation(deps(db, roots), {
-    forceNewAttempt: true, reason: 'the name is fixed', requestedBy: 'registry-admin:test',
+    forceNewAttempt: true, reason: 'the name is fixed', requestedBy: 'test-admin',
   });
   t.equal(forced.kind, 'imported', 'and once the cause is fixed, the attempt the operator forces imports');
 });
@@ -1637,19 +1638,19 @@ t.test('a version is created by whoever asked for its run', async t => {
   t.equal(await creator(scheduledDb, scheduled.versionId!), 'registry-cron', 'the schedule\'s run creates the schedule\'s version');
 
   const forced = await runInvocation(deps(scheduledDb, roots), {
-    forceNewAttempt: true, reason: 'read the chain again', requestedBy: 'registry-admin:test',
+    forceNewAttempt: true, reason: 'read the chain again', requestedBy: 'test-admin',
   });
   t.equal(forced.kind, 'imported');
-  t.same(await run(scheduledDb, forced.runId!), { trigger_kind: 'manual', requested_by: 'registry-admin:test' });
-  t.equal(await creator(scheduledDb, forced.versionId!), 'registry-admin:test', 'an operator\'s attempt creates the operator\'s');
+  t.same(await run(scheduledDb, forced.runId!), { trigger_kind: 'manual', requested_by: 'test-admin' });
+  t.equal(await creator(scheduledDb, forced.versionId!), 'test-admin', 'an operator\'s attempt creates the operator\'s');
 
   const askedDb = await freshDatabase();
   await activateFixture(askedDb);
-  const asked = await runInvocation(deps(askedDb, roots), { requestedBy: 'registry-admin:test' });
+  const asked = await runInvocation(deps(askedDb, roots), { requestedBy: 'test-admin' });
   t.equal(asked.kind, 'imported');
-  t.same(await run(askedDb, asked.runId!), { trigger_kind: 'scheduled', requested_by: 'registry-admin:test' },
+  t.same(await run(askedDb, asked.runId!), { trigger_kind: 'scheduled', requested_by: 'test-admin' },
     'an empty request that found discovery due starts a routine run');
-  t.equal(await creator(askedDb, asked.versionId!), 'registry-admin:test', 'whose version is the operator\'s all the same');
+  t.equal(await creator(askedDb, asked.versionId!), 'test-admin', 'whose version is the operator\'s all the same');
 });
 
 /*

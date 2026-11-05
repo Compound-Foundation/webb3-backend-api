@@ -8,6 +8,7 @@ import { overlayOfMarket } from '../../../src/registry/overlay.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * `PUT /registry/v1/admin/versions/{id}/overlays`: a whole reviewed directory
@@ -22,10 +23,9 @@ import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate, validateS
 const ADMIN_TOKEN = 'registry-admin-token-for-tests';
 
 const server = createTestHarness({
-  workers: [ {
-    configPath: './wrangler.toml',
-    secrets:    { COMET_REGISTRY_ADMIN_TOKEN_HASH: await sha256Hex(ADMIN_TOKEN) },
-  } ],
+  workers: [ registryWorker({
+    COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([ { name: 'test-admin', sha256: await sha256Hex(ADMIN_TOKEN), role: 'admin', notAfter: null } ]),
+  }) ],
 });
 
 t.before(async () => {

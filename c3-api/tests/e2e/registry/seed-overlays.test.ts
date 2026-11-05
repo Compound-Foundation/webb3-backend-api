@@ -11,6 +11,7 @@ import { readSnapshot, readUnreviewed } from '../../../src/registry/repository.j
 import { applyMigrations } from '../../util/d1.js';
 import { loadRegistrySnapshotFixture, seedCandidate, sha256Hex } from '../../util/registry-fixture.js';
 import { bodyFor, readSeed, readSeedComets, readSeedText } from '../../util/registry-seed.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * An environment's first review as an operator sends it: the seed file, to
@@ -23,10 +24,9 @@ import { bodyFor, readSeed, readSeedComets, readSeedText } from '../../util/regi
 const ADMIN_TOKEN = 'registry-admin-token-for-tests';
 
 const server = createTestHarness({
-  workers: [ {
-    configPath: './wrangler.toml',
-    secrets:    { COMET_REGISTRY_ADMIN_TOKEN_HASH: sha256Hex(ADMIN_TOKEN) },
-  } ],
+  workers: [ registryWorker({
+    COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([ { name: 'test-admin', sha256: sha256Hex(ADMIN_TOKEN), role: 'admin', notAfter: null } ]),
+  }) ],
 });
 
 t.before(async () => {

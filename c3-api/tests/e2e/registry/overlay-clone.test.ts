@@ -27,6 +27,7 @@ import type { MarketEnrichment } from '../../../src/registry/enrichment.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { activateSeeded, loadRegistrySnapshotFixture, seedCandidate } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * Overlay cloning, against real local D1: the reviewed decisions of a stored
@@ -35,7 +36,7 @@ import { activateSeeded, loadRegistrySnapshotFixture, seedCandidate } from '../.
  * what lets an import inherit review instead of asking an operator to restate
  * it for every unchanged market.
  */
-const server = createTestHarness({ workers: [ { configPath: './wrangler.toml' } ] });
+const server = createTestHarness({ workers: [ registryWorker() ] });
 
 t.before(async () => {
   await server.listen();

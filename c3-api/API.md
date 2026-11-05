@@ -619,21 +619,64 @@ so that one resource has one URL.
 Administrative routes require `Authorization: Bearer <token>` — a `401` names
 the scheme in `WWW-Authenticate` — and answer no CORS headers at all. The
 scheme is read in any case, and one space or more may follow it; a header
-with anything after the token is answered as one without a token. An
-environment without a token hash it can use — none at all, or a value that is
-not 64 hex digits — answers every administrative request `403 FORBIDDEN`,
-whatever token it carries, and the message says which. Every administrative
-request is rate limited twice, reads as well as commands:
+with anything after the token is answered as one without a token.
+
+Each token has a name and a role. The name is who holds the token, and every
+change the token makes is recorded under it: the `actor` of an activation, a
+rollback or an overlay event, the `requestedBy` of an import it asks for and
+the `createdBy` of that import's version, and the name in a cancelled run's
+`cancelled by <name>: <reason>`. A validation, which decides nothing, is the
+one command that records no name: it records the checks it ran. The role is
+what the token may call, and each role may call everything the one before it
+may:
+
+| Role | May call |
+|---|---|
+| `monitor` | `GET /registry/v1/admin/status` |
+| `reader` | every `GET` under `/registry/v1/admin` |
+| `operator` | besides, `POST …/sync`, `POST …/sync-runs/{sync_run_id}/cancel`, and the overlay writes: `PUT …/networks/{chain_id}/overlay`, `PUT …/markets/{chain_id}/{deployment_key}/overlay` and `PUT …/overlays` |
+| `admin` | besides, `POST …/validate`, `POST …/activate` and `POST …/rollback` |
+
+`POST …/validate` is not the only way a version validates: an import that is
+not held for review validates its draft by itself once it completes, whoever
+asked for it. What is served is decided by `POST …/activate` and
+`POST …/rollback` alone.
+
+An environment lists its tokens in the secret `COMET_REGISTRY_ADMIN_TOKENS`
+([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#the-admin-tokens)), and takes
+no other token.
+
+- A token the environment does not list is refused with `401`, the message
+  `the bearer token is not valid` and `Bearer error="invalid_token"`; so is a
+  token past its expiry, with the message `the bearer token has expired`.
+- A token whose role does not reach the route is refused with
+  `403 FORBIDDEN` and `WWW-Authenticate: Bearer error="insufficient_scope"`.
+  The message names the token, its role and the role the route needs, which
+  `details` carries as `role` and `requiredRole`. A method the path does not
+  take is still `405`, whatever the role.
+- An environment that lists no token — no list, a blank one, or `[]` — or
+  whose list the worker cannot read, answers every administrative request
+  `403 FORBIDDEN`, whatever it carries, and asks for no token: a malformed
+  list refuses every token, those of its well-formed entries too. The
+  message says which: the API is not configured, or
+  `COMET_REGISTRY_ADMIN_TOKENS is malformed`, for which the worker's log line
+  `registry route refused`, under the answer's `requestId`, names the entry
+  and what is wrong with it.
+
+Every administrative request is rate limited twice, reads as well as
+commands:
 
 - First, before its token is checked or its path is matched, by the address
   it comes from: 60 a minute for each address — for each /64 of an IPv6
   one, since a client can send from any address of its /64. Guessing a token,
   or a path, costs as much as a request with the right one, and once an
   address has spent its budget the right token is refused from it as well.
-- Then, once it is authenticated, by its token: 30 a minute for each token
-  and each family of routes. Every read shares one budget, so a monitor
-  polling the status spends it with an operator who holds the same token, and
-  each kind of command has one of its own.
+- Then, once its token is checked and its role reaches the route, by its
+  token: 30 a minute for each token and each family of routes. Every read
+  shares one budget, and each kind of command has one of its own. The
+  budgets are the token's: a monitor polling the status with a token of its
+  own spends nothing of an operator's, and callers who share a token share
+  its budgets.
 
 Past either budget the answer is `429` `RATE_LIMITED`, saying in
 `Retry-After` how many seconds to wait, and in its message which budget ran
@@ -917,7 +960,7 @@ $ curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
     "versionId": "d9698ddd-ab86-46bc-a412-c71df7d20414",
     "checksum": "1bd74ebe00d845e0fa5e648b22a2c39e60d9a62bf6c58190320fa01cd9a26a4a",
     "activatedAt": "2026-09-21T18:44:02.881Z",
-    "activatedBy": "registry-admin:stage",
+    "activatedBy": "alice",
     "ageSeconds": 138518
   },
   "cache": { "snapshotCached": true, "pointerAgeSeconds": 412, "readable": true },
@@ -967,10 +1010,10 @@ A drift, as `chainCheck.drifts` names it:
 ### description:
 
 One import run and its per-root checkpoints, including why a root failed and
-when the run becomes resumable. `requestedBy` is who started the run —
-`registry-admin:<environment>`, or the `COMET_REGISTRY_ADMIN_ACTOR` the
-environment sets, for an administrative sync, and `registry-cron:<environment>`
-for the hourly job — and `reason` the reason its request gave, if any.
+when the run becomes resumable. `requestedBy` is who started the run — the
+name of the token an administrative sync was sent with, and
+`registry-cron:<environment>` for the hourly job — and `reason` the reason
+its request gave, if any.
 `triggerKind` is `manual` for a run a request started with
 `sourceCommitSha`, `forceNewAttempt` or `holdForReview`, and `scheduled` for
 any other: the hourly job's, and one an administrative sync with none of the
@@ -1038,10 +1081,9 @@ It is a summary per version, never a snapshot: what each was built from and
 what became of it. The markets of one version are read by its id.
 
 `createdBy` is who asked for the import that created the version, as its run
-records them in `requestedBy`: the operator for a version an administrative
-sync created — `registry-admin:<environment>`, or the
-`COMET_REGISTRY_ADMIN_ACTOR` the environment sets — whatever its request
-asked for, and `registry-cron:<environment>` for one the hourly job created.
+records them in `requestedBy`: for a version an administrative sync created,
+the name of the token the sync was sent with, whatever its request asked for,
+and `registry-cron:<environment>` for one the hourly job created.
 Why a sync was asked for is kept with its run:
 `GET /registry/v1/admin/sync-runs/{sync_run_id}` answers `requestedBy` and
 `reason`, and the sync's own answer names the run as `syncRunId`.
@@ -1077,7 +1119,7 @@ $ curl -s "$API/registry/v1/admin/versions?status=importing" -H "Authorization: 
       "snapshotChecksum": null,
       "createdAt": "2026-09-23T08:12:44.019Z",
       "validatedAt": null,
-      "createdBy": "registry-admin:stage"
+      "createdBy": "olga"
     }
   ]
 }
@@ -1104,7 +1146,7 @@ the move that switched it off.
       "action": "activate",
       "previousVersionId": "d9698ddd-…",
       "targetVersionId": "c0d77dad-…",
-      "actor": "registry-admin:stage",
+      "actor": "alice",
       "reason": "switch on the new commit",
       "createdAt": "2026-10-19T08:12:44.019Z"
     },
@@ -1113,7 +1155,7 @@ the move that switched it off.
       "action": "activate",
       "previousVersionId": null,
       "targetVersionId": "d9698ddd-…",
-      "actor": "registry-admin:stage",
+      "actor": "alice",
       "reason": "first activation",
       "createdAt": "2026-09-23T09:30:02.114Z"
     }
@@ -1140,9 +1182,9 @@ them is recorded; validate it again.
 ```
 
 It takes no body. Validation decides nothing: it checks the stored candidate
-and records every check it ran, exactly as the scheduled import does
-unattended. The decision a person makes about a version, with its reason, is
-the activation.
+and records every check it ran, and not who asked for it, exactly as the
+scheduled import does unattended. The decision a person makes about a
+version, with its reason, is the activation.
 
 ## `POST /registry/v1/admin/versions/{version_id}/activate`
 ### description:

@@ -21,6 +21,7 @@ import {
   seedCandidate,
   sha256Hex,
 } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * Runs the worker from wrangler.toml in real workerd with local D1, KV, and
@@ -28,7 +29,7 @@ import {
  * migrations, then checks that migration 0001 enforces the registry
  * invariants in the database itself rather than in application code.
  */
-const server = createTestHarness({ workers: [ { configPath: './wrangler.toml' } ] });
+const server = createTestHarness({ workers: [ registryWorker() ] });
 
 t.before(async () => {
   await server.listen();
