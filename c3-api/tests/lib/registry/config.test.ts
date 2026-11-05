@@ -22,6 +22,7 @@ const DEFAULTS = {
   upstreamIntervalSeconds: 86400,
   snapshotTtlSeconds:      300,
   staleFallbackSeconds:    3600,
+  approvalTtlSeconds:      86400,
 };
 
 // an environment as wrangler gives it, where an unquoted value arrives as a number
@@ -42,6 +43,7 @@ t.test('unset and blank settings take their defaults', async t => {
     COMET_UPSTREAM_CHECK_INTERVAL_S:   '  ',
     REGISTRY_SNAPSHOT_CACHE_TTL_S:     '',
     REGISTRY_STALE_FALLBACK_MAX_S:     '',
+    COMET_REGISTRY_APPROVAL_TTL_S:     undefined,
   });
   t.same(blank, { ...DEFAULTS, invalid: [] }, 'blank is unset, for every setting alike');
   t.equal(blank.staleFallbackSeconds, 3600, 'so a blank fallback window does not switch the fallback off');
@@ -54,14 +56,33 @@ t.test('a whole number is read as written, quoted or not', async t => {
     COMET_UPSTREAM_CHECK_INTERVAL_S:   ' 3600 ',
     REGISTRY_SNAPSHOT_CACHE_TTL_S:     60,
     REGISTRY_STALE_FALLBACK_MAX_S:     '0',
+    COMET_REGISTRY_APPROVAL_TTL_S:     7200,
   }), {
     leaseSeconds:            600,
     marketsPerInvocation:    5,
     upstreamIntervalSeconds: 3600,
     snapshotTtlSeconds:      60,
     staleFallbackSeconds:    0,
+    approvalTtlSeconds:      7200,
     invalid:                 [],
   }, 'a number wrangler passes unquoted counts as the same number, and zero switches the fallback off');
+});
+
+/*
+ * An approval lets its version be switched on by somebody else for a second
+ * up to a week. A value past that is a typo — one zero too many leaves an
+ * approval good for months — and stands for nothing but the default.
+ */
+t.test('an approval lasts a second up to a week, and anything else is named', async t => {
+  t.equal(configOf({ COMET_REGISTRY_APPROVAL_TTL_S: '1' }).approvalTtlSeconds, 1, 'a second is the least');
+  t.equal(configOf({ COMET_REGISTRY_APPROVAL_TTL_S: '604800' }).approvalTtlSeconds, 604800, 'and a week the most');
+  for (const value of [ '0', '604801', '8640000', '99999999999999999999' ]) {
+    const config = configOf({ COMET_REGISTRY_APPROVAL_TTL_S: value });
+    t.same(config.invalid, [ 'COMET_REGISTRY_APPROVAL_TTL_S' ], `${value} is out of its range, and named`);
+    t.equal(config.approvalTtlSeconds, 86400, 'and a day, the default, stands in for it');
+  }
+  t.doesNotThrow(() => assertImportable(configOf({ COMET_REGISTRY_APPROVAL_TTL_S: '0' })),
+    'the import, which approves nothing, runs whatever it is set to');
 });
 
 t.test('anything else is named, and the default stands in for it', async t => {

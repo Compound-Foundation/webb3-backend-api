@@ -49,8 +49,8 @@ function bearerToken(request: Request): string {
 /*
  * What a token may do. A role may call everything the one before it may, so
  * the order is the nesting: the status alone, then every administrative
- * read, then imports and overlay writes, then validating a version and
- * switching versions on and off.
+ * read, then imports and overlay writes, then validating a version,
+ * approving one, and switching versions on and off.
  */
 const ROLES = [ 'monitor', 'reader', 'operator', 'admin' ] as const;
 
