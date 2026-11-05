@@ -652,7 +652,8 @@ what another switches on. A rollback (`POST …/rollback`) needs nobody's
 approval, so that undoing a bad version takes one person, but it goes back
 one step only: to the version the one on replaced when it was last
 activated, if that is older. Going further back is another rollback, and
-going anywhere else is an activation.
+going anywhere else is an activation. Every approval, and every move that
+changes what is served, is announced (below).
 
 An environment lists its tokens in the secret `COMET_REGISTRY_ADMIN_TOKENS`
 ([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#the-admin-tokens)), and takes
@@ -702,6 +703,83 @@ at most 1,000 characters, and a longer one is refused with `400`.
 The body is JSON, sent as `application/json` or as a `+json` type such as
 `application/merge-patch+json`, or without a `Content-Type`. The type is read
 in any case, and a body of any other type is refused with `400`.
+
+A move of the active version that changes what the registry serves — an
+activation or a rollback that answers `changed: true` — is announced to the
+webhook the environment sets in the secret `COMET_REGISTRY_WEBHOOK_URL`, a
+Slack incoming webhook
+([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#announcing-changes)), and so is
+every approval, as it is given: the channel hears of a change while it can
+still be stopped. Nothing else is: not a move that changed nothing or was
+refused, nor a refused approval, an import, a validation, a cancel or an
+overlay write, whose changes the approval and the move that switches them on
+report. Once the move or the approval has committed, the worker posts:
+
+```json
+{
+  "text": "[production] alice activated registry version c0d77dad-… (commit a34d9b5), replacing d9698ddd-…, approved by bob. Markets: 1 added, 0 removed, 2 changed, 0 no longer served; networks: 1 added, 0 removed, 0 changed. Reason: \"switch on the new commit\"",
+  "unfurl_links": false,
+  "unfurl_media": false,
+  "registryEvent": {
+    "kind": "activate",
+    "environment": "production",
+    "at": "2026-11-04T12:00:00.000Z",
+    "actor": "alice",
+    "reason": "switch on the new commit",
+    "version": { "id": "c0d77dad-…", "sourceRepository": "compound-foundation/comet", "sourceCommitSha": "a34d9b57…", "checksum": "1bd74ebe…" },
+    "previousVersion": { "id": "d9698ddd-…", "sourceRepository": "compound-foundation/comet", "sourceCommitSha": "5d2e1f04…", "checksum": "748b4d56…" },
+    "activationId": "3e96812b-…",
+    "approval": { "id": "5b1f0c2e-…", "actor": "bob", "createdAt": "2026-11-04T11:00:00.000Z", "expiresAt": "2026-11-05T11:00:00.000Z" },
+    "changes": {
+      "networks": { "added": [ 8453 ], "removed": [], "changed": [] },
+      "markets": { "added": [ "8453/usdc" ], "removed": [], "changed": [ "1/usdc", "1/weth" ], "unserved": [] }
+    }
+  }
+}
+```
+
+- `text` is what Slack shows, on one line: who switched which version on,
+  in place of which, who approved it, how many markets and networks that
+  added, removed or changed, and last, why. A rollback reads `… rolled the
+  registry back to version <id> (commit …) from <id>. …`, a move made while
+  nothing was on says `with no version on before`, and an approval reads
+  `… bob approved registry version <id> (commit …) until <expiresAt>,
+  against <id>. …` — or `with no version on` — with what switching the
+  version on would change. `What changed could not be read.` stands in for
+  the counts when they could not be read. `&`, `<` and `>` are escaped as
+  Slack asks, and every run of line breaks or other control characters in a
+  value is one space, so a reason cannot use Slack's markup to mention
+  anyone (`<!channel>`) or to show a link under a name of its own, nor write
+  a line of its own; and as it comes last, nothing it says stands before the
+  counts. `unfurl_links` and `unfurl_media` keep Slack from previewing a
+  link a reason quotes.
+- `registryEvent` is for a receiver that acts on the message, with every
+  value as it is recorded, unescaped: `kind` (`activate`, `rollback` or
+  `approve`), `environment`, `at` (when the move was made, or the approval
+  given), `actor` (the token's name), `reason`, the version switched on or
+  approved (`version`) and the one it replaced, or that was on when the
+  approval was given (`previousVersion`, `null` when nothing was on), each as
+  `id`, `sourceRepository`, `sourceCommitSha` and `checksum`, `activationId`
+  (the move, as `GET …/versions/{version_id}` lists it under `activations`;
+  `null` for an approval), `approval` (the approval an activation used, or
+  the one given, as `id`, `actor`, `createdAt` and `expiresAt`; `null` for a
+  rollback), and `changes`: the chain ids of the networks and the
+  `chainId/deploymentKey` of the markets the move added, removed or changed —
+  or that switching the approved version on would — as
+  `GET …/versions/{version_id}/changes` compares the same two versions and
+  tells how each changed, and under `markets.unserved` the markets the
+  version replaced served and the one switched on does not. `changes` is
+  `null` when it could not be read.
+
+It is best effort. The message is sent once, and the command does not wait
+for it: nothing about it fails or delays the command. A message the webhook
+has not answered in 5 seconds is given up rather than sent again, since a
+message sent again could arrive twice. The record of what was approved and
+switched on is the audit (`GET …/versions/{version_id}`); a message given up
+is logged as `registry notification failed`, never with the webhook's URL,
+and `GET …/status` raises `notification-failing` until a later one is sent.
+A `COMET_REGISTRY_WEBHOOK_URL` that is not an `https` URL is sent nothing,
+and the status names it under `configuration-invalid`.
 
 ## `/registry/v1/active`
 ### description:
@@ -904,9 +982,10 @@ switched it on (`active.activatedBy`) and who approved that
 (`active.approvedBy`, `null` for a rollback, and for a move made before
 approvals existed), whether its bytes are cached (`cache.snapshotCached`) and the
 cache could be read at all (`cache.readable`), when the source was last
-checked, the last import run, the candidates still open, and the registry
+checked, the last import run, the candidates still open, the registry
 settings the environment sets to something they do not take
-(`configuration.invalid`, by name). A database that cannot be reached answers
+(`configuration.invalid`, by name), and whether moves and approvals are
+announced (`notifications`). A database that cannot be reached answers
 `503 UPSTREAM_UNAVAILABLE`, which a monitor tells apart from a fault, a `500`.
 A daily check of the source that finds nothing to import starts no run: it
 moves `sync.upstreamCheckedAt` alone, and `sync.lastRun` stays the last
@@ -946,12 +1025,25 @@ approval an activation by another admin could use now, as `id`, `actor` and
 `expiresAt`, or `null` — none given, or each expired, used, or given while
 another version was on.
 
+`notifications` says whether moves and approvals are announced: `webhook` is
+`off` when `COMET_REGISTRY_WEBHOOK_URL` is not set, `on` when it is, and
+`invalid` when it is set to something that is not an `https` URL — never the
+URL itself.
+`failure` is the last move or approval whose message was given up, while
+`webhook` is `on` and until a later message is sent: when (`at`), the move
+(`activationId`) or the approval (`approvalId`), the other `null`, its `kind`
+(`activate`, `rollback` or `approve`) and the version it named (`versionId`),
+both `null` when the message failed before the move or the approval was read
+— the database did not answer, none has that id, or the worker met a fault —
+what the webhook answered (`status`, `null` when it did not answer), and
+`reason`.
+
 `alerts` is that state reduced to the conditions worth acting on, so a monitor
 can check that it is empty without knowing the registry's rules:
 
 | Alert | Means |
 |---|---|
-| `configuration-invalid` | a registry setting is set to something it does not take — a number that is not a whole number in its range (`COMET_REGISTRY_APPROVAL_TTL_S` is one from 1 to 604800, a week), or a repository or ref that names no source; `configuration.invalid` names each. The import refuses to start while one of its own is invalid, a read takes the default in its place, and an approval given meanwhile lasts the default day |
+| `configuration-invalid` | a registry setting is set to something it does not take — a number that is not a whole number in its range (`COMET_REGISTRY_APPROVAL_TTL_S` is one from 1 to 604800, a week), a repository or ref that names no source, or a `COMET_REGISTRY_WEBHOOK_URL` that is not an `https` URL; `configuration.invalid` names each. The import refuses to start while one of its own is invalid, a read takes the default in its place, an approval given meanwhile lasts the default day, and nothing is announced to a webhook that is not one |
 | `no-active-version` | nothing is activated, so the registry's public reads answer `503` |
 | `candidate-awaiting-review` | a draft is held for review and no import is running: somebody has to review it and validate it, or discard it |
 | `candidate-awaiting-activation` | a version newer than any ever switched on validated, and is waiting to be — what the scheduled import produces for a new commit; `candidates.validated` lists it. It holds until a version at least that new is switched on |
@@ -965,6 +1057,7 @@ can check that it is empty without knowing the registry's rules:
 | `sync-overdue` | the source has not been checked for more than twice the configured interval, or never: a fresh environment raises it beside `no-active-version` until its first import records a check, from the hourly job or `POST /registry/v1/admin/sync` |
 | `snapshot-not-cached` | the active version's bytes are not in the cache, so every cold isolate hydrates it from D1 again |
 | `cache-unreadable` | the KV namespace did not answer at all: there is no cache, and no fallback if the database fails next |
+| `notification-failing` | a move went live, or an approval was given, and its message was given up — the webhook refused it, most often because it was revoked, or did not answer within 5 seconds — so the channel was not told; `notifications.failure` names the move or the approval. It holds, while `notifications.webhook` is `on`, until a later message is sent |
 
 ```sh
 $ curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
@@ -1005,6 +1098,7 @@ $ curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
     "drifts": [],
     "unreadable": []
   },
+  "notifications": { "webhook": "on", "failure": null },
   "alerts": []
 }
 ```
@@ -1268,12 +1362,13 @@ new approval. It cannot be withdrawn: one given by mistake, or by a token
 that turns out to have leaked, stays usable by any other admin until it
 expires, is used, or another version goes on.
 
-Every request records an approval of its own. A version that does not exist
-is `404`; a version that is not validated, the version that is on — which is
-no change to approve — and an `expectedActiveVersionId` that is no longer
-what is on are `409` with `details.code` `CANDIDATE_STATE_CONFLICT`; a body
-without a `reason` or without `expectedActiveVersionId`, or with another
-property, is `400`.
+Every request records an approval of its own, and each is announced to the
+environment's webhook, as [Registry v1](#registry-v1) describes. A version
+that does not exist is `404`; a version that is not validated, the version
+that is on — which is no change to approve — and an `expectedActiveVersionId`
+that is no longer what is on are `409` with `details.code`
+`CANDIDATE_STATE_CONFLICT`; a body without a `reason` or without
+`expectedActiveVersionId`, or with another property, is `400`.
 
 ## `POST /registry/v1/admin/versions/{version_id}/activate`
 ### description:
@@ -1320,6 +1415,10 @@ and `approvalId` null.
 }
 ```
 
+A move that changed something is announced to the environment's webhook
+once it has committed, as [Registry v1](#registry-v1) describes; the answer
+does not wait for it. One that changed nothing is not.
+
 From an environment's first approval on, the database refuses an activation
 without an approval it may use, a rollback the rule below does not allow,
 and a move of the active version no activation records, whoever writes it
@@ -1331,8 +1430,8 @@ directly can still go around the rule, as around every other.
 ## `POST /registry/v1/admin/versions/{version_id}/rollback`
 ### description:
 
-The same move in the other direction, recorded as a rollback, and taking the
-same `expectedActiveVersionId`.
+The same move in the other direction, recorded as a rollback, taking the
+same `expectedActiveVersionId`, and announced the same way, as a rollback.
 
 A rollback needs nobody's approval, so that undoing a bad version takes one
 person: break-glass. It goes back one step. It restores only the version the
@@ -1341,15 +1440,15 @@ one on replaced when an activation last switched it on — in the
 `previousVersionId` of the newest `activate` whose `targetVersionId` is the
 version on — and only when that version is older, in the order
 `GET …/versions` lists them. To go further back, roll back again from the
-version restored: each step is a rollback of its own. Anything else is
-refused with `409` and `details.code` `ROLLBACK_TARGET_INVALID`, whose
-message names the version a rollback may restore now, or says that none
-may: a version two steps back or more, one never on, one newer than the
-version on, any rollback while nothing is on, and any from a version an
-activation switched on in place of a newer one. Such a version is switched
-on with an activation, once another admin has approved it. A rollback to
-the version on changes nothing, as an activation of it does. Its answer's
-`approvalId` is `null`.
+version restored: each step is a rollback of its own, and each is announced.
+Anything else is refused with `409` and `details.code`
+`ROLLBACK_TARGET_INVALID`, whose message names the version a rollback may
+restore now, or says that none may: a version two steps back or more, one
+never on, one newer than the version on, any rollback while nothing is on,
+and any from a version an activation switched on in place of a newer one.
+Such a version is switched on with an activation, once another admin has
+approved it. A rollback to the version on changes nothing, as an activation
+of it does. Its answer's `approvalId` is `null`.
 
 ## `PUT /registry/v1/admin/versions/{version_id}/networks/{chain_id}/overlay`
 ### description:

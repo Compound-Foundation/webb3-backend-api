@@ -10,6 +10,7 @@ import type { CacheDeps, CachedSnapshot } from './cache.js';
 import { activeSnapshot, cacheDepsOf, isUnreachable, versionSnapshot, warmSnapshot } from './cache.js';
 import { RegistryErrorCode, isRegistryError } from './errors.js';
 import { RegistryContext } from './handlers.js';
+import { notifyRegistryEvent } from './notifications.js';
 import { routePublic } from './public-router.js';
 import { isRegistryUnavailable, unavailableError } from './request-catalog.js';
 import { registryHeaders } from './version-headers.js';
@@ -146,8 +147,12 @@ function withHeaders(response: Response, headers: Record<string, string>): Respo
 
 async function routeRegistry(
   request: Request,
-  // the request's context, with the id the entrypoint gave it, which its error answer and its log lines carry
-  { env, debug, requestId }: Evaluator.Context & { requestId: string },
+  /*
+   * The request's context, with the id the entrypoint gave it, which its
+   * error answer and its log lines carry, and where to hand what is left to
+   * finish once it has answered: the runtime then keeps it running.
+   */
+  { env, debug, requestId, defer }: Evaluator.Context & { requestId: string, defer: (task: Promise<void>) => void },
 ): Promise<Response> {
   const pathname = withoutTrailingSlash(new URL(request.url).pathname);
   const route    = isAdminPath(pathname) ? 'admin' : 'public';
@@ -181,6 +186,8 @@ async function routeRegistry(
         debug.warn(`registry snapshot not warmed`, { versionId, error });
       }
     },
+    // a task the runtime sees through after the answer: the command never waits on the webhook
+    notify: event => defer(notifyRegistryEvent(env, event, { debug, requestId })),
   };
 
   try {
