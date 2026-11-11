@@ -22,9 +22,10 @@ switch, users see no change at all, and after it, one command switches back.
   **before** the worker release that needs it:
   `npm run d1:migrate:stage` or `npm run d1:migrate:production`.
 - The worker is deployed, and it reaches the node provider proxy.
-- The environment has `COMET_REGISTRY_ADMIN_TOKEN_HASH` set, and you have the
-  admin token itself — not its hash. See
-  [The admin token](#the-admin-token) if the environment has none yet.
+- The environment has admin tokens, and you hold one of your own with the
+  role `admin` — the token itself, not its hash. See
+  [The admin tokens](#the-admin-tokens) if the environment has none yet, or
+  none for you.
 - Stage and production have `COMET_GITHUB_TOKEN` set. Without a token GitHub
   allows the import 60 API requests an hour per address, which the Worker
   shares with every other Worker leaving Cloudflare through it, and an import
@@ -48,7 +49,7 @@ installed, after:
 
 ```sh
 export API=https://v3-api-stage.compound.xyz        # the environment you work on
-export TOKEN='<admin token>'
+export TOKEN='<your admin token>'
 ```
 
 Every step shows the terminal command, and beside it the same request for
@@ -57,7 +58,7 @@ then the headers, then the body. To use them:
 
 - Create a Postman environment with the variables `API` (the environment's
   address, e.g. `https://v3-api-stage.compound.xyz`, or `http://localhost:8787`),
-  `TOKEN` (the admin token) and `V` (the draft's id, filled in step 1).
+  `TOKEN` (your admin token) and `V` (the draft's id, filled in step 1).
 - Send every administrative request with `Authorization: Bearer {{TOKEN}}` —
   or set **Authorization → Bearer Token → `{{TOKEN}}`** once on the collection
   and let the requests inherit it.
@@ -65,70 +66,135 @@ then the headers, then the body. To use them:
   `Content-Type: application/json` itself.
 - Postman shows the whole answer; each step says which fields to look at.
 
-### The admin token
+### The admin tokens
 
-Every administrative route takes one bearer token per environment, and the
-worker keeps only its SHA-256: what is configured cannot be used as the
-token. Issue the token once, keep it in the team's password manager, and put
-the hash — never the token — into the environment.
+Every administrative route takes a bearer token. Each person who works on
+the registry, and each monitor, has a token of their own, with a name and a
+role. The name is who holds the token: every change it makes is recorded
+under that name, but for a validation, which decides nothing and records
+only its checks. The role is what it may call, and each role may call
+everything the one before it may:
 
-**1. Make a token.** 32 random bytes are plenty:
+| Role | May call | For |
+|---|---|---|
+| `monitor` | `GET /admin/status` | a monitor that polls the status |
+| `reader` | every `GET` under `/admin` | someone who reads drafts and versions |
+| `operator` | besides, imports, cancelling a run, and overlay writes | someone who reviews drafts |
+| `admin` | besides, validate, activate and rollback | someone who decides what is served |
+
+An import not held for review validates its draft by itself once it
+completes, so an `operator` can import a version that validates; switching
+it on is an `admin`'s.
+
+The worker keeps only the SHA-256 of each token: what is configured cannot
+be used as a token. Tokens go to their holders through the team's password
+manager, and their hashes — never the tokens — into the environment, as one
+secret: the list `COMET_REGISTRY_ADMIN_TOKENS`. Whoever can put that secret
+can make a token of any name and role, so leave it to the environment's
+owner. Each environment has its own list: a stage token is not a production
+one.
+
+**1. Make a token** for its holder. 32 random bytes are plenty:
 
 ```sh
-export TOKEN="$(openssl rand -hex 32)"
+export NEW_TOKEN="$(openssl rand -hex 32)"
 ```
 
 **2. Hash it.** Use `printf`, not `echo`: `echo` adds a newline, the newline
 would be part of what is hashed, and the token you then send would not match.
 
 ```sh
-printf '%s' "$TOKEN" | shasum -a 256 | cut -d ' ' -f 1
+printf '%s' "$NEW_TOKEN" | shasum -a 256 | cut -d ' ' -f 1
 ```
 
 On Linux `sha256sum` takes the place of `shasum -a 256`, and OpenSSL works
 anywhere. Keep the `cut` with either: each prints more than the hash — `  -`
-or ` *stdin` after it — and the environment takes the 64 hex digits alone.
+or ` *stdin` after it — and the list takes the 64 hex digits alone.
 
 ```sh
-printf '%s' "$TOKEN" | openssl dgst -sha256 -r | cut -d ' ' -f 1
+printf '%s' "$NEW_TOKEN" | openssl dgst -sha256 -r | cut -d ' ' -f 1
 ```
 
-**3. Put the hash into the environment.** Wrangler prompts for the value and
-stores it as a secret, so it never reaches the repository:
+**3. Write the list**, `tokens.json`, with an entry for each token:
+
+```json
+[
+  { "name": "alice",          "sha256": "<the hash from step 2>", "role": "admin",    "notAfter": null },
+  { "name": "olga",           "sha256": "<her token's hash>",     "role": "operator", "notAfter": null },
+  { "name": "status-monitor", "sha256": "<the monitor's hash>",   "role": "monitor",  "notAfter": null }
+]
+```
+
+Each entry has these four, and nothing else:
+
+- `name` — who holds the token: 1 to 64 lowercase letters, digits, `.`,
+  `_`, `@` or `-`, the first a letter or a digit. Two entries share a name
+  only while their holder rotates a token.
+- `sha256` — the hash from step 2. A token is listed once.
+- `role` — `monitor`, `reader`, `operator` or `admin`.
+- `notAfter` — `null`, or the last instant the token is taken at, in UTC,
+  such as `2027-05-01T00:00:00Z`.
+
+Cloudflare stores a secret of at most 5 KB, which is about thirty entries,
+so drop the entries of expired tokens whenever you put the list again. It
+never shows a secret again either: keep `tokens.json`, which holds hashes
+and no token, where the next change will start from, such as the password
+manager.
+
+**4. Put the list into the environment.** Wrangler reads the secret from the
+pipe, on one line, and it takes effect without a deploy:
 
 ```sh
-npx wrangler secret put COMET_REGISTRY_ADMIN_TOKEN_HASH --env stage
-npx wrangler secret put COMET_REGISTRY_ADMIN_TOKEN_HASH --env production
+jq -c . tokens.json | npx wrangler secret put COMET_REGISTRY_ADMIN_TOKENS --env stage
+jq -c . tokens.json | npx wrangler secret put COMET_REGISTRY_ADMIN_TOKENS --env production
 ```
 
-For a worker you run on your own machine, the same line goes into `.dev.vars`,
-which git ignores:
+For a worker you run on your own machine, the same line goes into
+`.dev.vars`, which git ignores, in single quotes:
 
 ```
-COMET_REGISTRY_ADMIN_TOKEN_HASH=<the hash from step 2>
+COMET_REGISTRY_ADMIN_TOKENS='[{"name":"alice","sha256":"<the hash from step 2>","role":"admin","notAfter":null}]'
 ```
 
-**4. Check it** with any administrative read — an unknown version id is
-enough, because reaching a `404` means the token was accepted:
+**5. Check each token** with a request its role may make: an unknown
+version id for any role but `monitor`, because reaching a `404` means the
+token was accepted, and the status for a `monitor`, which answers `200`:
 
 ```sh
 curl -s -o /dev/null -w '%{http_code}\n' \
   "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000000000" \
-  -H "Authorization: Bearer $TOKEN"
+  -H "Authorization: Bearer $NEW_TOKEN"
+curl -s -o /dev/null -w '%{http_code}\n' "$API/registry/v1/admin/status" \
+  -H "Authorization: Bearer $NEW_TOKEN"
 ```
 
-`404` is what you want. `401` means the hash in the environment is not this
-token's: one made with `echo`, another token's, or the token itself, stored
-in place of its hash. `403` means the environment has no hash it can use:
-none at all — an unconfigured admin API is a closed one — or a value that is
-not 64 hex digits, such as a hash copied with the `  -` or ` *stdin` printed
-after it. The answer's message says which; run the command again without
-`-o /dev/null` to see it. Either way, put the hash in again (steps 2 and 3).
+For anything else, run the command again without `-o /dev/null` to see the
+message:
 
-**Rotating.** Repeat steps 1–3. The previous token stops working the moment
-the secret is updated, without a deploy, so replace it in the password
-manager first and tell whoever else holds it. There is one token per
-environment: a stage token is not a production one.
+- `401`, "the bearer token is not valid": the list has no entry for this
+  token — a hash made with `echo`, another token's, or the token itself,
+  listed in place of its hash. Hash it again (step 2) and put the list again.
+- `401`, "the bearer token has expired": its `notAfter` has passed.
+- `403`, "the token … has the role …, and this route needs …": the token is
+  accepted, and its role does not reach the route — a `monitor`'s, on
+  anything but the status.
+- `403`, "… COMET_REGISTRY_ADMIN_TOKENS is malformed": the worker cannot read
+  the list, such as one with a hash copied with the `  -` or ` *stdin`
+  printed after it, and refuses every token until it can. The worker's log
+  line `registry route refused`, under the answer's `requestId`, names the
+  entry and what is wrong with it; correct the file and put it again
+  (step 4).
+- `403`, "… is not configured in this environment": the environment has no
+  list, or one with no entry, and an unconfigured admin API is a closed one.
+  Put the list (step 4).
+
+**Rotating a token.** Make a new token for the same holder (steps 1 and 2),
+add its entry under the same name and role, give the old entry a `notAfter`
+a few days ahead, and put the list (step 4). Both tokens are taken until
+then: the holder switches, and after it the old one is refused as expired.
+Drop its entry the next time you put the list. A token that may have leaked
+is not rotated: drop its entry and put the list, which refuses it from then
+on.
 
 ### The preflight
 
@@ -141,13 +207,13 @@ on your machine, on a database of its own, against the real chain. Nothing of
 it reaches any environment.
 
 **Set it up.** In `c3-api` of a checkout of the commit being deployed, put
-into `.dev.vars` the hash of an admin token of your own
-(`COMET_REGISTRY_ADMIN_TOKEN_HASH`, see [The admin token](#the-admin-token)),
-a `COMET_GITHUB_TOKEN`, and the `NODE_PROXY_HOST` and `NODE_PROXY_KEY` of a
-deployed node provider proxy whose providers keep archive state: the creation
-blocks are read at past blocks. The local source is the one stage and
-production import, `Compound-Foundation/comet` at `main`. Then start the
-worker on an empty database, kept apart from your usual local one:
+into `.dev.vars` a `COMET_REGISTRY_ADMIN_TOKENS` that lists an admin token of
+your own (see [The admin tokens](#the-admin-tokens)), a `COMET_GITHUB_TOKEN`,
+and the `NODE_PROXY_HOST` and `NODE_PROXY_KEY` of a deployed node provider
+proxy whose providers keep archive state: the creation blocks are read at
+past blocks. The local source is the one stage and production import,
+`Compound-Foundation/comet` at `main`. Then start the worker on an empty
+database, kept apart from your usual local one:
 
 ```sh
 cd c3-api
@@ -1103,10 +1169,13 @@ whose reasons are in the draft it names.
 | A network under `chainCheck.unreadable` in `/admin/status` | The check of the chain could not read that network, for the reason it names — most often `CHAIN_REQUEST_FAILED`, as in the row above. Nothing new is known about its markets: it raises no `chain-drift` of its own and clears none, since a drift found there before stays, with the `seenAt` of the last read that found it. The warning `registry chain not read` in the worker's log has the cause | Fix the proxy for that network. The check reads it again at the next hourly invocation, until it has read every network |
 | `chain-drift` in `/admin/status` | The chain answers a market's feed or collateral otherwise than the version on stores it | [A market that changed on chain](#a-market-that-changed-on-chain) |
 | `422`, `details.code` `OVERLAY_CREATION_BLOCK_WRONG`, writing an overlay, the seed among them | A `creationBlock` the document changes is not the block the market's Comet was deployed in; the message says whether it is before the deployment, after it, or past the latest block. Nothing was written | Send the block the chain's explorer gives as the Comet's "Contract Creation" (step 4 of [Describing a new market](#describing-a-new-market)). From the seed, the file's block is wrong, or the key now names another Comet: see step 3 of [the first bring-up](#3-send-the-seed) |
-| `401` | The token is wrong, or is the hash | Use the admin token itself |
+| `401`, "the bearer token is not valid" | The token is not one the environment lists: a wrong one, or its hash in its place | Use the token itself; check it as step 5 of [The admin tokens](#the-admin-tokens) says |
+| `401`, "the bearer token has expired" | Your token's `notAfter` has passed: it was rotated out | Use the token that replaced it, or ask the environment's owner for one |
+| `403`, "the token … has the role …, and this route needs …" | Your token's role does not reach the route; `details.requiredRole` names the role that does | Ask for a token with that role, or ask its holder to make the change |
+| `403`, "the administrative API is misconfigured in this environment: …", or "… is not configured …" | The environment has no token in its list, or a list the worker cannot read, so every token is refused | Step 5 of [The admin tokens](#the-admin-tokens) says what each message means and what to do |
 | `413` | The request body is larger than the route takes | Send less: a directory of overlays in several requests |
 | `429`, "too many administrative requests from this address" | More than 60 administrative requests in a minute from your address — over IPv6, from your /64 — whatever they were: every request under `/registry/v1/admin/` is counted by address before its token is checked, a wrong token or a path no route takes included, and the right token is refused too once the address has spent its budget | Wait the seconds its `Retry-After` names — a minute at most. A script in a loop, or a monitor sharing your address, is what spends it |
-| `429`, "too many … requests with this token" | More than 30 administrative requests in a minute with your token, counted per family of routes. Reads count too, and every read shares one budget — a monitor polling `/admin/status` with your token spends it with you — while each kind of command has its own | Wait the seconds its `Retry-After` names. The environment has one token, so a monitor polls the status every few minutes, not in a loop |
+| `429`, "too many … requests with this token" | More than 30 administrative requests in a minute with your token, counted per family of routes. Reads count too, and every read shares one budget, while each kind of command has its own; anyone using your token spends it with you | Wait the seconds its `Retry-After` names. A monitor polls with a `monitor` token of its own, which spends nothing of yours |
 | `422`, `details.code` `OVERLAY_FEED_UNREADABLE`, writing an overlay | A feed the overlay names does not answer its decimals on that chain: it reverts, or nothing is deployed at that address there — most often a feed of another chain | Check the address against the chain's feed; a `503` instead is the node provider not answering, and worth trying again |
 | `409` writing overlays, "… registry version cannot be changed" or "is no longer importing" | The draft is no longer open: it was validated, switched on, or replaced by a newer attempt of its commit (`GET /registry/v1/admin/versions/<id>` says which) | Look for the newest open draft first (`GET /registry/v1/admin/versions?status=importing`) and continue there; start a new attempt (step 1 with `forceNewAttempt`) only if there is none |
 | `409` on validate, "the import … is still running" | The import has not finished | Send step 1 again until it completes |

@@ -439,7 +439,9 @@ t.test('an administrative sync that checks the source leaves the chain to the ho
     DEBUG:                            '',
     APP_DB:                           registry.db,
     kv_registry:                      MemoryKv({}),
-    COMET_REGISTRY_ADMIN_TOKEN_HASH:  await sha256Hex('registry-admin-token-for-tests'),
+    COMET_REGISTRY_ADMIN_TOKENS:      JSON.stringify([
+      { name: 'test-admin', sha256: await sha256Hex('registry-admin-token-for-tests'), role: 'admin', notAfter: null },
+    ]),
     REGISTRY_ADMIN_RATE_LIMITER:      { limit: async () => ({ success: true }) },
     REGISTRY_ADMIN_AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
   });

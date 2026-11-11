@@ -11,6 +11,7 @@ import { recordValidationResults } from '../../../src/registry/repository.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * The registry HTTP API, served by the real worker in workerd over local D1.
@@ -21,17 +22,25 @@ import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate, validateS
  * CORS headers the router sets and the security headers the entrypoint adds,
  * authentication, and the error envelope.
  */
+// the token most cases send, test-admin's
 const ADMIN_TOKEN = 'registry-admin-token-for-tests';
 
+// two more tokens of the list, each recorded under its holder's name: an admin and an operator
+const ALICE = 'registry-alice-token-for-tests';
+const OLGA  = 'registry-olga-token-for-tests';
+
 /*
- * The worker stores only the hash of the admin token, so the harness is given
- * the hash as a secret and the tests present the token itself.
+ * The worker stores only the hashes of the admin tokens, so the harness is
+ * given the hashes as secrets and the tests present the tokens themselves.
  */
 const server = createTestHarness({
-  workers: [ {
-    configPath: './wrangler.toml',
-    secrets:    { COMET_REGISTRY_ADMIN_TOKEN_HASH: await sha256Hex(ADMIN_TOKEN) },
-  } ],
+  workers: [ registryWorker({
+    COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([
+      { name: 'test-admin', sha256: await sha256Hex(ADMIN_TOKEN), role: 'admin',    notAfter: null },
+      { name: 'alice',      sha256: await sha256Hex(ALICE),       role: 'admin',    notAfter: null },
+      { name: 'olga',       sha256: await sha256Hex(OLGA),        role: 'operator', notAfter: null },
+    ]),
+  }) ],
 });
 
 t.before(async () => {
@@ -620,10 +629,10 @@ t.test('administrative commands validate their bodies', async t => {
   t.equal(long.status, 400, 'a reason is at most 1,000 characters here too');
 });
 
-function put(path: string, body: unknown): [ string, AdminRequest ] {
+function put(path: string, body: unknown, token: string = ADMIN_TOKEN): [ string, AdminRequest ] {
   return [ path, {
     method:  'PUT',
-    headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
     body:    JSON.stringify(body),
   } ];
 }
@@ -1183,11 +1192,10 @@ t.test('a sync run reports its checkpoints without its lease owner', async t => 
  * history.
  */
 t.test('a sync run nobody holds can be cancelled, with a reason', async t => {
-  const db              = await freshDatabase();
-  const { ENVIRONMENT } = await server.getWorker<Env>().getEnv();
-  const runId           = randomUUID();
-  const now             = new Date().toISOString();
-  const past            = new Date(Date.now() - 60_000).toISOString();
+  const db    = await freshDatabase();
+  const runId = randomUUID();
+  const now   = new Date().toISOString();
+  const past  = new Date(Date.now() - 60_000).toISOString();
 
   // a run whose invocation was stopped in the middle of usdc's last attempt, and whose lease has run out; weth was never reached
   await db.prepare(
@@ -1237,7 +1245,7 @@ t.test('a sync run nobody holds can be cancelled, with a reason', async t => {
   };
   t.same(
     [ syncRun.status, syncRun.outcome, syncRun.lastError, syncRun.leaseExpiresAt ],
-    [ 'failed', null, `cancelled by registry-admin:${ENVIRONMENT}: a stored overlay no longer parses`, null ],
+    [ 'failed', null, 'cancelled by test-admin: a stored overlay no longer parses', null ],
     'answered with the run, failed, saying who cancelled it and why',
   );
   t.ok(syncRun.completedAt, 'and when');
@@ -1251,6 +1259,54 @@ t.test('a sync run nobody holds can be cancelled, with a reason', async t => {
   const ended = await cancel(runId, { reason: 'x' });
   t.equal(ended.status, 409, 'a run that has ended is not cancelled again');
   t.match(await messageOf(ended), /already ended/);
+});
+
+/*
+ * Who made a change is the name of the token it was sent with, wherever the
+ * audit keeps one: the move that switched a version on, and the status that
+ * reports it; a cancelled run; an overlay event.
+ */
+t.test('a command records the name of the token it was sent with', async t => {
+  const db = await freshDatabase();
+
+  const versionId = await seedValidated(db);
+  const activated = await server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'first' }, ALICE));
+  t.equal(activated.status, 200, 'an admin switches a version on');
+  t.equal(
+    await db.prepare(`SELECT actor FROM registry_activations WHERE registry_version_id = ?1`).bind(versionId).first<string>('actor'),
+    'alice',
+    'and the move is recorded under the token\'s name',
+  );
+  const status = await server.fetch('/registry/v1/admin/status', { headers: { 'Authorization': `Bearer ${OLGA}` } });
+  t.equal((await status.json() as { active: { activatedBy: string } }).active.activatedBy, 'alice', 'which the status reports');
+
+  // a run whose lease has run out, which nobody can finish
+  const runId = randomUUID();
+  const past  = new Date(Date.now() - 60_000).toISOString();
+  await db.prepare(
+    `INSERT INTO sync_runs (
+       id, source_commit_sha, tracked_ref, trigger_kind, requested_by, status,
+       lease_owner, lease_expires_at, expected_count, started_at
+     ) VALUES (?1, ?2, 'main', 'scheduled', 'registry-cron', 'running', 'stopped-invocation', ?3, 1, ?3)`
+  ).bind(runId, 'a'.repeat(40), past).run();
+  const cancelled = await server.fetch(...admin(`/registry/v1/admin/sync-runs/${runId}/cancel`, { reason: 'it is stuck' }, OLGA));
+  t.equal(cancelled.status, 200, 'an operator cancels a run');
+  t.equal((await cancelled.json() as { syncRun: { lastError: string } }).syncRun.lastError, 'cancelled by olga: it is stuck',
+    'which says who did');
+
+  const { versionId: draft } = await seedCandidate(db, snapshot, { versionId: randomUUID(), attempt: 2 });
+  const network = overlayOfNetwork(snapshot.networks.find(candidate => candidate.chainId === 1)!);
+  const written = await server.fetch(...put(
+    `/registry/v1/admin/versions/${draft}/networks/1/overlay`,
+    { reason: 'rename the network', overlay: { ...network, displayName: 'Ethereum Mainnet' } },
+    OLGA,
+  ));
+  t.equal(written.status, 200, 'an operator reviews a draft');
+  t.equal(
+    await db.prepare(`SELECT actor FROM registry_overlay_events WHERE registry_version_id = ?1`).bind(draft).first<string>('actor'),
+    'olga',
+    'and the overlay event is recorded under the token\'s name',
+  );
 });
 
 /*
