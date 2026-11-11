@@ -1,14 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import type { MarketV1, NetworkV1, RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
+import type { ApprovalV1, MarketV1, NetworkV1, RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
 import type { NetworkOverlay } from '../../src/registry/overlay.js';
 import { orderNetworks, overlayOfException } from '../../src/registry/overlay.js';
 import {
   activateVersion,
+  approveVersion,
   createCandidate,
   markValidated,
   marketWrites,
+  readActiveVersionId,
   readSnapshot,
   recordValidationResults,
   snapshotChecksum,
@@ -167,8 +169,20 @@ async function validateSeeded(db: D1Database, versionId: string, { checksum }: {
   await markValidated(db, versionId, checksum ?? await snapshotChecksum(orderNetworks(await readSnapshot(db, versionId))));
 }
 
+/*
+ * An approval of a validated version by somebody other than the one who
+ * switches it on, as every activation needs: `test-approver` approves what
+ * `test-admin`, or whoever a test names, activates, against the version on.
+ */
+async function approveSeeded(db: D1Database, versionId: string, actor: string = 'test-approver'): Promise<ApprovalV1> {
+  return approveVersion(db, {
+    versionId, actor, reason: 'test', ttlSeconds: 3600, expectedActiveVersionId: await readActiveVersionId(db),
+  });
+}
+
 async function activateSeeded(db: D1Database, versionId: string): Promise<void> {
   await validateSeeded(db, versionId);
+  await approveSeeded(db, versionId);
   await activateVersion(db, { versionId, action: 'activate', actor: 'test-admin', reason: 'test' });
 }
 
@@ -191,6 +205,7 @@ export type { SeedOptions, SeededCandidate };
 
 export {
   activateSeeded,
+  approveSeeded,
   clearCandidateSnapshot,
   loadRegistrySnapshotFixture,
   overlayOfNetwork,

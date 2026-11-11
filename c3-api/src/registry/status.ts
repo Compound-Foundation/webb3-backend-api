@@ -7,6 +7,7 @@ import type { CacheDeps } from './cache.js';
 import { registryConfig } from './config.js';
 import { readChainCheck } from './drift.js';
 import type { ChainCheck, ChainDrift, UnreadNetwork } from './drift.js';
+import { approvalUsable } from './repository.js';
 import { ALL_ROOTS_CHECK } from './validation.js';
 
 /*
@@ -25,6 +26,7 @@ type Alert =
   | 'no-active-version'
   | 'candidate-awaiting-review'
   | 'candidate-awaiting-activation'
+  | 'candidate-awaiting-approval'
   | 'candidate-drops-markets'
   | 'commit-rejected'
   | 'chain-drift'
@@ -47,6 +49,8 @@ type RegistryStatus = {
     checksum:    string,
     activatedAt: string | null,
     activatedBy: string | null,
+    // who approved the move that switched it on: null for a rollback, and for a move made before approvals existed
+    approvedBy:  string | null,
     ageSeconds:  number | null,
   } | null,
   cache: {
@@ -96,6 +100,8 @@ type RegistryStatus = {
       validatedAt: string | null,
       // the markets of the active version whose Comet it does not serve, by their keys there
       unserved:    string[],
+      // the newest approval an activation by another name could use now, or null for none
+      approval:    { id: string, actor: string, expiresAt: string } | null,
     }>,
     invalid: number,
   },
@@ -126,7 +132,10 @@ type ActiveRow = {
   checksum:    string,
   activated_at: string | null,
   actor:        string | null,
+  approver:     string | null,
 };
+
+type ApprovalRow = { version_id: string, id: string, actor: string, expires_at: string };
 
 type RunRow = {
   id: string, registry_version_id: string | null, status: string, outcome: string | null,
@@ -266,12 +275,12 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
   const db  = deps.db;
 
   const [
-    state, active, run, candidates, unreviewedMarkets, unreviewedNetworks, lastItem, invalid, validated, unserved, rejected,
+    state, active, run, candidates, unreviewedMarkets, unreviewedNetworks, lastItem, invalid, validated, unserved, approvals, rejected,
   ] = await db.batch([
     db.prepare(`SELECT active_version_id, last_upstream_checked_at FROM registry_state WHERE singleton_id = 1`),
     db.prepare(
       `SELECT version.id AS id, version.snapshot_checksum AS checksum,
-              activation.created_at AS activated_at, activation.actor AS actor
+              activation.created_at AS activated_at, activation.actor AS actor, approval.actor AS approver
        FROM registry_state AS state
        JOIN registry_versions AS version ON version.id = state.active_version_id
        LEFT JOIN registry_activations AS activation
@@ -279,6 +288,7 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
         AND activation.created_at = (
           SELECT MAX(created_at) FROM registry_activations WHERE registry_version_id = version.id
         )
+       LEFT JOIN registry_approvals AS approval ON approval.id = activation.approval_id
        WHERE state.singleton_id = 1`
     ),
     db.prepare(
@@ -366,6 +376,15 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
          )
        ORDER BY network.chain_id, market.deployment_key`
     ).bind(MAX_CANDIDATES),
+    // the approvals of each that an activation could use now, newest first, by the rule an activation is held to
+    db.prepare(
+      `SELECT approval.registry_version_id AS version_id, approval.id, approval.actor, approval.expires_at
+       FROM registry_approvals AS approval
+       JOIN registry_state AS state ON state.singleton_id = 1
+       WHERE approval.registry_version_id IN (${AWAITING_ACTIVATION})
+         AND ${approvalUsable('approval', 'state.active_version_id', '?2')}
+       ORDER BY approval.created_at DESC, approval.rowid DESC`
+    ).bind(MAX_CANDIDATES, now.toISOString()),
     /*
      * A commit discovery has stopped importing: the newest version there is
      * ended invalid although its import brought in every root. Another
@@ -397,6 +416,13 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
   for (const row of (unserved.results ?? []) as Array<{ version_id: string, chain_id: number, deployment_key: string }>) {
     dropped.set(row.version_id, [ ...(dropped.get(row.version_id) ?? []), marketKey(row.chain_id, row.deployment_key) ]);
   }
+  const approved     = new Map<string, { id: string, actor: string, expiresAt: string }>();
+  for (const row of (approvals.results ?? []) as ApprovalRow[]) {
+    // newest first, so the first of a version is the one an activation would use
+    if (!approved.has(row.version_id)) {
+      approved.set(row.version_id, { id: row.id, actor: row.actor, expiresAt: row.expires_at });
+    }
+  }
   const awaiting     = ((validated.results ?? []) as Array<{ id: string, attempt: number, created_at: string, validated_at: string | null }>)
     .map(version => ({
       versionId:   version.id,
@@ -404,6 +430,7 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
       createdAt:   version.created_at,
       validatedAt: version.validated_at,
       unserved:    dropped.get(version.id) ?? [],
+      approval:    approved.get(version.id) ?? null,
     }));
   const rejectedRow  = (rejected.results?.[0] ?? null) as { id: string, source_commit_sha: string, attempt: number, created_at: string } | null;
   const items        = (lastItem.results?.[0] ?? null) as { last_item_at: string | null, failed_attempts: number, stopped: number } | null;
@@ -460,6 +487,15 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
   if (awaiting.length > 0) {
     alerts.push('candidate-awaiting-activation');
   }
+  if (awaiting.length > 0 && awaiting[0]!.approval === null) {
+    /*
+     * The newest version waiting has nobody's approval an activation could
+     * use: never approved, or its approval expired, used, or given against a
+     * version that is no longer on. An older one waiting is one a newer
+     * commit has passed, which nobody is asked to approve.
+     */
+    alerts.push('candidate-awaiting-approval');
+  }
   if (awaiting.some(version => version.unserved.length > 0)) {
     /*
      * Nothing holds such a version back: the scheduled import validates it
@@ -509,6 +545,7 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
       checksum:    activeRow.checksum,
       activatedAt: activeRow.activated_at,
       activatedBy: activeRow.actor,
+      approvedBy:  activeRow.approver,
       ageSeconds:  ageOf(activeRow.activated_at, now),
     },
     cache,
