@@ -24,15 +24,15 @@ import {
   readApprovals,
   readMarket,
   readNetworkOverlay,
-  readSnapshot,
   readUnreviewed,
   readValidationSummary,
   readVersion,
   readVersions,
 } from './repository.js';
-import { compareVersions } from './changes.js';
+import { readChanges } from './changes.js';
 import { isServed, servedNetworks } from './catalog.js';
-import { orderNetworks, overlayDigest, overlayOfMarket, parseMarketOverlay } from './overlay.js';
+import type { RegistryEvent } from './notifications.js';
+import { overlayDigest, overlayOfMarket, parseMarketOverlay } from './overlay.js';
 import { validateStoredVersion } from './admin.js';
 import { cancelRun } from './sync.js';
 
@@ -80,6 +80,13 @@ type RegistryContext = {
    * so it is paid for here instead, while nobody is waiting.
    */
   warm: (versionId: string) => Promise<void>,
+  /*
+   * Announces a change that went live, or an approval of one
+   * (notifications.ts), once the command that made it has committed. It
+   * returns at once: the message is read and sent by a task the answer never
+   * waits for, and nothing it meets fails the command.
+   */
+  notify: (event: RegistryEvent) => void,
 };
 
 /*
@@ -513,18 +520,11 @@ async function getChanges(context: RegistryContext, versionId: string): Promise<
     throw new ApiError('NOT_FOUND', `no registry version with that id`);
   }
 
-  // the two versions and the review state are read side by side, not one after another
-  const [ after, before, unreviewed ] = await Promise.all([
-    readSnapshot(context.db, versionId),
-    activeId === null ? null : readSnapshot(context.db, activeId),
-    readUnreviewed(context.db, versionId),
-  ]);
-
   return jsonResponse({
     versionId,
     status:       version.status,
     comparedWith: activeId,
-    ...compareVersions(before === null ? null : orderNetworks(before), orderNetworks(after), new Set(unreviewed.markets)),
+    ...await readChanges(context.db, versionId, activeId),
   });
 }
 
@@ -621,6 +621,15 @@ async function postActivation(
   }
   const result = await activateVersion(context.db, { versionId, action, actor: context.actor, reason, ...expectation });
   /*
+   * A move that changed what is served is announced, and one that changed
+   * nothing is not. It is handed over before the warm-up, which can take a
+   * while: a client that hangs up meanwhile ends the request, and must not
+   * take the announcement of a move already made with it.
+   */
+  if (result.changed && result.activationId !== null) {
+    context.notify({ activationId: result.activationId });
+  }
+  /*
    * A rollback names a version that was validated long ago, and whose bytes
    * the hourly prune may have removed from KV: it keeps only the active
    * version, the one the pointer record names and the validated ones newer
@@ -635,7 +644,9 @@ async function postActivation(
 /*
  * Approves a validated version for an activation by somebody else, against
  * the version its giver read the changes against, which must still be on
- * (approveVersion). Every request records an approval of its own.
+ * (approveVersion). Every request records an approval of its own, and each
+ * one is announced at once, as a move is: the channel hears that a change is
+ * on its way while it can still be stopped.
  */
 async function postApproval(
   context: AdminContext,
@@ -649,6 +660,7 @@ async function postApproval(
     throw new ApiError('NOT_FOUND', `no registry version with that id`);
   }
   const approval = await approveVersion(context.db, { versionId, actor: context.actor, reason, ttlSeconds, expectedActiveVersionId });
+  context.notify({ approvalId: approval.id });
   return jsonResponse({ approval });
 }
 

@@ -2,6 +2,8 @@ import type { Address, MarketStatus, MarketV1, NetworkV1 } from '../../lib/model
 import { marketKey } from '../../lib/model/comet-registry.js';
 
 import { isServed } from './catalog.js';
+import { orderNetworks } from './overlay.js';
+import { readSnapshot, readUnreviewed } from './repository.js';
 
 /*
  * What a version changes against the one that is on.
@@ -162,5 +164,21 @@ function compareVersions(
   };
 }
 
+/*
+ * What a version changes against another, read from D1: the rows of both, and
+ * the markets of the version nobody has reviewed, side by side rather than one
+ * after another. `GET …/changes` compares a version with the one that is on,
+ * and an announcement a move with the version it replaced, so the two say the
+ * same of the same pair of versions.
+ */
+async function readChanges(db: D1Database, versionId: string, comparedWith: string | null): Promise<VersionChanges> {
+  const [ after, before, unreviewed ] = await Promise.all([
+    readSnapshot(db, versionId),
+    comparedWith === null ? null : readSnapshot(db, comparedWith),
+    readUnreviewed(db, versionId),
+  ]);
+  return compareVersions(before === null ? null : orderNetworks(before), orderNetworks(after), new Set(unreviewed.markets));
+}
+
 export type { FieldChange, VersionChanges };
-export { compareVersions };
+export { compareVersions, readChanges };

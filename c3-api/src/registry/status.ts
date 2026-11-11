@@ -5,8 +5,11 @@ import { marketKey } from '../../lib/model/comet-registry.js';
 import { cacheStatus } from './cache.js';
 import type { CacheDeps } from './cache.js';
 import { registryConfig } from './config.js';
+import type { RegistryConfig } from './config.js';
 import { readChainCheck } from './drift.js';
 import type { ChainCheck, ChainDrift, UnreadNetwork } from './drift.js';
+import { readNotificationFailure } from './notifications.js';
+import type { NotificationFailure } from './notifications.js';
 import { approvalUsable } from './repository.js';
 import { ALL_ROOTS_CHECK } from './validation.js';
 
@@ -35,7 +38,8 @@ type Alert =
   | 'sync-overdue'
   | 'sync-stalled'
   | 'snapshot-not-cached'
-  | 'cache-unreadable';
+  | 'cache-unreadable'
+  | 'notification-failing';
 
 type RegistryStatus = {
   environment: string,
@@ -119,6 +123,17 @@ type RegistryStatus = {
     drifts:     ChainDrift[],
     unreadable: UnreadNetwork[],
   } | null,
+  /*
+   * Whether a version switched on or approved is announced (notifications.ts):
+   * whether a webhook is set, never where, and the last move or approval a
+   * message was given up for, until a later one is sent. A failure is
+   * reported only while the webhook is on: with none, or one set to no URL,
+   * nothing is meant to be announced.
+   */
+  notifications: {
+    webhook: RegistryConfig['webhook'],
+    failure: NotificationFailure | null,
+  },
   alerts: Alert[],
 };
 
@@ -268,6 +283,23 @@ async function chainCheckOf(deps: CacheDeps, now: Date): Promise<RegistryStatus[
     drifts:     check.drifts,
     unreadable: check.unreadable,
   };
+}
+
+/*
+ * The message given up last, while the webhook is on. With none, or one set
+ * to no URL, nothing is sent, and a record left from before is not news; a
+ * namespace that does not answer is `cache-unreadable`'s to say.
+ */
+async function notificationFailureOf(deps: CacheDeps, webhook: RegistryConfig['webhook']): Promise<NotificationFailure | null> {
+  if (webhook !== 'on') {
+    return null;
+  }
+  try {
+    return await readNotificationFailure(deps.kv);
+  } catch (error) {
+    deps.debug?.warn(`registry notification failure unreadable`, { error });
+    return null;
+  }
 }
 
 async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus> {
@@ -442,6 +474,7 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
   const config      = registryConfig(env);
   const upstreamAge = ageOf(stateRow?.last_upstream_checked_at ?? null, now);
   const interval    = config.upstreamIntervalSeconds;
+  const failure     = await notificationFailureOf(deps, config.webhook);
 
   const marketsOpen  = countsBy(unreviewedMarkets.results as CountRow[] | undefined, 'markets');
   const networksOpen = countsBy(unreviewedNetworks.results as CountRow[] | undefined, 'networks');
@@ -535,6 +568,16 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
   if (upstreamAge === null || upstreamAge > interval * 2) {
     alerts.push('sync-overdue');
   }
+  if (failure !== null) {
+    /*
+     * A move went live, or an approval was given, and the channel was not
+     * told: the webhook refused the message or did not answer — a webhook
+     * revoked, most often — and a channel that has stopped hearing says
+     * nothing by itself. It holds until a later message is sent, a move's
+     * or an approval's.
+     */
+    alerts.push('notification-failing');
+  }
 
   return {
     environment:   env.ENVIRONMENT,
@@ -576,6 +619,7 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
     },
     candidates: { importing: unreviewed, validated: awaiting, invalid: invalidCount },
     chainCheck,
+    notifications: { webhook: config.webhook, failure },
     alerts,
   };
 }

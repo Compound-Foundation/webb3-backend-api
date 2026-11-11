@@ -30,11 +30,19 @@ type RegistryConfig = {
   staleFallbackSeconds:    number,
   // how long an approval lets its version be switched on, from when it is given
   approvalTtlSeconds:      number,
+  /*
+   * Whether a version switched on or approved is announced (notifications.ts):
+   * no webhook set, one set, or one set to something no message can go to.
+   * Never the URL itself, which is a credential: the importer, the cache and
+   * the status all build this, and none of them may log a secret by logging
+   * it.
+   */
+  webhook:                 'off' | 'on' | 'invalid',
   // every setting set to something it does not take, by the name it is set under
   invalid:                 string[],
 };
 
-type NumericSetting = Exclude<keyof RegistryConfig, 'invalid'>;
+type NumericSetting = Exclude<keyof RegistryConfig, 'invalid' | 'webhook'>;
 
 // the whole numbers a setting takes, the largest a safe integer unless it says otherwise
 type Range = { minimum: number, maximum?: number };
@@ -64,6 +72,8 @@ const IMPORT_SETTINGS: ReadonlySet<string> = new Set([
   NUMBERS.upstreamIntervalSeconds.name,
 ]);
 
+const WEBHOOK = 'COMET_REGISTRY_WEBHOOK_URL';
+
 function requirementOf({ minimum, maximum }: Range): string {
   if (maximum !== undefined) {
     return `an integer from ${minimum} to ${maximum}`;
@@ -75,6 +85,7 @@ function requirementOf({ minimum, maximum }: Range): string {
 const REQUIREMENTS: Record<string, string> = {
   COMET_SOURCE_REPOSITORY: 'owner/repository',
   COMET_SOURCE_REF:        'a git ref',
+  [WEBHOOK]:               'an https URL',
   ...Object.fromEntries(Object.values(NUMBERS).map(number => [ number.name, requirementOf(number) ])),
 };
 
@@ -94,6 +105,28 @@ function numberOf(value: unknown, { minimum, maximum = Number.MAX_SAFE_INTEGER }
   return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : null;
 }
 
+/*
+ * The webhook a version switched on or approved is announced to, by the same
+ * rule as a number: undefined when it is unset or blank, null when it is set
+ * to anything but an https URL, and the URL otherwise. Only the notifier asks
+ * for the URL itself; everything else learns from RegistryConfig whether one
+ * is set.
+ */
+function webhookUrlOf(env: Pick<Env, 'COMET_REGISTRY_WEBHOOK_URL'>): string | null | undefined {
+  const text = String(env[WEBHOOK] ?? '').trim();
+  if (text.length === 0) {
+    return undefined;
+  }
+  let url: URL;
+  try {
+    url = new URL(text);
+  } catch {
+    return null;
+  }
+  // its path is a credential, and the message names who changed what is served: neither travels in the clear
+  return url.protocol === 'https:' ? url.href : null;
+}
+
 function registryConfig(env: Env): RegistryConfig {
   // the source has no default: what is not a repository and a ref names no source at all
   const invalid = [
@@ -108,6 +141,13 @@ function registryConfig(env: Env): RegistryConfig {
     }
     return value ?? fallback;
   };
+  const webhook = (): RegistryConfig['webhook'] => {
+    const url = webhookUrlOf(env);
+    if (url === null) {
+      invalid.push(WEBHOOK);
+    }
+    return url === undefined ? 'off' : url === null ? 'invalid' : 'on';
+  };
   return {
     leaseSeconds:            read('leaseSeconds'),
     marketsPerInvocation:    read('marketsPerInvocation'),
@@ -115,6 +155,7 @@ function registryConfig(env: Env): RegistryConfig {
     snapshotTtlSeconds:      read('snapshotTtlSeconds'),
     staleFallbackSeconds:    read('staleFallbackSeconds'),
     approvalTtlSeconds:      read('approvalTtlSeconds'),
+    webhook:                 webhook(),
     invalid,
   };
 }
@@ -134,4 +175,4 @@ function assertImportable(config: RegistryConfig): void {
 }
 
 export type { RegistryConfig };
-export { assertImportable, registryConfig };
+export { assertImportable, registryConfig, webhookUrlOf };

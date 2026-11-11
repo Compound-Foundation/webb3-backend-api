@@ -94,9 +94,10 @@ npm run d1:migrate:stage
 npm run d1:migrate:production
 ```
 
-The Comet registry also binds `kv_registry` for its snapshot cache and its
-last check of the chain, two rate limiters for its administrative routes,
-and an hourly Cron trigger for its resumable sync.
+The Comet registry also binds `kv_registry` for its snapshot cache, its last
+check of the chain and the last announcement it gave up, two rate limiters
+for its administrative routes, and an hourly Cron trigger for its resumable
+sync.
 `REGISTRY_ADMIN_AUTH_RATE_LIMITER` counts every request under
 `/registry/v1/admin/` before its token is checked, 60 a minute for each
 client address (`CF-Connecting-IP`; an IPv6 client by its /64), so wrong
@@ -137,11 +138,13 @@ unset or empty is the default. A value that is not one is
 never used: the import refuses to start over one of its own, a read takes
 the default in its place, and `GET /registry/v1/admin/status` names it under
 the alert `configuration-invalid`, as it does a `COMET_SOURCE_REPOSITORY` or
-`COMET_SOURCE_REF` that names no source.
+`COMET_SOURCE_REF` that names no source, and a `COMET_REGISTRY_WEBHOOK_URL`
+that is not an `https` URL, to which nothing is announced. That one is a
+secret, corrected with `npx wrangler secret put` rather than a deploy.
 
 The secrets, and every other value an environment sets outside
 `wrangler.toml` — the registry's among them, such as
-`COMET_REGISTRY_ADMIN_TOKENS` — are listed in
+`COMET_REGISTRY_ADMIN_TOKENS` and `COMET_REGISTRY_WEBHOOK_URL` — are listed in
 [./.dev.vars.example](./.dev.vars.example). Copy it to
 `.dev.vars` for local runs; deployed environments set them with
 `npx wrangler secret put <NAME> --env <environment>`, never in
@@ -283,9 +286,20 @@ that version to the approved one, and lets one activation through. A
 rollback needs nobody's approval, so that undoing a bad version takes one
 person, but it goes back one step only: to the version the one on replaced
 when it was last activated, if that is older. Going further back takes
-another rollback. The code holds these rules for every move, and migration
-`0011` holds them in the database too from an environment's first approval
-on.
+another rollback, and each is announced. The code holds these rules for
+every move, and migration `0011` holds them in the database too from an
+environment's first approval on.
+
+Every activation and rollback that changes what is served is announced,
+once it has committed, to the webhook `COMET_REGISTRY_WEBHOOK_URL` names — a
+Slack incoming webhook for the team's channel: who switched which version
+on, in place of which, who approved it, which networks and markets that
+added, removed or changed, and last, why ([API.md](./API.md#registry-v1)).
+So is every approval, as it is given. The message is best
+effort, sent once and given up after 5 seconds, and fails no command; the
+audit is the record, and the status raises `notification-failing` when a
+message was given up
+([Announcing changes](./REGISTRY_RUNBOOK.md#announcing-changes)).
 
 ## Bringing a registry up from nothing
 

@@ -303,6 +303,12 @@ t.test('the worker boots in workerd with the registry bindings', async t => {
     t.notSame(String(env[name] ?? '').trim(), '', `${name} comes from wrangler.toml`);
   }
   t.same(registryConfig(env).invalid, [], 'and the registry takes every one of them');
+  /*
+   * A webhook is a secret, which the harness would take from a developer's
+   * .dev.vars: a test that switches a version on would announce it there.
+   */
+  t.equal(env.COMET_REGISTRY_WEBHOOK_URL, '', 'no webhook is set, whatever .dev.vars sets');
+  t.equal(registryConfig(env).webhook, 'off', 'so nothing is announced');
 
   const limited = await env.REGISTRY_ADMIN_RATE_LIMITER.limit({ key: 'registry-admin:test:sync' });
   t.equal(limited.success, true, 'the admin rate limiter is bound');
