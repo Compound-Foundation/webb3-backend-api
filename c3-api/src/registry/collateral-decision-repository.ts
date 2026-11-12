@@ -53,8 +53,9 @@ import { rowsOf } from './sql-condition.js';
  * (decision-store.ts, KindTables), and the others here, the same text for
  * both kinds, naming the kind's own tables and no other's. A read of one kind
  * never reads the other's decisions, so it answers or fails on its own. A
- * release ahead of 0008 fails the hidden reads alone: the active reads
- * refuse for want of them. And where D1 does not answer one
+ * release ahead of 0008 fails the hidden reads alone: /summary leaves out
+ * what the hidden decisions decide (summary-tokens.ts, collateralFields), and
+ * the active reads refuse for want of them. And where D1 does not answer one
  * kind's read, the active reads take that kind from its record
  * (decision-records.ts).
  */

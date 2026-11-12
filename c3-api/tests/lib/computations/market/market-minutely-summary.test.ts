@@ -84,7 +84,9 @@ t.test(`market-minutely-summary@block:16380543`, async (t) => {
     `market-minutely-summary is the same as the market-summary at` +
       ` the indexed block for that minute`
   );
-  t.strictSame(result1, {
+  // what only the latest summary reports beside marketSummary: each collateral's value and exception, and the block it was read at
+  const { marketBlock, collaterals: valued, ...reported } = result1 as any;
+  t.strictSame({ ...reported, collaterals: valued.map(({ valueUsd: _value, exception: _exception, ...collateral }: any) => collateral) }, {
     chainId: 1,
     comet: {
       address: "0xc3d688B66703497DAA19211EEdff47f25384cdc3",
@@ -95,6 +97,10 @@ t.test(`market-minutely-summary@block:16380543`, async (t) => {
     totalBorrowValue: "85029209.375671",
     totalSupplyValue: "152956822.280687",
     totalCollateralValue: "198600936.76810451139983159362475978",
+    // cUSDCv3 is quoted in USD, so its totals in USD are the quoted ones
+    totalBorrowValueUsd: "85029209.375671",
+    totalSupplyValueUsd: "152956822.280687",
+    totalCollateralValueUsd: "198600936.76810451139983159362475978",
     utilization: "555903304895608716",
     baseUsdPrice: "1.0",
     basePrice: "1.0",
@@ -107,6 +113,13 @@ t.test(`market-minutely-summary@block:16380543`, async (t) => {
       { address: "0x514910771AF9Ca656af840dff83E8264EcF986CA", symbol: "LINK", status: "success" },
     ],
   });
+  // 16,380,541 was mined at 2023-01-11T02:19:59Z
+  t.strictSame(marketBlock, { number: 16_380_541, timestamp: 1_673_403_599 }, `the block the market was read at, the minute's, with the timestamp of its own header`);
+  const scaled = (value: BigFixnum) => value.scaleToDecimals(40).value;
+  t.ok(valued.reduce((sum: BigNumber, { valueUsd }: { valueUsd: BigFixnum }) => sum.add(scaled(valueUsd)), BigNumber.from(0))
+    .eq(scaled(BigFixnum.from({ value: "19860093676810451139983159362475978", decimals: 26 }))),
+    `and the values of its collaterals add up to its total in USD`);
+  t.ok(valued.every(({ exception }: { exception: unknown }) => exception === null), `none of them priced by an exception`);
 
   /*
    * check for select expected cache keys

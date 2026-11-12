@@ -119,4 +119,5 @@ export {
   EthGetBlock,
   ethGetBlock,
   composeIndex,
+  validateResult,
 };

@@ -163,7 +163,8 @@ async function setTokenPolicy(db: D1Database, change: PolicyChange): Promise<Tok
 /*
  * One token's decision and the changes that led to it (readDecision).
  * `inActiveVersion` says whether the active version holds the token, in a
- * market of any status: a token only disabled markets name is held.
+ * market of any status: a token only disabled markets name is held, and its
+ * mark shows once a market that names it is served.
  *
  * The first of the changes is always the one that set the decision in force
  * (historyOf; migrations/0005_token_policies.sql says why).
@@ -196,8 +197,10 @@ async function readTokenPolicy(db: D1Database, chainId: number, tokenAddress: Ad
 
 /*
  * The tokens an administrator has marked strategic, every chain's at once, by
- * chain id: one statement, not one a chain. Unlike the reads above, this one
- * does not resolve the active version, since a decision belongs to no
+ * chain id, for the summary of every network: one statement, not one a
+ * chain. Unlike the reads above, this one does not resolve the active
+ * version: the summary resolves it through the request's catalog, which
+ * already names the version it answers for, and a decision belongs to no
  * version.
  */
 async function readStrategicTokensByChain(db: D1Database): Promise<Map<number, Set<Address>>> {
@@ -215,10 +218,10 @@ async function readStrategicTokensByChain(db: D1Database): Promise<Map<number, S
  * Every token one network of the active version holds, with the decision in
  * force for each, and beside them the decisions kept for tokens of the chain
  * that the active version does not hold, each of which applies again if a
- * version brings its token back. A chain the active version dropped entirely
- * still answers with what is kept for it; only a chain with neither tokens nor
- * decisions is not found. One batch, so the version it names is the version
- * it lists.
+ * version brings its token back and serves a market that names it. A chain
+ * the active version dropped entirely still answers with what is kept for it;
+ * only a chain with neither tokens nor decisions is not found. One batch, so
+ * the version it names is the version it lists.
  */
 async function readTokenPolicies(db: D1Database, chainId: number): Promise<TokenPoliciesV1> {
   const [ listed, kept ] = await db.batch([

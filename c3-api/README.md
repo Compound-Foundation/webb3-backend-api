@@ -185,13 +185,14 @@ statements or batches — and about thirty for the run.
 
 `wrangler.toml` sets no `[limits]`, so stage and production have the plan's
 defaults: an import of the whole source, or the summary of every market — four
-calls to the node provider proxy per network — stays far inside its
-subrequests. The history of every market, with none of its days cached,
-stays inside them as well: three calls to the proxy per market and one per
-network, beside four KV operations for each day of each market — about 3,600
-subrequests for the 29 markets of the source over 30 days. A `[limits]`
-section changes them for one Worker, for example to a million subrequests
-and 60 seconds of CPU an invocation.
+calls to the node provider proxy per network, and three D1 statements for the
+decisions it marks collaterals with ([Token Visibility](#token-visibility)) —
+stays far inside its subrequests. The history of every market, with none of
+its days cached, stays inside them as well: three calls to the proxy per
+market and one per network, beside four KV operations for each day of each
+market — about 3,600 subrequests for the 29 markets of the source over 30
+days. A `[limits]` section changes them for one Worker, for example to a
+million subrequests and 60 seconds of CPU an invocation.
 
 # The Comet Market Registry
 
@@ -230,11 +231,14 @@ What that means for the endpoints:
   whatever mainnet market its `markets[]` names, and the client restarts
   pagination. So is a cursor issued before the registry, which carries no
   version, whatever it reads;
-- a market summary, and each day of its history, takes the feed that prices
-  its base asset from the version; what the Comet holds, the feed it reads
-  for each collateral at the block, and the prices are read on chain.
-  Transaction history reads the amounts of a token no version describes at
-  the decimals the token reports ([API.md](./API.md));
+- a market summary, and each day of its history, takes what the market's
+  collateral is and the feed that prices its base asset from the version;
+  what the Comet holds, the feed it reads for each collateral at the block,
+  and the prices are read on chain. Its totals are given in the market's
+  quote unit and, beside them, in USD. A collateral the Comet listed after
+  the import is left out until a version describes it, and transaction
+  history reads the amounts of a token no version describes at the decimals
+  the token reports ([API.md](./API.md));
 - routes that resolve no market — V2 and gas price — never read `APP_DB`,
   and governance reads it only to name the markets of proposal actions, and
   the tokens and price feeds the static constants do not name. The proposal
@@ -397,9 +401,9 @@ person, but it goes back one step only: to the version the one on replaced
 when it was last activated, if that is older. Going further back takes
 another rollback, and each is announced. The code holds these rules for
 every move, and migration `0011` holds them in the database too from an
-environment's first approval on. A decision about a token or a collateral is
-one admin's: it takes effect as soon as it is made, needs nobody's approval,
-and is not announced.
+environment's first approval on. A decision about a token or a collateral
+([Token Visibility](#token-visibility)) is one admin's: it takes effect as
+soon as it is made, needs nobody's approval, and is not announced.
 
 Every activation and rollback that changes what is served is announced,
 once it has committed, to the webhook `COMET_REGISTRY_WEBHOOK_URL` names — a
@@ -529,11 +533,12 @@ again.
 
 # Token Policies
 
-An administrator can mark a token strategic. A strategic token is meant to be
-shown in every market that takes it as collateral, whatever that market holds
-of it, unless that market's Comet hides it (`hidden`) or has it deprecated
-(`deprecated`). A policy is decided, audited, and read back through the
-administrative routes ([API.md](./API.md)).
+An administrator can mark a token strategic. A strategic token is shown in
+every market that takes it as collateral, whatever that market holds of it,
+unless that market's Comet hides it (`hidden`) or has it deprecated
+(`deprecated`). `/summary` reads the mark on every request
+([Token Visibility](#token-visibility)). A policy is decided, audited, and
+read back through the administrative routes ([API.md](./API.md)).
 
 A policy belongs to the token — a chain id and an address — and not to a
 registry version, so it survives every activation; a version that drops the
@@ -592,10 +597,16 @@ kept itself, which calls them legacy collateral, and which is also
 how it keeps wUSDM out of the USDT market now: that rule is the list's
 row for it, and so, once the list is applied, the decision `isDeprecated` on
 wUSDM in cUSDTv3. `/registry/v1/active` and the market reads mark every
-collateral with `isDeprecated`, by the decisions in force when they answer.
-The market no longer offers such a collateral, so token discovery does not
-show it there. Every other market that takes the token decides it by its own
-decisions, and the app decides per market what it offers.
+collateral with `isDeprecated`, by the decisions in force when they answer,
+and `/summary` says of each collateral whether its Comet has it deprecated
+(`is_deprecated`), which Comets of its chain do (`deprecated_in`), and
+whether an enabled market takes it as collateral and every one that does has
+it deprecated (`is_network_deprecated`). The market no longer offers such a
+collateral, so token discovery does not show it there, whatever else holds:
+`deprecated`, or `hidden` where the market hides it as well, which is asked
+first ([Token Visibility](#token-visibility)). Every other market that takes
+the token decides it by its own decisions and its own value there, and the
+app decides per market what it offers.
 
 A decision belongs to the collateral of the Comet — a chain id, the Comet's
 address and the token's — and not to a registry version, so it survives
@@ -662,26 +673,35 @@ market, an administrator marks it deprecated instead
 ([Deprecated Collaterals](#deprecated-collaterals)).
 `/registry/v1/active` and the market reads mark every collateral with
 `isHidden` beside `isDeprecated`, by the decisions in force when they answer.
-No other market's decision hides a collateral in a market: each decides by
-its own. So to keep a token out of discovery on the whole chain, an
-administrator hides it in every market that takes it as collateral, those
-whose status is `deprecated` among them; a market that has it deprecated
-does not show it either.
+`/summary` answers a collateral its Comet hides as one discovery does not
+show in that market (`is_visible: false`, `visibility_reason: hidden`),
+whatever else holds, before anything else is asked: even when it is
+strategic, deprecated there, or worth the threshold there, and even when it
+is also the base or reward token of a market
+([Token Visibility](#token-visibility)). It says per collateral which Comets
+of the chain hide its token (`hidden_in`), and no other market's decision
+hides it in a market: each decides by its own. So to keep a token out of
+discovery on the whole chain, an administrator hides it in every market that
+takes it as collateral, those whose status is `deprecated` among them; a
+market that has it deprecated does not show it either, as `deprecated`.
 
 A decision belongs to the collateral of the Comet — a chain id, the Comet's
 address and the token's — and not to a registry version, as a deprecated
 collateral's does, so it survives every activation and comes back with a
 version that brings the collateral back to its market. It is decided only for
 a collateral of a market of the active version, so a collateral a new version
-adds can be hidden only once that version is on. It names the token the
-version holds, not the one the app shows in its place: WETH, which the app
-shows as ETH at the zero address on seven chains (WPOL and WRON likewise, as
-POL and RON), and wstETH, beside which the app offers stETH on Ethereum. A
-collateral nobody has decided about is not hidden, without a row. Every change
-is written in one D1 transaction with its audit event, and migration `0008`
-enforces that in the database as `0007` does for deprecated collaterals, in
-tables of its own. It only adds them, so the release before it runs on beside
-them; a Worker rolled back to that release ignores the decisions.
+adds can be hidden only once that version is on, and from the switch until it
+is hidden, discovery decides one nobody has decided about in its market by
+its strategic mark and its value there, whatever the other markets that take
+the token decide. It names the token the version holds, not the one the app
+shows in its place: WETH, which the app shows as ETH at the zero address on
+seven chains (WPOL and WRON likewise, as POL and RON), and wstETH, beside
+which the app offers stETH on Ethereum. A collateral nobody has decided about
+is not hidden, without a row. Every change is written in one D1 transaction
+with its audit event, and migration `0008` enforces that in the database as
+`0007` does for deprecated collaterals, in tables of its own. It only adds
+them, so the release before it runs on beside them; a Worker rolled back to
+that release ignores the decisions.
 
 The routes are those of the deprecated collaterals, under the same limiter
 budgets: hiding a collateral and applying a list share the `policy` one, and
@@ -711,10 +731,65 @@ jq 'if .error then error("the review failed: \(.error.message)")
 The runbook has the steps
 ([Hiding a collateral](./REGISTRY_RUNBOOK.md#hiding-a-collateral)). Every
 command records the hidden decisions in force in `kv_registry` once it has
-committed, apart from the deprecated ones, and `/active` and the market reads
-answer with that record while D1 cannot be reached
+committed, apart from the deprecated ones, and `/active`, the market reads and
+`/summary` answer with that record while D1 cannot be reached
 ([What a request reads](#what-a-request-reads)). Nothing is hidden when an
 environment is brought up: there is no list to seed.
+
+# Token Visibility
+
+`/summary` says of each collateral whether token discovery shows its token in
+that market (`is_visible`), and why (`visibility_reason`): a token the
+market's Comet hides is not shown there
+([Hidden Collaterals](#hidden-collaterals)), whatever else holds, which is
+asked first; otherwise one it has deprecated is not shown there either
+([Deprecated Collaterals](#deprecated-collaterals)); and any other is shown
+when it is strategic ([Token Policies](#token-policies)), when what that
+market holds of it is worth at least USD 250,000, or when that value cannot
+be read, and is not shown otherwise. What the other markets of the chain hold
+of the token, or decide about it, takes no part, and every market the active
+version serves is decided so, whatever its status. The value is computed with
+the market, never stored in D1, and compared exactly, in fixed point.
+
+The words of the rule, as these sections, API.md and the code use them:
+
+- a market _takes_ a token that the active version lists among its
+  collateral, whatever is decided about it. It is _served_ when its status
+  is `enabled` or `deprecated`, and only an _enabled_ one counts in whether a
+  token is deprecated across its chain (`is_network_deprecated`);
+- a market _offers_ a token it takes that is not deprecated there, and
+  _leaves it to discovery_ where it offers it and does not hide it;
+- a collateral's _value_ is what its market holds of it (`totalsCollateral`)
+  at its price, in USD, at the block the summary read the market at: what the
+  market holds none of is worth nothing, whatever its price, and a value
+  whose price, or whose conversion to USD, could not be read is not known, as
+  is one a remap prices through the feed it replaces, its replacement having
+  stopped answering;
+- a token a market leaves to discovery is decided there _by its strategic
+  mark and its value_: shown when it is strategic, when its value there
+  cannot be read, or when it is worth at least the threshold there, and
+  otherwise not (`below_threshold`);
+- `isDeprecated` is a Comet's decision on a collateral of
+  `/registry/v1/active`, as `is_deprecated` is in `/summary`;
+  `is_network_deprecated` says that an enabled market takes the token, and
+  that every one that does has it deprecated. `isHidden` is only ever a
+  Comet's decision.
+
+A market's collateral is valued with the rest of its summary, from the same
+reads: what the Comet holds of each collateral and its price, at the market's
+block of the minute, the block every other field of the market is read at,
+converted to USD as its totals are (`marketLatestSummary`), so the values
+that are known add up to its `total_collateral_value_usd`, but where a remap
+fell back on the feed it replaces, which the total counts and the value does
+not. The header of that block is read beside them, in the first round of the
+market's reads, once for the markets of a network read at the same block,
+and dates the market's values, once (`collateral_value_block`); a header the
+node does not give leaves the date out and fails nothing, and the log says
+`block header not read` once a minute per network. All of it is
+cached with the summary of the minute (`marketMinutelySummary`), so a
+request in a minute already read asks the node for the latest block alone. A
+value is never carried over from an earlier minute: a node that does not
+serve the market's reads fails the summary, as it always has.
 
 # Testing
 

@@ -17,6 +17,7 @@ import * as evm from '../../../../lib/computations/evm.js';
 
 import type * as jsonRpc from '../../../../lib/json-rpc.js';
 
+import { consoleLines } from '../../../util/console.js';
 import { makeTestEnv } from '../../../util/test-env.js';
 import * as mock from '../../../util/mock/mock.js';
 
@@ -357,4 +358,58 @@ t.test(`ethGetBlock of a specific block should be cached`, async t => {
       `${prefix}: 2nd evaluate does not change cached keys`
     );
   }
+});
+
+/*
+ * The header of a block of a known number is its number and its timestamp,
+ * or null where the node did not give it: a provider that does not have the
+ * block yet answers null, a call can err on every provider, and an answer can
+ * be no block or another block. None of them fails the read, each is said in
+ * the log once a minute for its network, and none is cached, whatever the
+ * index bias, the header given included: a header nobody gave is an answer of
+ * the moment, and is asked for again. What a reader keeps of it is its own,
+ * as the summary keeps it with its minute (market-minutely-summary.ts).
+ */
+t.test('ethGetBlockHeader answers a block\'s header, or null where the node does not give it, and caches neither', async t => {
+  const logged = consoleLines(t, [ 'warn' ]);
+  const cache  = new MemoryCache({}, [
+    BigNumber.JsonReviver,
+    BigFixnum.JsonReviver,
+  ]);
+  const { pull1, evaluate } = Evaluator.instantiate<evm.EthGetBlockHeader>(
+    evm.applyIndexBias('Everything', evm),
+    { cache, debug, flags }
+  );
+  const block    = testBlocks[2]!;
+  const endpoint = (on: KnownNetwork.Name) => Eth.nodeEndpoint(testEnv.NODE_PROXY_HOST, testEnv.NODE_PROXY_KEY, on);
+  const header   = (on: KnownNetwork.Name) => evaluate(pull1({ ethGetBlockHeader: { apiHost, nodeHost, nodeKey, network: on, blockNumber: block.number } }));
+
+  mock.rpc.expectPost(fetch, endpoint(network), mock.rpc.ethGetBlock(block));
+  t.strictSame(await header(network), { number: block.number, timestamp: block.timestamp }, 'its number and timestamp, and nothing else of the block');
+  fetch.satisfy(t);
+  t.strictSame(logged, [], 'which says nothing in the log');
+
+  // each on a network of its own, which the log names once a minute
+  const missing: Array<[ string, KnownNetwork.Name, Partial<mock.rpc.ethGetBlock.Options>, RegExp ]> = [
+    [ 'a block the provider does not have yet', 'ethereum-mainnet', { result: null }, /: no such block$/ ],
+    [ 'a call that erred on every provider', 'base-mainnet', { error: { code: -32000, message: 'header not found' } }, /: call error: .*header not found/ ],
+    [ 'another block than the one asked for', 'arbitrum-mainnet', { result: { number: '0x1', timestamp: '0x6078732b', transactions: [] } }, /: malformed result$/ ],
+    [ 'a malformed answer', 'optimism-mainnet', { result: { number: `0x${block.number.toString(16)}` } }, /: malformed result$/ ],
+  ];
+  for (const [ what, on, answer, said ] of missing) {
+    logged.length = 0;
+    mock.rpc.expectPost(fetch, endpoint(on), mock.rpc.ethGetBlock(block, answer));
+    t.equal(await header(on), null, `${what}: null`);
+    fetch.satisfy(t);
+    t.equal(logged.length, 1, `${what}: said in the log`);
+    t.match(logged[0], `block header not read: block ${block.number} on ${on}`, `${what}: naming the block and the network`);
+    t.match(logged[0], said, `${what}: and why`);
+  }
+
+  logged.length = 0;
+  mock.rpc.expectPost(fetch, endpoint(network), mock.rpc.ethGetBlock(block, { result: null }));
+  t.equal(await header(network), null, 'a header asked for again is read again');
+  fetch.satisfy(t);
+  t.strictSame(logged, [], 'and not said again for its network within the minute');
+  t.strictSame(Object.keys(cache.store), [], 'and nothing is cached, though the bias indexes every other read of the chain');
 });

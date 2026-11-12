@@ -6,7 +6,6 @@ import * as Flags    from '../../../../lib/flags.js';
 import { BigNumber } from '../../../../lib/bignumber.js';
 import { BigFixnum } from '../../../../lib/bigfixnum.js';
 
-import * as Compute    from '../../../../lib/symbolic/computation.js';
 import * as Evaluator  from '../../../../lib/symbolic/evaluator.js';
 import { MemoryCache } from '../../../../lib/symbolic/cache.js';
 
@@ -16,6 +15,8 @@ import * as comet from '../../../../lib/computations/comet.js';
 import { checksumAddress, type Address } from '../../../../lib/model/comet-registry.js';
 import { catalogOf } from '../../../../src/registry/catalog.js';
 
+import { consoleLines } from '../../../util/console.js';
+import { stub } from '../../../util/evaluator.js';
 import * as mock from '../../../util/mock/mock.js';
 import { loadRegistrySnapshotFixture } from '../../../util/registry-fixture.js';
 
@@ -74,22 +75,13 @@ function remapping(retired: Address, replacement: Address) {
 
 const usdt = remapping(RETIRED, REPLACEMENT);
 
+// the exception of the network a price was stated or read by, as the version describes it
+const exceptionOf = (contract: typeof usdt, feed: string) => contract.registry.priceExceptions.find(exception => exception.priceFeedAddress === feed)!;
+
 declare var fetch: mock.Fetch;
 
 const price    = (decimals: number) => ({ status: 'success' as const, price: BigFixnum.from({ decimals, value: BigNumber.from(10).pow(decimals) }) });
 const reverted = (message: string) => ({ status: 'error' as const, message });
-
-function stub(answer: (context: any) => unknown) {
-  return Compute.Functor<any>({}).implement({ version: 0, compute: context => answer(context) });
-}
-
-function captureWarnings(t: { teardown: (fn: () => void) => void }): string[] {
-  const logged: string[] = [];
-  const consoleWarn = console.warn;
-  console.warn = (...args: unknown[]) => { logged.push(args.join(' ')); };
-  t.teardown(() => { console.warn = consoleWarn; });
-  return logged;
-}
 
 /*
  * The price of a collateral of the USDT market whose Comet names `feed` at
@@ -116,36 +108,49 @@ async function priceOf(feed: string, prices: Record<string, unknown>) {
 }
 
 t.test('a remapped feed is read from its replacement', async t => {
-  const logged = captureWarnings(t);
+  const logged = consoleLines(t, [ 'warn' ]);
   const { answer, reads } = await priceOf(RETIRED, { [REPLACEMENT]: price(8), [RETIRED]: price(18) });
 
-  t.strictSame(answer, price(8), 'at the scale the version states for the replacement');
+  t.strictSame(answer, { ...price(8), exception: exceptionOf(usdt, RETIRED) },
+    'at the scale the version states for the replacement, naming the remap that priced it');
   t.strictSame(reads, [ [ REPLACEMENT, 8, true ] ], 'and the feed it replaces is not read');
   t.strictSame(logged, []);
 });
 
+/*
+ * Whether the replacement's revert is one to report, and whether the price
+ * the feed the Comet named gives is one to value by, are its reader's to
+ * tell: at a block before the replacement was deployed, which the history
+ * reads, its revert is expected, and at the latest block, which the summary
+ * reads, the replacement has stopped answering (market-latest-summary.ts). So
+ * that price names the remap it fell back from and carries the revert, naming
+ * the replacement as the version names it, and the computation reports
+ * nothing itself.
+ */
 t.test('a block before the replacement was deployed is read from the feed the Comet named', async t => {
-  const logged = captureWarnings(t);
+  const logged = consoleLines(t, [ 'warn' ]);
   const { answer, reads } = await priceOf(RETIRED, { [RETIRED]: price(18) });
 
-  t.strictSame(answer, price(18), 'at the scale the version states for that feed');
+  t.strictSame(answer, { ...price(18), exception: exceptionOf(usdt, RETIRED), replacementRevert: { feed: REPLACEMENT, message: 'no feed answers at that address' } },
+    'at the scale the version states for that feed, naming the remap it fell back from, and carrying what the replacement reverted with');
   t.strictSame(reads, [ [ REPLACEMENT, 8, true ], [ RETIRED, 18, true ] ], 'once the replacement reverted');
-  t.strictSame(logged, [], 'and the revert of a replacement that did not exist yet is not reported');
+  t.strictSame(logged, [], 'and the revert of a replacement that did not exist yet is not reported here');
 });
 
 t.test('a remapped feed is reported only when neither feed answers', async t => {
-  const logged = captureWarnings(t);
+  const logged = consoleLines(t, [ 'warn' ]);
   const { answer, reads } = await priceOf(RETIRED, {
     [REPLACEMENT]: reverted('the replacement reverted'),
     [RETIRED]:     reverted('the retired feed reverted'),
   });
 
-  t.strictSame(answer, reverted('the replacement reverted'), 'the collateral answers the revert of its replacement');
+  t.strictSame(answer, { ...reverted('the replacement reverted'), exception: null },
+    'the collateral answers the revert of its replacement, priced by nothing, and leaves its reader nothing more to report');
   t.equal(reads.length, 2);
   t.equal(logged.length, 1, 'reported once');
   t.match(logged[0], /^price feed reverted: /, 'under the prefix the runbook alerts on');
-  t.match(logged[0], REPLACEMENT, 'naming the replacement, which the version prices the collateral with');
-  t.match(logged[0], `at block ${block}`);
+  t.equal(logged[0], `price feed reverted: ${REPLACEMENT} read by ${usdt.address} on ${network} at block ${block}: the replacement reverted`,
+    'naming the replacement, which the version prices the collateral with, and its revert');
 });
 
 t.test('a feed the version prices is not read', async t => {
@@ -154,7 +159,14 @@ t.test('a feed the version prices is not read', async t => {
     t.match(answer, { status: 'success' });
     t.equal((answer as any).price.toString(), expected);
     t.strictSame(reads, [], `${feed} is answered by its exception`);
+    t.strictSame((answer as any).exception, exceptionOf(usdt, feed), 'which the price names');
   }
+});
+
+t.test('a feed no exception describes is read, and its price names none', async t => {
+  const { answer, reads } = await priceOf(RETIRED_TOO, { [RETIRED_TOO]: price(8) });
+  t.strictSame(answer, { ...price(8), exception: null }, 'the price the Comet\'s feed answered');
+  t.strictSame(reads, [ [ RETIRED_TOO, 8, false ] ], 'read once, its revert one to report');
 });
 
 /*
@@ -164,7 +176,7 @@ t.test('a feed the version prices is not read', async t => {
  * feed the Comet named answers.
  */
 t.test('a replacement with no code yet falls back through a real read, which reports nothing', async t => {
-  const logged      = captureWarnings(t);
+  const logged      = consoleLines(t, [ 'warn' ]);
   const replacement = '0x6666666666666666666666666666666666666666';
   const contract    = remapping(RETIRED_TOO, replacement);
 
@@ -197,6 +209,8 @@ t.test('a replacement with no code yet falls back through a real read, which rep
 
   t.match(answer, { status: 'success' });
   t.equal((answer as any).price.toString(), '2500.0', 'the feed the Comet named, at its eight decimals');
-  t.strictSame(logged, [], 'and the replacement\'s revert is not reported');
+  t.strictSame((answer as any).exception, exceptionOf(contract, RETIRED_TOO), 'naming the remap it fell back from');
+  t.strictSame((answer as any).replacementRevert, { feed: replacement, message: 'execution reverted' }, 'carrying what the replacement reverted with');
+  t.strictSame(logged, [], 'and the replacement\'s revert is not reported here');
   fetch.satisfy(t);
 });

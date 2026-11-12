@@ -181,9 +181,19 @@ t.test('a cold history of every market makes three node requests per market and 
  * it. A version that remaps a feed reads the feed it remaps to, and the
  * Comet's own on a day the other reverts, in rounds of their own, and a feed
  * that reverts makes a day `partially` or `error`.
+ *
+ * A day before the replacement was deployed is one its revert is expected on,
+ * so the history logs the replacement only on a day neither feed answers
+ * (asset-price.ts): the latest summary alone logs it at a block where the
+ * feed it replaces answers (market-latest-summary.ts). Nothing the history
+ * answers or keeps names the replacement. The clock is a minute later at
+ * every reading, so the throttle of those lines (get-price.ts) lets every one
+ * through, on either evaluator.
  */
 t.test('the history answers every day as the recursive evaluator does, and keeps it under the same keys', async t => {
-  consoleLines(t, [ 'warn' ]);
+  const logged = consoleLines(t, [ 'warn' ]);
+  let clock = Date.now();
+  t.capture(Date, 'now', () => (clock += 60_000));
 
   const usdc  = marketOf(USDC);
   const feeds = {
@@ -234,4 +244,19 @@ t.test('the history answers every day as the recursive evaluator does, and keeps
   t.ok(Object.keys(batched.stored).length > 0, 'which it keeps in KV');
   t.strictSame([ ...new Set((JSON.parse(batched.body) as Array<{ status: string }>).map(day => day.status)) ].sort(),
     [ 'error', 'partially', 'success' ], 'over days of every status');
+
+  // the days the feed the remap replaces was read on, once the replacement reverted, and answered
+  const compRead = `0x41976e09${feeds.comp.slice(2).padStart(64, '0')}`;
+  const fellBack = new Set(batched.node.requests.flatMap(({ calls }) => calls)
+    .filter(call => call.method === 'eth_call' && call.params[0].data === compRead)
+    .map(call => Number.parseInt(call.params[1], 16))
+    .filter(block => block >= revertsBefore.get(feeds.comp)!));
+  // the blocks of the days either evaluator logged the replacement on
+  const loggedAt = logged
+    .filter(line => line.startsWith(`price feed reverted: ${REPLACEMENT} `))
+    .map(line => Number(/ at block (\d+): /.exec(line)?.[1]));
+  t.ok(fellBack.size > 0, 'on some days the replacement reverts and the feed it replaces answers');
+  t.ok(loggedAt.length > 0, 'the replacement is logged on a day neither answers');
+  t.ok(loggedAt.every(block => block < revertsBefore.get(feeds.comp)!), 'and on no day the feed it replaces answers');
+  t.notOk(batched.body.includes(REPLACEMENT) || JSON.stringify(batched.stored).includes(REPLACEMENT), 'and nothing the history answers or keeps names it');
 });

@@ -45,7 +45,7 @@ import type { RegistryHarness } from '../../util/registry-harness.js';
  * decisionRouteScenarios from token-policy-routes.test.ts,
  * deprecated-collateral-routes.test.ts and hidden-collateral-routes.test.ts.
  * The descriptions also drive the tests in Node that need a kind's tables or
- * routes: decision-read.test.ts and
+ * routes: decision-read.test.ts, ../market/summary-tokens.test.ts and
  * collateral-read-scenarios.ts, which deprecated-collateral-reads.test.ts and
  * hidden-collateral-reads.test.ts run. This module is not a test file, and
  * tap does not run it on its own.
@@ -739,7 +739,7 @@ const TOKEN_POLICIES: DecisionKindUnderTest = {
       `row 6 repeats row 5 (chain 1, ${WETH})`,
     ],
   },
-  // no public read needs the tables
+  // no public read needs the tables: /summary is answered without what they decide (summary-tokens.test.ts)
   migrations: { through: [ '0004' ], reads: [] },
 };
 

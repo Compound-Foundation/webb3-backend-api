@@ -6,6 +6,7 @@ import * as Compute from '../../symbolic/computation.js';
 import * as KnownNetwork from '../../well-known/networks/network.js';
 import * as Fallible from "../../fallible/fallible.js";
 
+import type { BigFixnum } from '../../bigfixnum.js';
 import type { RegistryComet } from '../../model/comet-registry.js';
 
 import {
@@ -14,7 +15,9 @@ import {
   type TotalBorrow,
   type TotalSupply,
   type BaseUsdPrice,
+  type PriceError,
 } from '../comet.js';
+import { convertsToUsd } from '../comet/base-usd-price.js';
 
 import type { BorrowApr } from './borrow-apr.js';
 import type { SupplyApr } from './supply-apr.js';
@@ -40,7 +43,7 @@ type MarketIdentity = {
 
 type CollateralStatus = (
   & { address: Eth.Address, symbol: string }
-  & ({ status: 'success' } | { status: 'error', message: string })
+  & ({ status: 'success' } | PriceError)
 );
 
 type MarketSummary = Compute.Spec<{
@@ -64,10 +67,7 @@ type MarketSummary = Compute.Spec<{
     contract: RegistryComet,     // comet contract for the market
   },
   returns: (
-    | MarketIdentity & {
-        status:  'error',
-        message: string,
-      }
+    | MarketIdentity & PriceError
     | MarketIdentity & {
         status: 'success' | 'partially',
         supplyApr: string,
@@ -75,6 +75,9 @@ type MarketSummary = Compute.Spec<{
         totalBorrowValue: string,
         totalSupplyValue: string,
         totalCollateralValue: string,
+        totalBorrowValueUsd: string,
+        totalSupplyValueUsd: string,
+        totalCollateralValueUsd: string,
         utilization: string,
         baseUsdPrice: string,
         collateralAssetSymbols: string[],
@@ -95,8 +98,9 @@ function collateralStatusOf({ asset, symbol, price }: Collateral): CollateralSta
 
 const { implement, pipe } = Compute.Functor<MarketSummary>({});
 const marketSummary = implement({
-  // 9: an empty market's APRs come from its Comet's rate model (#23)
-  version: 9,
+  // 10: an empty market's APRs come from its Comet's rate model (#23).
+  // 9 is taken by values of another shape.
+  version: 10,
   /*
    * validate that the block requested does not predate the market
    * contract creation block.
@@ -160,15 +164,37 @@ const marketSummary = implement({
         if (baseUsdPrice.status === 'error') {
           return { ...identity, status: 'error', message: baseUsdPrice.message };
         }
+        // a price's replacementRevert is the latest summary's to report, not a day's (market-latest-summary.ts)
         const statuses = collaterals.map(collateralStatusOf);
+        /*
+         * The totals are in the unit the market's own feeds answer in: USD,
+         * or the base asset of a market the registry says is quoted in it,
+         * such as ETH for a WETH market — what they have always been, and
+         * what a client that converts them itself expects. Beside each is the
+         * same total in USD: as it is for a market quoted in USD, and through
+         * the base asset's USD price for one quoted in its base asset, as the
+         * latest summary converts the value of each collateral
+         * (market-latest-summary.ts).
+         */
+        const quoted = {
+          borrow:     totalBorrow.mul(basePrice.price),
+          supply:     totalSupply.mul(basePrice.price),
+          collateral: collateralValue(collaterals),
+        };
+        const inUsd = (value: BigFixnum) => convertsToUsd(contract.registry.market)
+          ? value.mul(baseUsdPrice.price)
+          : value;
         return {
           ...identity,
           status: statuses.some(collateral => collateral.status === 'error') ? 'partially' : 'success',
           borrowApr: borrowApr.toString(),
           supplyApr: supplyApr.toString(),
-          totalBorrowValue: totalBorrow.mul(basePrice.price).toString(),
-          totalSupplyValue: totalSupply.mul(basePrice.price).toString(),
-          totalCollateralValue: collateralValue(collaterals).toString(),
+          totalBorrowValue: quoted.borrow.toString(),
+          totalSupplyValue: quoted.supply.toString(),
+          totalCollateralValue: quoted.collateral.toString(),
+          totalBorrowValueUsd: inUsd(quoted.borrow).toString(),
+          totalSupplyValueUsd: inUsd(quoted.supply).toString(),
+          totalCollateralValueUsd: inUsd(quoted.collateral).toString(),
           utilization: utilization.toString(),
           baseUsdPrice: baseUsdPrice.price.toString(),
           collateralAssetSymbols: collaterals.map(({ symbol }) => symbol),

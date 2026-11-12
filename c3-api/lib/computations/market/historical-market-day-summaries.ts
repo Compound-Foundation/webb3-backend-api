@@ -32,8 +32,9 @@ const {
 } = Compute.Functor<HistoricalMarketDaySummaries>({});
 
 const historicalMarketDaySummaries: Compute.Implementation<HistoricalMarketDaySummaries> = implement({
-  // 9: an empty market's APRs come from its Comet's rate model (#23)
-  version: 9,
+  // 10: an empty market's APRs come from its Comet's rate model (#23).
+  // 9 is taken by values of another shape.
+  version: 10,
   index: Index.Everything,
   /*
    * Key computation by materialized date for startBlock's

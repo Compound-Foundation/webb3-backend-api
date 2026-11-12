@@ -13,6 +13,7 @@ import {
   AllNetworks,
   type AccountRouteData,
   type Context,
+  type MarketContext,
   type MarketRouteData,
 } from '../../src/router.js';
 
@@ -20,6 +21,7 @@ import { consoleLines } from '../util/console.js';
 import { evaluatorOver, stub } from '../util/evaluator.js';
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../util/registry-fixture.js';
 import { REGISTRY_KEYS } from '../util/summary-registry-fields.js';
+import { summaryDecisionsOf } from '../util/summary-decisions.js';
 
 import '../../shim/node-self.js';
 
@@ -113,9 +115,14 @@ function routeData(network: MarketRouteData['network'], contract: MarketRouteDat
 // as the router hands a market handler the evaluator it made, with the route's flags
 function uninstantiated(answer: Answer) {
   const evaluator = evaluatorOf(answer, Flags.ROUTE_EVALUATOR_FLAGS);
-  // a local run, whose history samples one day
-  const context = { flags: { ...flags, environment: 'local' }, evaluator, evaluations: () => evaluator.evaluations };
-  return context as unknown as Context & { evaluations(): number };
+  const context = {
+    // a local run, whose history samples one day
+    flags: { ...flags, environment: 'local' },
+    evaluator,
+    decisions: summaryDecisionsOf(),
+    evaluations: () => evaluator.evaluations,
+  };
+  return context as unknown as MarketContext & { evaluations(): number };
 }
 
 // as the router hands a handler an evaluator it made: with the request's flags, and those it sets for the route

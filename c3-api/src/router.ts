@@ -21,6 +21,8 @@ import { refuseTestnet, refuseTestnetsParameter } from './testnets.js';
 import { cacheDepsOf } from './registry/cache.js';
 import type { Catalog } from './registry/catalog.js';
 import { RequestCatalog, catalogHeadersOf, requestCatalog } from './registry/request-catalog.js';
+import { summaryDecisions } from './registry/summary-tokens.js';
+import type { SummaryDecisions } from './registry/summary-tokens.js';
 
 import type * as Evaluator from './evaluator.js';
 
@@ -45,6 +47,18 @@ interface Context extends Evaluator.Context {
   evaluator: Evaluator.Implementation<Scope>;
   // the id the entrypoint gave the request, which its error answer and the log line about it carry
   requestId: string;
+}
+
+/*
+ * What the router hands a market handler: the evaluator it made for the
+ * route, and the read of the decisions the summary adds to each collateral
+ * (summary-tokens.ts), which a request makes once for all its networks: from
+ * D1, and the deprecated and the hidden ones from the records the worker
+ * keeps of them while D1 cannot be reached, as the active reads do. Nothing
+ * is read until the summary asks.
+ */
+interface MarketContext extends Context {
+  decisions: () => Promise<SummaryDecisions>;
 }
 
 /*
@@ -431,7 +445,8 @@ async function unsafeRoute(
      */
     const evaluator = instantiateEvaluator('mainnet', { flags: { ...context.flags, ...ROUTE_EVALUATOR_FLAGS } });
     const handler   = handlerMappings[resourceApi][strippedEndpointSuffix];
-    return handler(data, { ...context, evaluator });
+    const decisions = () => summaryDecisions({ ...cacheDepsOf(context.env, context.debug), defer: context.waitUntil }, context.requestId);
+    return handler(data, { ...context, evaluator, decisions });
   }
 
   const maybeWellKnownContract = (() => {
@@ -495,6 +510,7 @@ export {
 
 export type {
   Context,
+  MarketContext,
   // route data types
   V2RouteData,
   MarketRouteData,
