@@ -1,5 +1,4 @@
-import { Sleuth } from '@compound-finance/sleuth';
-import { Interface } from '@ethersproject/abi';
+import { FunctionFragment, Interface, JsonFragment } from '@ethersproject/abi';
 
 import * as Eth from '../../eth-constants.js';
 import * as Perspective from '../../perspective.js';
@@ -73,7 +72,7 @@ const getRewardConfigsSleuth = implement({
       return [];
     }
 
-    const query = Sleuth.querySol(GetRewardConfigsQuery, { queryFunctionName: 'query' });
+    const query = compiledQuery(GetRewardConfigsQuery);
     const sleuthContract = getSleuthContract(network);
 
     // I believe we should only ever have 1 CometReward per chain
@@ -125,5 +124,27 @@ const getRewardConfigsSleuth = implement({
     ]);
   },
 });
+
+/*
+ * The query the Sleuth contract runs is GetRewardConfigs.json under
+ * ../sleuth/out, a forge build of the query in ../sleuth/GetRewardConfigs.sol.
+ * The worker reads its creation bytecode and the ABI of its query function
+ * from the committed file, as Sleuth.querySol of @compound-finance/sleuth did.
+ * It never compiles Solidity. To change the query, rebuild the file on a
+ * developer machine with forge, or with solc in the same shape. Its metadata
+ * names the compiler and the settings. The .sol here is not byte for byte the
+ * source that the metadata hashes. So a rebuild from it changes the bytecode
+ * even when the query stays the same, and with it the calldata and the cache
+ * keys of sleuthQuery.
+ */
+function compiledQuery(
+  { abi, bytecode }: { abi: readonly JsonFragment[], bytecode: { object: string } },
+): { bytecode: string, fn: FunctionFragment } {
+  const fn = abi.find(({ type, name }) => type === 'function' && name === 'query');
+  if (fn === undefined) {
+    throw new Error('GetRewardConfigsSleuth: the compiled query has no query function');
+  }
+  return { bytecode: bytecode.object, fn: FunctionFragment.from(fn) };
+}
 
 export { GetRewardConfigsSleuth, getRewardConfigsSleuth };
