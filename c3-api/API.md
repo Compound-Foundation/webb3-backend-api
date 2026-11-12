@@ -498,6 +498,29 @@ $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3
 
 Aggregate of all governance proposals across Governors alpha and bravo.
 
+Each action of the page is described against the contracts this API knows
+by name, with the markets of the active registry version merged in, every
+token they name and every price feed they read, and the disabled markets it
+holds, with theirs: a market is named by its contract name, or its label
+where it has none, a token by its symbol and a feed as `PriceFeed`, each
+linked at its checksummed address, and a cap or an amount of a token is
+written at the decimals the version read for it. COMP, WETH on Ethereum,
+Optimism and Base, ETH and the other underlyings of the V2 cTokens,
+Arbitrum's bridged USDC (USDC.e), and on Ethereum the tokens and the two
+feeds the constants write in lowercase (cbBTC, USDe, tBTC, LBTC, pumpBTC,
+wstETH, cbETH, KNC and stETH) keep the names and links the constants give
+them, a token at the decimals the version read where it holds one. Any
+other market, token or feed the version does not hold reads as its address.
+When the registry cannot be read, every action is described against the
+constants alone: every market, and every token and feed but those, then
+reads as its address, the cap of such a token is written at 18 decimals,
+and a call that needs its scale, such as a transfer, is shown as it was
+made. `addAsset` writes the new asset's cap at the decimals its
+configuration states. `updateAssetSupplyCap` states none, so the cap of an
+asset neither the constants nor the version know — one added to the market
+since the version was imported — is written at 18 decimals until a version
+describes it.
+
 Query parameters:
 - Pagination: `page_size`, `page_number`
 - `proposal_ids=123,124,...` [optional] - filter proposals to only those
@@ -572,7 +595,8 @@ Query parameters:
   - `false` filters receipts to votes `Against`;
   - `undefined` returns receipts regardless of vote direction
 - `with_proposal_data` - `true` or `false` - [optional] - [default false]
-  - `true` populates the `"proposal"` field of the response
+  - `true` populates the `"proposal"` field of the response; each proposal
+    is described as the proposal list describes it
   - `false` sets the `"proposal"` field to `null` (this is the default)
 
 Proposal:

@@ -18,7 +18,8 @@ import type * as comet from '../../../lib/computations/comet.js';
 import type * as market from '../../../lib/computations/market.js';
 import type * as rewards from '../../../lib/computations/rewards.js';
 import { lookupInWellKnown, withRegistryContracts } from '../../../lib/well-known/contracts/utils.js';
-import { Comet } from '../../../lib/well-known/contracts/types.js';
+import { Comet, ContractTypeTag, ERC20, PriceFeed, TokenLike } from '../../../lib/well-known/contracts/types.js';
+import * as KnownNetwork from '../../../lib/well-known/networks/network.js';
 import * as Constant from '../../../lib/constants.js';
 import * as Compute from '../../../lib/symbolic/computation.js';
 import * as Evaluator from '../../../lib/symbolic/evaluator.js';
@@ -662,7 +663,11 @@ t.test('history is keyed by what it reads of a market, not by everything the mar
   t.not(await enrichedKey(resymboled), await enrichedKey(catalog), 'but not a new symbol, which it shows');
 });
 
-// what the constants name: the protocol's contracts and the tokens, no market
+/*
+ * What the constants name: the protocol's contracts and no market, and of the
+ * tokens and feeds COMP, WETH on Ethereum, Optimism and Base, V2's tokens,
+ * Arbitrum's USDC.e, and those of Ethereum they write in lowercase.
+ */
 const COMP       = (Eth.wellKnownContractsByNetwork[MAINNET] as any)['COMP']['default'].address as string;
 const TIMELOCK   = (Eth.wellKnownContractsByNetwork[MAINNET] as any)['Timelock']['default'].address as string;
 const USDC_TOKEN = '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48';
@@ -783,6 +788,36 @@ t.test('a market the version holds without serving it is named all the same', as
   t.equal(await titleFrom(async () => unheld), unnamed, 'which a Comet the version does not hold keeps');
   t.equal(await titleFrom(async () => { throw new Error('D1 is down'); }), unnamed,
     'as does every market while the registry cannot be read');
+});
+
+/*
+ * The proposals that configured a market the version no longer serves keep
+ * naming what it holds: its tokens and feeds are named as a served market's
+ * are, a token at the scale the version read. XAUt, at 6 decimals, and its
+ * feed are the USDT market's alone.
+ */
+t.test('a market the version holds without serving it names its tokens and feeds too', async t => {
+  const usdt    = snapshot.networks.find(network => network.chainId === 1)!.markets.find(market => market.deploymentKey === 'usdt')!;
+  const xaut    = usdt.collateralAssets.find(asset => asset.token.symbol === 'XAUt')!;
+  // checksummed, as the version links them
+  const XAUT      = '0x68749665FF8D2d112Fa859AA293F07A622782F38';
+  const XAUT_FEED = '0x214eD9Da11D2fbe465a6fc601a91E62EbEc1a0D6';
+  const cUSDTv3   = catalog.marketAt(MAINNET, USDT)!.comet.address;
+
+  const configurator = (Object.values((Eth.wellKnownContractsByNetwork[MAINNET] as any)['Configurator'])[0] as { address: string }).address;
+  const cap  = describedByConstants(configurator, 'updateAssetSupplyCap(address,address,uint128)',
+    defaultAbiCoder.encode([ 'address', 'address', 'uint128' ], [ USDT, xaut.token.address, 2_500_000_000_000n ]));
+  const feed = describedByConstants(configurator, 'updateAssetPriceFeed(address,address,address)',
+    defaultAbiCoder.encode([ 'address', 'address', 'address' ], [ USDT, xaut.token.address, xaut.priceFeed.address ]));
+  t.match(cap.title, new RegExp(`^Set supply cap for ${XAUT} on ${cUSDTv3} .* to 0\\.00$`),
+    'the constants alone leave XAUt its address, and write its cap at 18 decimals');
+
+  const disabled = catalogOf(withMarket('usdt', market => ({ ...market, status: 'disabled' })));
+  t.equal(await readsDescribing([ cap, feed ], async () => disabled), 1, 'the registry is read once');
+  t.match(cap.title,
+    new RegExp(`^Set supply cap for \\[XAUt\\]\\(https://etherscan\\.io/address/${XAUT}\\) on \\[cUSDTv3\\]\\(.* to 2500000\\.00$`),
+    'a disabled market names its collateral, at the 6 decimals the version read');
+  t.ok(feed.title.endsWith(`, "[PriceFeed](https://etherscan.io/address/${XAUT_FEED})")`), 'and the feed it reads');
 });
 
 /*
@@ -944,6 +979,162 @@ t.test('registry markets are merged into the contracts governance decodes agains
 });
 
 /*
+ * A proposal that lists a collateral, or changes one, names a token and a
+ * feed only the version may describe, and states a cap in the token's own
+ * units. The merge carries every token and feed of a market, at the scale the
+ * version read from the chain.
+ */
+t.test('a proposal names the collateral and the feeds the version describes, at their scale', async t => {
+  // digits only, so that checksumming leaves them as they are
+  const LISTED      = '0x5555555555555555555555555555555555555555';
+  const LISTED_FEED = '0x6666666666666666666666666666666666666666';
+  const UNKNOWN     = '0x7777777777777777777777777777777777777777';
+  const listed = catalogOf({
+    ...snapshot,
+    networks: snapshot.networks.map(network => network.chainId !== 1 ? network : {
+      ...network,
+      markets: network.markets.map(market => market.deploymentKey !== 'usdc' ? market : {
+        ...market,
+        collateralAssets: [ ...market.collateralAssets, {
+          assetIndex: market.collateralAssets.length,
+          token:      { address: LISTED, symbol: 'LST', name: 'A collateral listed after this build', decimals: 6 },
+          priceFeed:  { address: LISTED_FEED, decimals: 8 },
+        } ],
+      }),
+    }),
+  });
+  const merged = withRegistryContracts(Eth.wellKnownContractsByNetwork, listed.markets());
+  const titleOf = (
+    network: typeof MAINNET | 'base-mainnet',
+    contracts: typeof merged,
+    target: string,
+    signature: string,
+    data: string,
+  ) => describeContractCallForHumans(
+    contractForLocation({ network, address: target as never }, contracts) as never,
+    signature, data, BigFixnum.from({ value: 0 }), contracts,
+  ).title;
+  const configuratorOf = (network: typeof MAINNET | 'base-mainnet') =>
+    (Object.values((Eth.wellKnownContractsByNetwork[network] as any)['Configurator'])[0] as { address: string }).address;
+
+  const cap    = 'updateAssetSupplyCap(address,address,uint128)';
+  const capped = defaultAbiCoder.encode([ 'address', 'address', 'uint128' ], [ USDC, LISTED, 2_500_000_000_000n ]);
+  t.match(titleOf(MAINNET, Eth.wellKnownContractsByNetwork as never, configuratorOf(MAINNET), cap, capped),
+    new RegExp(`Set supply cap for ${LISTED} .* to 0\\.00$`), 'the constants alone name it by its address, at 18 decimals');
+  t.match(titleOf(MAINNET, merged, configuratorOf(MAINNET), cap, capped),
+    new RegExp(`Set supply cap for \\[LST\\]\\(https://etherscan\\.io/address/${LISTED}\\) .* to 2500000\\.00$`),
+    'the version names it, at its own 6 decimals');
+
+  const refed = defaultAbiCoder.encode([ 'address', 'address', 'address' ], [ USDC, LISTED, LISTED_FEED ]);
+  t.match(titleOf(MAINNET, merged, configuratorOf(MAINNET), 'updateAssetPriceFeed(address,address,address)', refed),
+    new RegExp(`"\\[PriceFeed\\]\\(https://etherscan\\.io/address/${LISTED_FEED}\\)"\\)$`),
+    'and a feed only the version describes is named as the constants name theirs');
+
+  /*
+   * Listing a collateral adds a token neither source knows yet: its
+   * configuration states the scale the cap is in, and a Comet refuses one
+   * the token does not report.
+   */
+  const added = defaultAbiCoder.encode(
+    [ 'address', 'tuple(address,address,uint8,uint64,uint64,uint64,uint128)' ],
+    [ USDC, [ UNKNOWN, LISTED_FEED, 8, 0, 0, 0, 50_000_000_000n ] ],
+  );
+  t.match(titleOf(MAINNET, merged, configuratorOf(MAINNET), 'addAsset(address,(address,address,uint8,uint64,uint64,uint64,uint128))', added),
+    /\*\*supplyCap\*\*: 500\.00/, 'a new asset\'s cap is read at the decimals its configuration states');
+
+  const BASE_AERO = '0x784efeb622244d2348d4f2522f8860b96fbece89';
+  const CBBTC     = '0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf';
+  const onBase    = defaultAbiCoder.encode([ 'address', 'address', 'uint128' ], [ BASE_AERO, CBBTC, 1_000_000_000n ]);
+  t.match(titleOf('base-mainnet', Eth.wellKnownContractsByNetwork as never, configuratorOf('base-mainnet'), cap, onBase),
+    new RegExp(`Set supply cap for ${CBBTC} .* to 0\\.00$`), 'the constants alone leave cbBTC on Base its address, and a cap of ten of it nothing');
+  t.match(titleOf('base-mainnet', merged, configuratorOf('base-mainnet'), cap, onBase),
+    new RegExp(`Set supply cap for \\[cbBTC\\]\\(https://basescan\\.org/address/${CBBTC}\\) .* to 10\\.00$`),
+    'the version names it, and its 8 decimals write the cap as ten');
+});
+
+/*
+ * A token the constants also name — COMP, WETH, a V2 token — keeps their name
+ * and link, and takes the scale the version read from the chain: a scale the
+ * constants had wrong would write its amounts and caps wrong. None of those
+ * they keep is wrong, so the version here is.
+ */
+t.test('a token the constants also name keeps their name, at the version\'s scale', async t => {
+  // USDC as every market of the version holds it: another symbol, and 8 decimals
+  const rescale = <Token extends { address: string }>(token: Token): Token => (
+    token.address.toLowerCase() === USDC_TOKEN ? { ...token, symbol: 'XUSDC', decimals: 8 } : token
+  );
+  const rescaled = catalogOf({
+    ...snapshot,
+    networks: snapshot.networks.map(network => network.chainId !== 1 ? network : {
+      ...network,
+      markets: network.markets.map(market => ({
+        ...market,
+        baseAsset:        { ...market.baseAsset, token: rescale(market.baseAsset.token) },
+        collateralAssets: market.collateralAssets.map(asset => ({ ...asset, token: rescale(asset.token) })),
+      })),
+    }),
+  });
+  const transfer = describedByConstants(USDC_TOKEN, 'transfer(address,uint256)', amountTo(RECIPIENT, '1000000000'));
+  t.match(transfer.title, /^Transfer 1000\.00 \[USDC\]/, 'the constants write it at their 6 decimals');
+
+  await readsDescribing([ transfer ], async () => rescaled);
+  t.match(transfer.title, new RegExp(`^Transfer 10\\.00 \\[USDC\\]\\(https://etherscan\\.io/address/${USDC_TOKEN}\\) to `),
+    'the version\'s 8 decimals write it as ten, under the constants\' name and link');
+  t.equal((Eth.wellKnownContractsByNetwork[MAINNET] as any)[USDC_TOKEN].decimals, 6, 'and the constants are left as they are');
+});
+
+/*
+ * The registry names the markets, their tokens and their feeds, so the
+ * mainnet constants keep, of tokens and feeds, only these: COMP on every
+ * chain that has one, which the governance routes find by name; WETH on
+ * Ethereum, Optimism and Base, where governance finds it by its alias; ETH
+ * and the other underlyings of V2's cTokens; Arbitrum's bridged USDC, which
+ * its chain calls USDC, as it does native USDC; and the tokens and the two
+ * feeds of Ethereum they write in lowercase, so that the links governance
+ * gives them keep their case.
+ */
+t.test('the mainnet constants hold no token or feed but those kept on purpose', async t => {
+  // the underlyings of V2's cTokens, COMP among them
+  const V2 = [
+    'ZRX', 'DAI', 'BAT', 'SAI', 'REP', 'UNI', 'ETH', 'YFI', 'MKR', 'FEI',
+    'COMP', 'WBTC', 'USDC', 'USDT', 'AAVE', 'LINK', 'TUSD', 'USDP', 'SUSHI',
+  ];
+  // the others of Ethereum they write in lowercase
+  const LOWERCASE = [
+    'KNC', 'cbBTC', 'stETH', 'USDe', 'tBTC', 'LBTC', 'pumpBTC', 'wstETH', 'cbETH',
+    'PriceFeed 0xd72ac1bce9177cfe7aeb5d0516a38c88a64ce0ab', 'PriceFeed 0xff30586cd0f29ed462364c7e81375fc0c71219b1',
+  ];
+  const isFeed  = (contract: any) => contract[ContractTypeTag] === PriceFeed.tag;
+  // an ERC-20, or the pseudo-token ETH, which has decimals and no type
+  const isToken = (contract: any) => ERC20.is(contract) || (!(ContractTypeTag in contract) && TokenLike.is(contract));
+
+  const kept: Record<string, any[]> = {};
+  for (const [ network, contracts ] of Object.entries(Eth.wellKnownContractsByNetwork)) {
+    if (!KnownNetwork.isNameOfTestnet(network as KnownNetwork.Name)) {
+      kept[network] = [ ...new Set(Object.values(contracts as Record<string, any>)) ]
+        .filter(contract => contract?.address !== undefined && (isFeed(contract) || isToken(contract)));
+    }
+  }
+  const named = Object.fromEntries(Object.entries(kept).map(([ network, contracts ]) => [
+    network, contracts.map(contract => isFeed(contract) ? `PriceFeed ${contract.address}` : contract.canonicalName).sort(),
+  ]));
+  t.same(named, {
+    'ethereum-mainnet': [ ...V2, 'WETH', ...LOWERCASE ].sort(),
+    'polygon-mainnet':  [ 'COMP' ],
+    'arbitrum-mainnet': [ 'COMP', 'USDC.e' ],
+    'optimism-mainnet': [ 'COMP', 'WETH' ],
+    'base-mainnet':     [ 'COMP', 'WETH' ],
+    'scroll-mainnet':   [ 'COMP' ],
+    'mantle-mainnet':   [ 'COMP' ],
+    'linea-mainnet':    [ 'COMP' ],
+    'unichain-mainnet': [ 'COMP' ],
+    'ronin-mainnet':    [],
+  }, 'on every mainnet, exactly these');
+  t.same(kept[MAINNET]!.map(contract => contract.address).filter(address => address !== address.toLowerCase()), [],
+    'and every one of Ethereum is written in lowercase, as its links always were');
+});
+
+/*
  * Governance describes a proposal against the constants, and again against
  * the registry for every action of the page it answers, wherever an action
  * names a market: as its target, in a bridge's inner actions on another
@@ -1022,4 +1213,34 @@ t.test('every proposal action is described again with the version\'s markets', a
     'as an upgrade through the CometAdmin names the market it deploys');
   t.match(onCometRewards.title, /^Set reward token for market \[cMAINv3\]/,
     'and a reward token set through CometRewards the market it is set for');
+});
+
+/*
+ * The proposal list caches each description as the build that computed it
+ * gave it, and an older build wrote the cap of an asset the constants do not
+ * know at 18 decimals. Without the registry, every action is described again
+ * all the same, against the constants alone.
+ */
+t.test('without the registry, every action is described again by the constants', async t => {
+  const UNKNOWN = '0x7777777777777777777777777777777777777777';
+  const NOBODY  = '0x4444444444444444444444444444444444444444';
+
+  const configurator = (Object.values((Eth.wellKnownContractsByNetwork[MAINNET] as any)['Configurator'])[0] as { address: string }).address;
+  const addAsset     = 'addAsset(address,(address,address,uint8,uint64,uint64,uint64,uint128))';
+  const added        = defaultAbiCoder.encode(
+    [ 'address', 'tuple(address,address,uint8,uint64,uint64,uint64,uint128)' ],
+    [ USDC, [ UNKNOWN, UNKNOWN, 6, 0, 0, 0, 2_500_000_000_000n ] ],
+  );
+  const pause  = 'pause(bool,bool,bool,bool,bool)';
+  const paused = defaultAbiCoder.encode([ 'bool', 'bool', 'bool', 'bool', 'bool' ], [ true, false, false, false, false ]);
+
+  const onConfigurator = { ...describedByConstants(configurator, addAsset, added), title: 'Add new asset as an older build described it: **supplyCap**: 0.00' };
+  const onNobody       = { ...describedByConstants(NOBODY, pause, paused), title: 'as an older build described it' };
+
+  t.equal(await readsDescribing([ onConfigurator, onNobody ], async () => { throw new Error('D1 cannot be reached'); }), 1,
+    'the registry is asked once');
+  t.equal(onConfigurator.title, describedByConstants(configurator, addAsset, added).title,
+    'an action on the Configurator is described again against the constants');
+  t.match(onConfigurator.title, /\*\*supplyCap\*\*: 2500000\.00/, 'by this build, which writes the cap at the decimals its configuration states');
+  t.equal(onNobody.title, `${NOBODY}.pause(true, false, false, false, false)`, 'and so is every other action');
 });

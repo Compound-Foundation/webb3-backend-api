@@ -290,17 +290,6 @@ const tBTC = ERC20("tBTC", <const>{
     timestamp: 1629198727,
   },
 });
-const USDS = ERC20("USDS", <const>{
-  description: "USDS Stablecoin",
-  decimals: 18,
-  // location
-  network: "ethereum-mainnet",
-  address: "0xdC035D45d973E3EC169d2276DDab16f1e407384F",
-  block: {
-    number: 20663730,
-    timestamp: 1725290327,
-  },
-});
 const LBTC = ERC20("LBTC", <const>{
   description: "Lombard Staked BTC",
   decimals: 8,
@@ -349,7 +338,6 @@ const erc20s = <const>[
   stETH,
   USDe,
   tBTC,
-  USDS,
   LBTC,
   pumpBTC,
 ];
@@ -771,56 +759,6 @@ const cbETH = ERC20("cbETH", <const>{
 
 const wrappedStakedTokens = <const>[wstETH, cbETH];
 
-// KelpDAO (re-staked)
-const rsETH = ERC20("rsETH", <const>{
-  decimals: 18,
-  // location
-  network: "ethereum-mainnet",
-  address: "0xA1290d69c65A6Fe4DF752f95823fae25cB99e5A7",
-  block: {
-    number: 18758282,
-    timestamp: 1702241207,
-  },
-});
-
-// Etherfi Wrapped eETH (re-staked)
-const weETH = ERC20("weETH", <const>{
-  decimals: 18,
-  // location
-  network: "ethereum-mainnet",
-  address: "0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee",
-  block: {
-    number: 17664336,
-    timestamp: 1689005159,
-  },
-});
-
-// Staked ETH
-const osETH = ERC20("osETH", <const>{
-  decimals: 18,
-  // location
-  network: "ethereum-mainnet",
-  address: "0xf1C9acDc66974dFB6dEcB12aA385b9cD01190E38",
-  block: {
-    number: 18470087,
-    timestamp: 1698755027,
-  },
-});
-
-// Renzo ETH
-const ezETH = ERC20("ezETH", <const>{
-  decimals: 18,
-  // location
-  network: "ethereum-mainnet",
-  address: "0xbf5495Efe5DB9ce00f80364C8B423567e58d2110",
-  block: {
-    number: 18722779,
-    timestamp: 1701811163,
-  },
-});
-
-const liquideRestakedTokens = <const>[rsETH, weETH, osETH, ezETH];
-
 // comet
 const CometAdmin = UntypedContract("CometAdmin", <const>{
   // location
@@ -861,29 +799,6 @@ const CometRewards = UntypedContract("CometRewards", <const>{
   },
 });
 
-const COMP_USD_priceFeed = PriceFeed(<const>{
-  aliases: ["COMP-USD"],
-  decimals: 8,
-  // location
-  network: "ethereum-mainnet",
-  address: "0xdbd020CAeF83eFd542f4De03e3cF0C28A4428bd5",
-  block: {
-    number: 10705616,
-    timestamp: 1598040169, // 2020-08-21
-  },
-});
-
-const USDC_USD_priceFeed = PriceFeed(<const>{
-  decimals: 8,
-  // location
-  network: "ethereum-mainnet",
-  address: "0x8fFfFfd4AfB6115b954Bd326cbe7B4BA576818f6",
-  block: {
-    number: 11869355,
-    timestamp: 1613455478,
-  },
-});
-
 const Bulker_01usdc = UntypedContract("Bulker", {
   aliases: ["01-usdc", "cUSDCv3"],
   network: "ethereum-mainnet",
@@ -899,8 +814,6 @@ const market01usdc = <const>[
   CometRewards,
   CometFactory,
   CometFactory1,
-  COMP_USD_priceFeed,
-  USDC_USD_priceFeed,
   Bulker_01usdc,
 ];
 
@@ -928,53 +841,8 @@ const Bulker_01weth = UntypedContract("Bulker", {
 const market01weth = <const>[
   CometRewards,
   WETH_Constant_priceFeed,
-  COMP_USD_priceFeed,
   Bulker_01weth,
 ];
-
-const USDT_USD_priceFeed = PriceFeed(<const>{
-  decimals: 8,
-  network: "ethereum-mainnet",
-  address: "0x3E7d1eAB13ad0104d2750B8863b489D65364e32D",
-  block: {
-    number: 11870289,
-    timestamp: 1613511055,
-  },
-});
-
-const market01usdt = [USDT_USD_priceFeed] as const;
-
-const wstETH_Constant_priceFeed = PriceFeed(<const>{
-  decimals: 8,
-  network: "ethereum-mainnet",
-  address: "0x72e9B6F907365d76C6192aD49C0C5ba356b7Fa48",
-  block: {
-    number: 20683526,
-    timestamp: 1725528971,
-  },
-});
-
-const wstETH_USD_priceFeed = PriceFeed(<const>{
-  aliases: ['wstETH-USD'],
-  decimals: 8,
-  network: "ethereum-mainnet",
-  address: "0x164b276057258d81941e97B0a900D4C7B358bCe0",
-  block: {
-    number: 20613834,
-    timestamp: 1724688179,
-  },
-});
-
-const COMP_wstETH_priceFeed = PriceFeed(<const>{
-  decimals: 18,
-  // location
-  network: "ethereum-mainnet",
-  address: "0x39b44c5d7469f50E9500A2de36d9e3DbB6f9278e",
-  block: {
-    number: 20814076,
-    timestamp: 1727104079,
-  },
-});
 
 const Bulker_01wstEth = UntypedContract("Bulker", {
   aliases: ["01-wstETH", "cwstETHv3"],
@@ -987,9 +855,6 @@ const Bulker_01wstEth = UntypedContract("Bulker", {
 });
 
 const market01wstETH = <const>[
-  wstETH_Constant_priceFeed,
-  wstETH_USD_priceFeed,
-  COMP_wstETH_priceFeed,
   Bulker_01wstEth,
 ];
 
@@ -1004,19 +869,6 @@ const USDS_USD_priceFeed = PriceFeed(<const>{
 });
 
 const market01usds = [USDS_USD_priceFeed] as const;
-
-const BTC_USD_priceFeed = PriceFeed(<const>{
-  aliases: ['WBTC-USD'],
-  decimals: 8,
-  network: "ethereum-mainnet",
-  address: "0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c",
-  block: {
-    number: 10606501,
-    timestamp: 1596720671,
-  },
-});
-
-const market01wbtc = [BTC_USD_priceFeed] as const;
 
 // governance
 const Timelock = UntypedContract("Timelock", <const>{
@@ -1816,14 +1668,11 @@ const contractData = [
   ...ctokenv2s,
   ...ctokenv2Delegates,
   ...wrappedStakedTokens,
-  ...liquideRestakedTokens,
   ...governance,
   ...market01usdc,
   ...market01weth,
-  ...market01usdt,
   ...market01wstETH,
   ...market01usds,
-  ...market01wbtc,
   // everything else...
   ...misc,
 ] as const;

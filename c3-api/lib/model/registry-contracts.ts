@@ -12,7 +12,8 @@ import { checksumAddress } from './comet-registry.js';
 
 /*
  * A token and a price feed of a registry version, in the contract shapes the
- * static constants use: what the request catalog builds its Comets of.
+ * static constants use: what the request catalog builds its Comets of, and
+ * what governance names a proposal's tokens and feeds by.
  *
  * Addresses are checksummed, the form the API answered with before the
  * registry; the registry stores them lowercased, and every lookup and cache

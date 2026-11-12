@@ -1,53 +1,7 @@
 import {
-  ERC20,
-  PriceFeed,
   UntypedContract,
   StaticWellKnownContracts,
 } from './utils.js';
-
-const AXS = ERC20('AXS', <const>{
-  description: 'Axie Infinity Shard',
-  decimals: 18,
-  network: 'ronin-mainnet',
-  address: '0x97a9107c1793bc407d6f527b77e7fff4d812bece',
-  block: {
-    number: 2670084,
-    timestamp: 1619582027
-  },
-});
-const USDC = ERC20('USDC', <const>{
-  aliases: [ 'default' ],
-  description: 'USDC',
-  decimals: 6,
-  network: 'ronin-mainnet',
-  address: '0x0b7007c13325c48911f73a2dad5fa5dcbf808adc',
-  block: {
-    number: 7741826,
-    timestamp: 1634797706
-  },
-});
-const WETH = ERC20('WETH', <const>{
-  description: 'WETH',
-  decimals: 18,
-  network: 'ronin-mainnet',
-  address: '0xc99a6a985ed2cac1ef41640596c5a5f9f4e19ef5',
-  block: {
-    number: 777,
-    timestamp: 1611574105
-  },
-});
-const WRON = ERC20('WRON', <const>{
-  description: 'Wrapped RON',
-  decimals: 18,
-  network: 'ronin-mainnet',
-  address: '0xe514d9deb7966c8be0ca922de8a064264ea6bcd4',
-  block: {
-    number: 7860890,
-    timestamp: 1635154920
-  },
-});
-
-const erc20s = <const>([ AXS, USDC, WETH, WRON ]);
 
 const CometAdmin = UntypedContract('CometAdmin', <const>{
   network: 'ronin-mainnet',
@@ -67,58 +21,6 @@ const Comet_Rewards = UntypedContract('CometRewards', <const>{
   },
 });
 
-// The original Chainlink ETH/USD proxy (0x662Fdb0E...) was deprecated on
-// 2026-08-26 (aggregator zeroed, all reads revert). This is the ETH/USD feed
-// cWRONv3 registers on-chain for its WETH collateral; it did not exist before
-// block 55577500, so computations at earlier blocks cannot use it.
-const WETH_USD_priceFeed = PriceFeed(<const>{
-  aliases: ['WETH-USD'],
-  decimals: 8,
-  network: 'ronin-mainnet',
-  address: '0x5D173813B4505701e79E654b36A95E6c1FAD4448',
-  block: {
-    number: 55577500,
-    timestamp: 1778623787,
-  },
-});
-
-const WETH_ETH_priceFeedConstant = PriceFeed(<const>{
-  decimals: 8,
-  network: 'ronin-mainnet',
-  address: '0x8ac2b57d15c84755a3333ad68025d2496ae3bebd',
-  block: {
-    number: 42950608,
-    timestamp: 1740703836,
-  },
-});
-
-//TODO: Need price feed, using WETH-USD for now
-const COMP_USD_priceFeed = PriceFeed(<const>{
-  aliases: ['COMP-USD'],
-  decimals: 8,
-  network: 'ronin-mainnet',
-  address: '0x5D173813B4505701e79E654b36A95E6c1FAD4448',
-  block: {
-    number: 55577500,
-    timestamp: 1778623787
-  },
-});
-
-// The original Chainlink RON/USD proxy (0x0b6074f2...) was deprecated on
-// 2026-08-26 along with the other Ronin proxies. This is the RON/USD feed
-// cWRONv3 registers on-chain as its base token feed; same block-55577500
-// deployment caveat as WETH_USD_priceFeed above.
-const RON_USD_priceFeed = PriceFeed(<const>{
-  aliases: ['RON-USD', 'WRON-USD'],
-  decimals: 8,
-  network: 'ronin-mainnet',
-  address: '0xB88e4078AAc88F10C0Ca71086ddCF512Ec54498a',
-  block: {
-    number: 55577500,
-    timestamp: 1778623787,
-  },
-});
-
 const Bulker = UntypedContract('Bulker', <const>{
   network: 'ronin-mainnet',
   address: '0x840281FaD56DD88afba052B7F18Be2A65796Ecc6',
@@ -130,8 +32,6 @@ const Bulker = UntypedContract('Bulker', <const>{
 
 const market01weth = <const>([
   CometAdmin, Comet_Rewards, Bulker,
-  WETH_USD_priceFeed, WETH_ETH_priceFeedConstant, COMP_USD_priceFeed,
-  RON_USD_priceFeed,
 ]);
 
 const Configurator = UntypedContract('Configurator', <const>{
@@ -163,7 +63,6 @@ const LocalTimelock = UntypedContract('Timelock', <const>{
 const misc = <const>([Configurator, BridgeReceiver, LocalTimelock ]);
 
 const contractData = [
-  ...erc20s,
   ...market01weth,
   ...misc,
   // everything else...
