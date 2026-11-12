@@ -86,6 +86,28 @@ t.test('a database that answers with a fault is a 500 that says nothing but the 
 });
 
 /*
+ * A missing table is such a fault too. Only the token policy, deprecated
+ * collateral and hidden collateral tables are answered otherwise, by the
+ * routes that read them, with a 503 that names the remedy
+ * (token-policy-routes, deprecated-collateral-routes,
+ * hidden-collateral-routes); a registry table missing is a 500 on the active
+ * reads as everywhere else.
+ */
+t.test('a missing table is a 500, unless it is a token policy, deprecated collateral or hidden collateral table', async t => {
+  const logs = captureLogs(t);
+  const env  = await envWith({ APP_DB: failingDatabase('D1_ERROR: no such table: registry_state: SQLITE_ERROR') });
+
+  for (const path of [ '/registry/v1/active', '/registry/v1/networks/1/markets' ]) {
+    const response = await get(env, path);
+    t.equal(response.status, 500, `${path} answers 500, not a missing migration`);
+    const body = await response.json() as Envelope;
+    t.equal(body.error.code, 'INTERNAL');
+    t.ok(logs.some(line => line.includes(body.error.requestId)), 'which the log has under the request id');
+  }
+  t.ok(logs.some(line => line.includes('no such table: registry_state')), 'whole');
+});
+
+/*
  * The fallback answers both kinds of route from the same version, and both
  * say the answer is an older one in the same headers.
  */

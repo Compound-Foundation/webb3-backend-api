@@ -101,7 +101,7 @@ then the headers, then the body. To use them:
 >    how long the window will be.
 > 2. Announce the window beforehand — when it opens and how long it lasts —
 >    to the frontend's maintainers and to whoever answers users.
-> 3. Deploy, and run steps 1 to 7 below straight away, one after another,
+> 3. Deploy, and run steps 1 to 8 below straight away, one after another,
 >    with the second admin at hand for step 5.
 >
 > Once a version is active, a client that pages transaction history with a
@@ -124,16 +124,19 @@ everything the one before it may:
 | Role | May call | For |
 |---|---|---|
 | `monitor` | `GET /admin/status` | a monitor that polls the status |
-| `reader` | every `GET` under `/admin` | someone who reads drafts and versions |
+| `reader` | every `GET` under `/admin`, and the review of a list of decisions | someone who reads drafts, versions and decisions |
 | `operator` | besides, imports, cancelling a run, and overlay writes | someone who reviews drafts |
-| `admin` | besides, validate, approve, activate and rollback | someone who decides what is served |
+| `admin` | besides, validate, approve, activate and rollback, and the decisions about tokens and collaterals, one at a time or by a list | someone who decides what is served |
 
 An import not held for review validates its draft by itself once it
 completes, so an `operator` can import a version that validates; switching
 it on takes two `admin`s of two names, one who approves it and another who
 activates it. So an environment needs two people with the role `admin`, each
 holding a token of their own, and one person never holds two names: the
-names are what the registry tells people apart by.
+names are what the registry tells people apart by. A decision about a token
+or a collateral — marking a token strategic, a collateral deprecated or
+hidden — is one admin's: it takes effect as soon as it is made, needs
+nobody's approval, and is not announced.
 
 The worker keeps only the SHA-256 of each token: what is configured cannot
 be used as a token. Tokens go to their holders through the team's password
@@ -254,8 +257,9 @@ or rolling back to one — is posted to the team's channel once it is made, so
 the people who answer for the markets hear of it, whoever made it. So is
 every approval, as it is given: the channel hears of a version about to go
 on while it can still be stopped. Nothing else is posted: not an import, a
-validation or a review, nor a move that changed nothing, nor a move or an
-approval that was refused. The channel reads:
+validation or a review, nor a decision about a token or a collateral, nor a
+move that changed nothing, nor a move or an approval that was refused. The
+channel reads:
 
 > [production] bob approved registry version c0d77dad-… (commit a34d9b5)
 > until 2026-11-05T11:00:00.000Z, against d9698ddd-…. Markets: 1 added,
@@ -374,7 +378,7 @@ archive state, and add `-c wrangler.local-proxy.toml` to both commands.
 
 **Bring it up.** In another terminal, from the root of the checkout, with
 `export API=http://localhost:8787` and your first token in `TOKEN`, run steps
-1 to 7 of [the first bring-up](#bringing-an-environment-up-for-the-first-time),
+1 to 8 of [the first bring-up](#bringing-an-environment-up-for-the-first-time),
 step 5 with your second token in `TOKEN`, and time them.
 
 **You should see** each step answer as it says. Step 2 prints its
@@ -383,14 +387,17 @@ its second column. Step 3 answers `"changed": true`, with nothing unreviewed
 but those; to check the file it asks the node 10 `eth_blockNumber`, 58
 `eth_getCode` at past blocks — each Comet at its creation block and at the
 block before — and the decimals of up to 19 feeds. Step 4 answers
-`validated`, and step 7 serves every market, none in `error`. Then compare
-`GET $API/registry/v1/active` with the markets the frontend lists today:
-every one is there, under the same display name, base asset name, slug, and
-default and institutional flags.
+`validated`, step 7 serves every market, none in `error`, and step 8's
+review finds no problem: the version holds every collateral of the initial
+list, which the tests cannot check for the wstETH and USDS markets. Then
+compare `GET $API/registry/v1/active` with the markets the frontend lists
+today: every one is there, under the same display name, base asset name,
+slug, and default and institutional flags.
 
 **If not.** What step 3 refuses, its table explains. Where the file is at
 fault, it needs a change ([its README](./registry/seed/README.md#changing-it))
-before any environment is brought up with it. A `503` there with
+before any environment is brought up with it, and so does the list of step 8
+for a row its review finds a problem in. A `503` there with
 `details.code` `CHAIN_REQUEST_FAILED` and
 "the node provider did not serve the code of 0x…", naming a Comet, is a
 provider that did not serve the Comet's code at a past block — most often one
@@ -785,6 +792,11 @@ Step 5 was not done, was done with your own token or another of your name,
 has expired, was used, or was given while another version was on: have it
 done again.
 
+A collateral a later version adds can be hidden from token discovery only
+once that version is on: right after this step, hide what must not be shown
+([Hiding a collateral](#hiding-a-collateral)). Until then discovery decides
+it in its market as any other collateral there.
+
 ### 7. Check that it is on
 
 ```sh
@@ -846,6 +858,66 @@ One error is no market's: `Too many subrequests` in that log line says the
 request ran out of the subrequests an invocation has
 ([README.md](./README.md#workers-plan)). Switch nothing off or back for it;
 show it to a developer.
+
+### 8. Mark the initial deprecated collaterals
+
+```sh
+curl -s -X POST "$API/registry/v1/admin/deprecated-collaterals/review" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  --data-binary @c3-api/registry/seed/production.deprecated-collaterals.json > review.json
+jq 'if .error then .error else .summary, (.collaterals[] | select(.problem != null)) end' review.json
+```
+
+Postman:
+
+```http
+POST {{API}}/registry/v1/admin/deprecated-collaterals/review
+Authorization: Bearer {{TOKEN}}
+Content-Type: application/json
+
+<the file c3-api/registry/seed/production.deprecated-collaterals.json>
+```
+
+Send the file as it is: **Body → binary**, and select it. Set the
+`Content-Type: application/json` header yourself.
+
+**Why.** Until the registry served them, the app left 20 collaterals of five
+Ethereum markets out by a list of its own. The file is that list, in the
+form the review and apply routes take
+([The initial list of deprecated collaterals](#the-initial-list-of-deprecated-collaterals)).
+A collateral can be marked only while a version that holds it is on, so the
+list goes in once step 6 has switched one on, and until it is applied, the
+reads mark none of the 20 deprecated. The review writes nothing: it holds
+every row against the version that is on, and says what applying the list
+would change. Applying it is yours alone: unlike step 6, a decision about a
+collateral takes effect as soon as it is made, needs nobody's approval, and
+is not announced.
+
+**You should see** `"change": 20`, `"unchanged": 0` and `"problems": 0`, and
+nothing after them. Then apply what it changes, right after the review,
+with the command of step 3 of
+[A reviewed list of deprecated collaterals](#a-reviewed-list-of-deprecated-collaterals):
+it reads this `review.json`, and answers `"changed": 20`. In Postman, when
+the review shows `"change": 20`, every row of the file changes, so send the
+file to `…/deprecated-collaterals/apply` as it went to the review; otherwise
+write the body as that step says.
+
+In an environment where the list was applied before, the review shows
+`"change": 0` and `"unchanged": 20`: there is nothing to apply, and the
+command of step 3 says so and sends nothing. Where only part of it was, the
+review counts that part as `unchanged`, and apply writes the rest.
+
+**If not.** A row printed after the summary has a `problem`: the version
+that is on does not hold that collateral of that Comet, or names its market
+or its token otherwise than the row does. Do not apply the file, and do not
+edit it to get past the problem; the command of step 3 sends nothing while
+the review has one. Tell a developer which row it is: the app's list was
+written against what these markets took, so a market that no longer takes
+one of them is the frontend's question, and the file changes by a pull
+request ([its README](./registry/seed/README.md#the-deprecated-collaterals)).
+`503` `REGISTRY_NOT_ACTIVE` means nothing is on yet: step 6 first. Any other
+`error` in place of the summary is in
+[When something goes wrong](#when-something-goes-wrong).
 
 ## When the source changes
 
@@ -1527,6 +1599,561 @@ activation, approved by another admin, switches another version on. To go
 further back, roll back again from the version you restored: the newest
 `activate` onto it names the step before.
 
+## Marking a token strategic
+
+A strategic token is meant to be shown in every market that takes it as
+collateral, whatever that market holds of it, unless that market's Comet
+hides it ([Hiding a collateral](#hiding-a-collateral)) or has it deprecated
+([Marking a collateral deprecated](#marking-a-collateral-deprecated)).
+
+The mark belongs to the token itself — its chain and its address — so it
+stays when a newer version is switched on, and comes back if a version drops
+the token and a later one brings it back. You can only mark a token the
+version that is on holds, and every change needs a reason, which is kept with
+who made it: the name of the token it was made with, which has the role
+`admin`. A change takes effect as soon as it is made: unlike switching a
+version on, it needs nobody's approval, and it is not announced. The same
+holds for deprecating and hiding a collateral.
+
+```sh
+curl -s -X PATCH "$API/registry/v1/admin/networks/1/tokens/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2/policy" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"isStrategic": true, "reason": "Approved by governance"}' | jq
+```
+
+Postman:
+
+```http
+PATCH {{API}}/registry/v1/admin/networks/1/tokens/0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2/policy
+Authorization: Bearer {{TOKEN}}
+Content-Type: application/json
+
+{"isStrategic": true, "reason": "Approved by governance"}
+```
+
+**You should see** `"changed": true` and the time in `updatedAt`. Sending the
+same request again answers `"changed": false` and records nothing, so it is
+safe to repeat. To take the mark away, send `"isStrategic": false` with a
+reason.
+
+To see every token of a chain with its mark, and one token's history (newest
+change first):
+
+```sh
+curl -s "$API/registry/v1/admin/networks/1/tokens" -H "Authorization: Bearer $TOKEN" \
+  | jq '.tokens[] | select(.isStrategic) | {symbol, address, updatedAt, updatedBy}'
+curl -s "$API/registry/v1/admin/networks/1/tokens/<address>/policy" -H "Authorization: Bearer $TOKEN" | jq .events
+```
+
+Postman:
+
+```http
+GET {{API}}/registry/v1/admin/networks/1/tokens
+Authorization: Bearer {{TOKEN}}
+```
+
+A mark stays when a version that drops its token is switched on: the chain's
+list shows it under `retained`, and the token's history still answers, with
+`"inActiveVersion": false`. It applies again the moment a version that holds
+the token is switched on, so read `retained` before switching such a version
+on, and take a mark away while the token is still served if it should not
+come back.
+
+### A reviewed list of strategic tokens
+
+A list the product team approved is applied in three requests, and you never
+type an address: the first one gives you every token as a file.
+
+**1. Export the tokens.** Every token of every network that is on, with its
+mark, in the form the next two requests take:
+
+```sh
+curl -s "$API/registry/v1/admin/token-policies" -H "Authorization: Bearer $TOKEN" > token-policies.json
+jq 'if .error then .error else (.policies | length) end' token-policies.json   # how many tokens, or why not
+```
+
+Postman:
+
+```http
+GET {{API}}/registry/v1/admin/token-policies
+Authorization: Bearer {{TOKEN}}
+```
+
+(**Save Response → Save to a file**.) Edit the file: set `"isStrategic": true`
+on the approved tokens (or `false` to take a mark away) and write why in the
+`"reason"` at the top. A row may carry its own `"reason"`, which wins. Leave
+every other row as it is, or delete it: a row that changes nothing needs no
+reason, and a token the list does not name is left as it is. Step 3 applies
+only the rows the review shows as changes.
+
+**2. See what it would change** — this writes nothing, and keeps the answer
+for step 3:
+
+```sh
+curl -s -X POST "$API/registry/v1/admin/token-policies/review" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' --data @token-policies.json > review.json
+jq 'if .error then .error else .summary, (.policies[] | select(.action == "change" or .problem != null)) end' review.json
+```
+
+Postman:
+
+```http
+POST {{API}}/registry/v1/admin/token-policies/review
+Authorization: Bearer {{TOKEN}}
+Content-Type: application/json
+
+(Body → raw → JSON, and paste the file)
+```
+
+Pasting into **raw → JSON** is what sets `Content-Type: application/json`.
+**Body → binary** works too, with that header added by hand; without it the
+API answers `400 the request body must be JSON`.
+
+**You should see** `"problems": 0`, and under `change` exactly the tokens the
+list decides, each with what it is now (`current`), what the list wants
+(`requested`) and the reason it will be recorded with. A row with a `problem` names a chain or a token the version that
+is on does not hold, a symbol that is not that token's, or a change without a
+reason; fix the file and review it again.
+
+**3. Apply what it changes** — right after the review:
+
+```sh
+jq 'if .error then error("the review failed: \(.error.message)")
+    elif .summary.problems > 0 then error("the review found problems: fix the file and review it again")
+    elif .summary.change == 0 then error("the review shows no change: there is nothing to apply")
+    else {reason: null, policies: [.policies[] | select(.action == "change") | {chainId, tokenAddress, symbol, isStrategic: .requested, reason}]}
+    end' review.json > reviewed.json \
+  && curl -s -X POST "$API/registry/v1/admin/token-policies/apply" -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' --data @reviewed.json \
+  | jq 'if .error then .error else .summary end'
+```
+
+`jq` writes to `reviewed.json` only the rows the review shows under `change`,
+each with the `reason` the review showed, which is the one the change is
+recorded with, and the `symbol` the version names. If the review answered an
+error, found problems or shows no change, `jq` says so, and nothing is sent.
+
+Postman: the same request as step 2, to `…/token-policies/apply`, with
+`reviewed.json` as the body. Without `jq`, write the body from the rows the
+review shows under `change`: `{"reason": null, "policies": [ … ]}`, each row
+with its `chainId`, `tokenAddress`, `symbol`, `requested` as `isStrategic`,
+and `reason`.
+
+**You should see** `"changed"` equal to the number of changes the review
+showed. Apply compares `reviewed.json` with the decisions in force when it
+runs: if the number differs, someone decided one of its tokens after your
+review, and the answer's rows show which. It can only be lower: a token
+someone gave the list's decision meanwhile is left as it is. Apply does not
+touch a token `reviewed.json` does not name, whoever decided it after your
+review; only a token of the list that someone changed and changed back since
+is written as the review showed. The list is written in one go: if any row
+cannot be applied (`422`, naming the rows), or a version is switched on or
+one of its tokens decided while it is being written (`409`), nothing is
+written. Applying `reviewed.json` again changes nothing.
+
+To use the list in another environment, take the edited file, not
+`reviewed.json`, which holds only what changes here, and keep only the rows
+the list decides: a list applies only where the version that is on holds
+every token it names, and another environment's version may not hold one of
+them. Review it there and apply what it changes, as steps 2 and 3 do here.
+
+## Marking a collateral deprecated
+
+A deprecated collateral is a collateral of a market that the app no longer
+offers there: it leaves it out of the market's collateral list, of what can
+be supplied, and of the markets overview. A user who still holds some keeps
+seeing it, so that it can be withdrawn. The decision is about one collateral
+of one market — its chain, the market's Comet and the token — so a token can
+be deprecated in one market and current in another. Token discovery does not
+show a deprecated collateral in its market either. To keep a collateral out
+of discovery while its market still offers it, hide it instead
+([Hiding a collateral](#hiding-a-collateral)).
+
+Like a strategic mark, the decision stays when a newer version is switched
+on, and comes back if a version drops the collateral and a later one brings
+it back. You can only decide about a collateral of a market of the version
+that is on, and every change needs a reason, which is kept with who made it.
+
+```sh
+curl -s -X PATCH "$API/registry/v1/admin/networks/1/markets/0x3afdc9bca9213a35503b077a6072f3d0d5ab0840/collaterals/0xd5f7838f5c461feff7fe49ea5ebaf7728bb0adfa/deprecated" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"isDeprecated": true, "reason": "Deprecated collateral of the USDT market"}' | jq
+```
+
+Postman:
+
+```http
+PATCH {{API}}/registry/v1/admin/networks/1/markets/0x3afdc9bca9213a35503b077a6072f3d0d5ab0840/collaterals/0xd5f7838f5c461feff7fe49ea5ebaf7728bb0adfa/deprecated
+Authorization: Bearer {{TOKEN}}
+Content-Type: application/json
+
+{"isDeprecated": true, "reason": "Deprecated collateral of the USDT market"}
+```
+
+**You should see** `"changed": true` and the time in `updatedAt`. Sending the
+same request again answers `"changed": false` and records nothing, so it is
+safe to repeat. To make the collateral current again, send
+`"isDeprecated": false` with a reason.
+
+The reads say it in their next answer, which a browser may keep for up to 5
+minutes (`REGISTRY_SNAPSHOT_CACHE_TTL_S`):
+
+- `GET /registry/v1/networks/1/markets/<comet>`, the chain's market list and
+  `/registry/v1/active` have `"isDeprecated": true` on that collateral of
+  that market.
+
+One collateral's decision, with its history, newest change first:
+
+```sh
+curl -s "$API/registry/v1/admin/networks/1/markets/<comet>/collaterals/<token>/deprecated" \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+
+A decision stays when a version that drops the collateral from its market is
+switched on: the export below lists it under `retained`, and its history
+still answers, with `"inActiveVersion": false`. It applies again the moment a
+version whose market takes the collateral, and is not disabled, is switched
+on.
+
+### A reviewed list of deprecated collaterals
+
+A list is applied as a list of strategic tokens is, in three requests, and
+you never type an address: the first one gives you every collateral as a
+file.
+
+**1. Export the collaterals.** Every collateral of every market of the
+version that is on, with its decision, in the form the next two requests
+take:
+
+```sh
+curl -s "$API/registry/v1/admin/deprecated-collaterals" -H "Authorization: Bearer $TOKEN" > deprecated-collaterals.json
+jq 'if .error then .error else (.collaterals | length) end' deprecated-collaterals.json   # how many collaterals, or why not
+```
+
+Postman:
+
+```http
+GET {{API}}/registry/v1/admin/deprecated-collaterals
+Authorization: Bearer {{TOKEN}}
+```
+
+(**Save Response → Save to a file**.) Edit the file: set `"isDeprecated": true`
+on the collaterals the list decides (or `false` to make one current again) and
+write why in the `"reason"` at the top. A row may carry its own `"reason"`,
+which wins. Leave every other row as it is, or delete it. A row's
+`deploymentKey` and `symbol` are there for you to read, and are checked: a
+market or a symbol that is not the one the version that is on names is
+refused. `retained` is not read. Step 3 applies only the rows the review
+shows as changes.
+
+**2. See what it would change** — this writes nothing, and keeps the answer
+for step 3:
+
+```sh
+curl -s -X POST "$API/registry/v1/admin/deprecated-collaterals/review" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' --data @deprecated-collaterals.json > review.json
+jq 'if .error then .error else .summary, (.collaterals[] | select(.action == "change" or .problem != null)) end' review.json
+```
+
+Postman:
+
+```http
+POST {{API}}/registry/v1/admin/deprecated-collaterals/review
+Authorization: Bearer {{TOKEN}}
+Content-Type: application/json
+
+(Body → raw → JSON, and paste the file)
+```
+
+**You should see** `"problems": 0`, and under `change` exactly the
+collaterals the list decides, each with what it is now (`current`), what the
+list wants (`requested`) and the reason it will be recorded with. A row with
+a `problem` names a chain or a Comet the version that is on does not hold, a
+token that is not a collateral of that Comet, a market or a symbol that is
+not that row's, or a change without a reason; fix the file and review it
+again.
+
+**3. Apply what it changes** — right after the review:
+
+```sh
+jq 'if .error then error("the review failed: \(.error.message)")
+    elif .summary.problems > 0 then error("the review found problems: fix the file and review it again")
+    elif .summary.change == 0 then error("the review shows no change: there is nothing to apply")
+    else {reason: null, collaterals: [.collaterals[] | select(.action == "change") | {chainId, cometAddress, deploymentKey, tokenAddress, symbol, isDeprecated: .requested, reason}]}
+    end' review.json > reviewed.json \
+  && curl -s -X POST "$API/registry/v1/admin/deprecated-collaterals/apply" -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' --data @reviewed.json \
+  | jq 'if .error then .error else .summary end'
+```
+
+`jq` writes to `reviewed.json` only the rows the review shows under `change`,
+each with the `reason` the review showed, which is the one the change is
+recorded with, and the `deploymentKey` and `symbol` the version names. If the
+review answered an error, found problems or shows no change, `jq` says so,
+and nothing is sent.
+
+Postman: the same request as step 2, to `…/deprecated-collaterals/apply`,
+with `reviewed.json` as the body. Without `jq`, write the body from the rows
+the review shows under `change`: `{"reason": null, "collaterals": [ … ]}`,
+each row with its `chainId`, `cometAddress`, `deploymentKey`, `tokenAddress`,
+`symbol`, `requested` as `isDeprecated`, and `reason`.
+
+**You should see** `"changed"` equal to the number of changes the review
+showed. Apply compares `reviewed.json` with the decisions in force when it
+runs: if the number differs, someone decided one of its collaterals after
+your review, and the answer's rows show which. It can only be lower: a
+collateral someone gave the list's decision meanwhile is left as it is. Apply
+does not touch a collateral `reviewed.json` does not name, whoever decided it
+after your review; only a collateral of the list that someone changed and
+changed back since is written as the review showed. The list is written in
+one go, as a list of strategic tokens is: if any row cannot be applied
+(`422`, naming the rows), or a version is switched on or one of its
+collaterals decided while it is being written (`409`), nothing is written.
+Applying `reviewed.json` again changes nothing.
+
+### The initial list of deprecated collaterals
+
+Until the registry served them, the app left these collaterals out by a list
+of its own, which calls them legacy collateral: 20 collaterals of five
+Ethereum markets — the list is also how it keeps wUSDM out of the USDT
+market, which its row `usdt`/`wUSDM` now decides as `isDeprecated`. The
+list is checked in beside the seed, as
+[`c3-api/registry/seed/production.deprecated-collaterals.json`](./registry/seed/README.md#the-deprecated-collaterals),
+in the form `GET /registry/v1/admin/deprecated-collaterals` exports and the
+review and apply routes take: every row with the address of its Comet and
+of its token, the market's key and the token's symbol. Step 8 of
+[the first bring-up](#8-mark-the-initial-deprecated-collaterals) sends it
+once the environment's first version is on. Once it is applied,
+`/registry/v1/active` and the market reads mark each listed collateral with
+`"isDeprecated": true` in its market.
+
+Where the addresses come from: for the USDT, USDC and WBTC markets, each is
+what the registry's own data in the repository holds for that market and
+that symbol — the registry's test fixture
+(`tests/fixtures/registry/registry-snapshot-v1.json`), imported from the
+Comet repository and read on chain — and in it each token is exactly one
+collateral of its Comet:
+
+| App's key | Market | Comet | Collaterals |
+|---|---|---|---|
+| `1:USDT` | `usdt` (cUSDTv3) | `0x3afdc9bca9213a35503b077a6072f3d0d5ab0840` | mETH, weETH, sdeUSD, wUSDM, deUSD, USDe |
+| `1:USDC` | `usdc` (cUSDCv3) | `0xc3d688b66703497daa19211eedff47f25384cdc3` | rsETH, USDe, deUSD, sdeUSD |
+| `1:WBTC` | `wbtc` (cWBTCv3) | `0xe85dc543813b8c2cfeaac371517b925a166a9293` | LBTC, pumpBTC |
+
+The app's key `1:USDC` also names the institutional USDC market (ciUSDCv3,
+`0x207158a267cbd2598bb3d611d8cbdee2709f2f8c`, its root in the source
+fixtures). The version that is on lists its collateral as WETH, wstETH,
+cbBTC and WBTC (`GET /registry/v1/networks/1/markets`), none of the four, so
+the file names the USDC market alone; review shows it, since a token that is
+no collateral of a Comet is a problem there.
+
+The app's list also names 3 collaterals of the wstETH market and 5 of the
+USDS market:
+
+| App's key | Comet, from the seed (`registry/seed/production.comets.json`) | Collateral | Token address the repository holds |
+|---|---|---|---|
+| `1:wstETH` | cwstETHv3, `0x3d0bb1ccab520a66e607822fc55bc921738fafe3` | rsETH | `0xa1290d69c65a6fe4df752f95823fae25cb99e5a7` |
+| | | ezETH | `0xbf5495efe5db9ce00f80364c8b423567e58d2110` |
+| | | weETH | `0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee` |
+| `1:USDS` | cUSDSv3, `0x5d409e56d886231adaf00c8775665ad0f9897b56` | USDe | `0x4c9edd5852cd905f086c759e8383e09bff1e68b3` |
+| | | sdeUSD | `0x5c5b196abe0d54485975d1ec29617d42d9198326` |
+| | | tBTC | `0x18084fba666a33d37592fa2633fd49a74dd93a88` |
+| | | weETH | `0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee` |
+| | | deUSD | `0x15700b564ca08d9439c58ca5053166e8317aa138` |
+
+Nothing in the repository says which tokens these two Comets take as
+collateral. The registry's test fixture holds four Ethereum markets — USDC,
+WETH, USDT and WBTC — the source fixtures hold the roots of the USDC and
+institutional USDC markets only, and the seed names both Comets
+(`production.comets.json`) but no Comet's collateral. Each token address is
+the one the fixture's Ethereum markets hold under that symbol. That each is
+a collateral of its Comet is what a development deployment's active version
+said: on 2026-10-22, its export listed each of the 8 exactly once, as a
+collateral of its Comet, with the address and the symbol the table has.
+Step 8's review checks every row of the file again, against the version
+that is on where it is sent, before anything is written.
+
+## Hiding a collateral
+
+A hidden collateral is a collateral of a market that token discovery does not
+show there. It stays a collateral of its market: the market still takes it,
+and a user's positions in it and the actions on them are shown as before.
+Hiding is about discovery alone; to stop offering a collateral in a market,
+mark it deprecated instead
+([Marking a collateral deprecated](#marking-a-collateral-deprecated)). The
+decision is about one collateral of one market — its chain, the market's
+Comet and the token — so a token can be hidden in one market and not in
+another. Discovery decides each market by that market's own decisions: a
+collateral its Comet hides is not shown there. No other market's decision
+hides it there, so to keep a token out of discovery on the whole chain, hide
+it in every market that takes it as collateral, those whose status is
+`deprecated` among them; a market that has it deprecated does not show it
+either.
+
+**Name the token the version holds.** Take the addresses from the export
+below, from the market reads (`GET /registry/v1/networks/<chain>/markets`) or
+from the token policies (`GET /registry/v1/admin/networks/<chain>/tokens`),
+never from what the app shows. Where the app shows a wrapped native token as
+the chain's own coin, at the zero address — ETH for WETH on seven chains, POL
+for WPOL, RON for WRON — hide the wrapped token: hiding WETH is what keeps
+the app's ETH out of discovery. On Ethereum, hide wstETH, not the stETH the
+app lets a user supply in its place: the stETH row follows wstETH's decision.
+A request that names an address the app shows, and the version does not hold,
+answers `404`.
+
+Like a strategic mark, the decision stays when a newer version is switched
+on, and comes back if a version drops the collateral and a later one brings
+it back. You can only decide about a collateral of a market of the version
+that is on, and every change needs a reason, which is kept with who made it.
+So a collateral a new version adds can be hidden only once that version is
+on: send the request right after the switch
+([6. Switch it on](#6-switch-it-on)).
+
+```sh
+curl -s -X PATCH "$API/registry/v1/admin/networks/1/markets/0xc3d688b66703497daa19211eedff47f25384cdc3/collaterals/0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee/hidden" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"isHidden": true, "reason": "Not shown by discovery in the USDC market"}' | jq
+```
+
+Postman:
+
+```http
+PATCH {{API}}/registry/v1/admin/networks/1/markets/0xc3d688b66703497daa19211eedff47f25384cdc3/collaterals/0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee/hidden
+Authorization: Bearer {{TOKEN}}
+Content-Type: application/json
+
+{"isHidden": true, "reason": "Not shown by discovery in the USDC market"}
+```
+
+**You should see** `"changed": true` and the time in `updatedAt`. Sending the
+same request again answers `"changed": false` and records nothing, so it is
+safe to repeat. To take the decision back, send `"isHidden": false` with a
+reason.
+
+The reads say it in their next answer, which a browser may keep for up to 5
+minutes (`REGISTRY_SNAPSHOT_CACHE_TTL_S`):
+
+- `GET /registry/v1/networks/1/markets/<comet>`, the chain's market list and
+  `/registry/v1/active` have `"isHidden": true` on that collateral of that
+  market.
+
+One collateral's decision, with its history, newest change first:
+
+```sh
+curl -s "$API/registry/v1/admin/networks/1/markets/<comet>/collaterals/<token>/hidden" \
+  -H "Authorization: Bearer $TOKEN" | jq
+```
+
+A decision stays when a version that drops the collateral from its market is
+switched on: the export below lists it under `retained`, and its history
+still answers, with `"inActiveVersion": false`. It applies again the moment a
+version whose market takes the collateral, and is not disabled, is switched
+on.
+
+Nothing is hidden when an environment is brought up: there is no initial list
+of hidden collaterals, as there is of deprecated ones.
+
+### A reviewed list of hidden collaterals
+
+A list is applied as a list of deprecated collaterals is, in three requests,
+and you never type an address: the first one gives you every collateral as a
+file.
+
+**1. Export the collaterals.** Every collateral of every market of the
+version that is on, with its hidden decision, in the form the next two
+requests take:
+
+```sh
+curl -s "$API/registry/v1/admin/hidden-collaterals" -H "Authorization: Bearer $TOKEN" > hidden-collaterals.json
+jq 'if .error then .error else (.hiddenCollaterals | length) end' hidden-collaterals.json   # how many collaterals, or why not
+```
+
+Postman:
+
+```http
+GET {{API}}/registry/v1/admin/hidden-collaterals
+Authorization: Bearer {{TOKEN}}
+```
+
+(**Save Response → Save to a file**.) Edit the file: set `"isHidden": true` on
+the collaterals the list hides (or `false` to take a decision back) and write
+why in the `"reason"` at the top. A row may carry its own `"reason"`, which
+wins. Leave every other row as it is, or delete it. A row's `deploymentKey`
+and `symbol` are there for you to read, and are checked: a market or a symbol
+that is not the one the version that is on names is refused. `retained` is
+not read. The rows are under `hiddenCollaterals`, so a file of deprecated
+collaterals sent here, or this one sent to the deprecated routes, is refused
+with `400` (`unexpected properties`). Step 3 applies only the rows the review
+shows as changes.
+
+**2. See what it would change** — this writes nothing, and keeps the answer
+for step 3:
+
+```sh
+curl -s -X POST "$API/registry/v1/admin/hidden-collaterals/review" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' --data @hidden-collaterals.json > review.json
+jq 'if .error then .error else .summary, (.hiddenCollaterals[] | select(.action == "change" or .problem != null)) end' review.json
+```
+
+Postman:
+
+```http
+POST {{API}}/registry/v1/admin/hidden-collaterals/review
+Authorization: Bearer {{TOKEN}}
+Content-Type: application/json
+
+(Body → raw → JSON, and paste the file)
+```
+
+**You should see** `"problems": 0`, and under `change` exactly the
+collaterals the list decides, each with what it is now (`current`), what the
+list wants (`requested`) and the reason it will be recorded with. A row with
+a `problem` names a chain or a Comet the version that is on does not hold, a
+token that is not a collateral of that Comet — the ETH or the stETH the app
+shows, say — a market or a symbol that is not that row's, or a change
+without a reason; fix the file and review it again.
+
+**3. Apply what it changes** — right after the review:
+
+```sh
+jq 'if .error then error("the review failed: \(.error.message)")
+    elif .summary.problems > 0 then error("the review found problems: fix the file and review it again")
+    elif .summary.change == 0 then error("the review shows no change: there is nothing to apply")
+    else {reason: null, hiddenCollaterals: [.hiddenCollaterals[] | select(.action == "change") | {chainId, cometAddress, deploymentKey, tokenAddress, symbol, isHidden: .requested, reason}]}
+    end' review.json > reviewed.json \
+  && curl -s -X POST "$API/registry/v1/admin/hidden-collaterals/apply" -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' --data @reviewed.json \
+  | jq 'if .error then .error else .summary end'
+```
+
+`jq` writes to `reviewed.json` only the rows the review shows under `change`,
+each with the `reason` the review showed, which is the one the change is
+recorded with, and the `deploymentKey` and `symbol` the version names. If the
+review answered an error, found problems or shows no change, `jq` says so,
+and nothing is sent.
+
+Postman: the same request as step 2, to `…/hidden-collaterals/apply`, with
+`reviewed.json` as the body. Without `jq`, write the body from the rows the
+review shows under `change`: `{"reason": null, "hiddenCollaterals": [ … ]}`,
+each row with its `chainId`, `cometAddress`, `deploymentKey`, `tokenAddress`,
+`symbol`, `requested` as `isHidden`, and `reason`.
+
+**You should see** `"changed"` equal to the number of changes the review
+showed. Apply compares `reviewed.json` with the decisions in force when it
+runs, as it does for a list of deprecated collaterals: if the number is
+lower, someone decided one of its collaterals after your review, and the
+answer's rows show which. Apply does not touch a collateral `reviewed.json`
+does not name. The list is written in one go: if any row cannot be applied
+(`422`, naming the rows), or a version is switched on or one of its
+collaterals decided while it is being written (`409`), nothing is written.
+Applying `reviewed.json` again changes nothing.
+
+To use the list in another environment, take the edited file, not
+`reviewed.json`, which holds only what changes here, and keep only the rows
+the list decides: another environment's version may not hold every
+collateral it names. Review it there and apply what it changes, as steps 2
+and 3 do here.
+
 ## Keeping an eye on it
 
 One request tells you whether the registry is well:
@@ -1627,9 +2254,21 @@ whose reasons are in the draft it names.
 | `401`, "the bearer token has expired" | Your token's `notAfter` has passed: it was rotated out | Use the token that replaced it, or ask the environment's owner for one |
 | `403`, "the token … has the role …, and this route needs …" | Your token's role does not reach the route; `details.requiredRole` names the role that does | Ask for a token with that role, or ask its holder to make the change |
 | `403`, "the administrative API is misconfigured in this environment: …", or "… is not configured …" | The environment has no token in its list, or a list the worker cannot read, so every token is refused | Step 5 of [The admin tokens](#the-admin-tokens) says what each message means and what to do |
-| `413` | The request body is larger than the route takes | Send less: a directory of overlays in several requests |
+| `413` | The request body is larger than the route takes | Send less: a directory of overlays, or a list of token policies, of deprecated or of hidden collaterals, in several requests |
 | `429`, "too many administrative requests from this address" | More than 60 administrative requests in a minute from your address — over IPv6, from your /64 — whatever they were: every request under `/registry/v1/admin/` is counted by address before its token is checked, a wrong token or a path no route takes included, and the right token is refused too once the address has spent its budget | Wait the seconds its `Retry-After` names — a minute at most. A script in a loop, or a monitor sharing your address, is what spends it |
-| `429`, "too many … requests with this token" | More than 30 administrative requests in a minute with your token, counted per family of routes. Reads count too, and every read shares one budget, while each kind of command has its own; anyone using your token spends it with you | Wait the seconds its `Retry-After` names. A monitor polls with a `monitor` token of its own, which spends nothing of yours |
+| `429`, "too many … requests with this token" | More than 30 administrative requests in a minute with your token, counted per family of routes. Reads count too, and every read shares one budget, while each kind of command has its own; anyone using your token spends it with you. Reviewing a list of token policies, of deprecated or of hidden collaterals writes nothing and counts as a read ("too many read requests"); marking a token or a collateral, hiding a collateral, and applying a list of any of them, share one budget ("too many policy requests") | Wait the seconds its `Retry-After` names. A monitor polls with a `monitor` token of its own, which spends nothing of yours |
+| `404` marking a token | The version that is on does not hold that chain or that token | Check the chain id and the address against `GET /registry/v1/admin/networks/<chain>/tokens`; a token only a newer draft holds can be marked once that draft is switched on |
+| `409` marking a token, `details.code` `TOKEN_LEFT_REGISTRY` ("left the active registry") | A version without that token was switched on while the change was being written; nothing was written | Check which version is on, and mark the token again if it is still there |
+| `404` "no registry route matches …/token-policies" | The Worker at that address was deployed before token policies | Deploy the release with token policies first |
+| `404` marking a collateral deprecated | The version that is on does not hold that chain, no market of it has that Comet, or that market does not take that token as collateral — the message says which | Check the addresses against the export (`GET /registry/v1/admin/deprecated-collaterals`); a collateral only a newer draft holds can be marked once that draft is switched on |
+| `409` marking a collateral deprecated, `details.code` `COLLATERAL_LEFT_REGISTRY` ("left the collateral of") | A version whose market does not take that token was switched on while the change was being written; nothing was written | Check which version is on, and mark the collateral again if its market still takes it |
+| `404` "no registry route matches …/deprecated-collaterals" | The Worker at that address was deployed before deprecated collaterals | Deploy the release with deprecated collaterals first |
+| `404` hiding a collateral | The version that is on does not hold that chain, no market of it has that Comet, or that market does not take that token as collateral — the message says which. An address the app shows in place of the token the version holds is such a token: the zero address of ETH, POL or RON, or stETH beside wstETH | Take the addresses from the export (`GET /registry/v1/admin/hidden-collaterals`), the market reads (`GET /registry/v1/networks/<chain>/markets`) or the token policies (`GET /registry/v1/admin/networks/<chain>/tokens`) — WETH, WPOL, WRON or wstETH; a collateral only a newer draft holds can be hidden once that draft is switched on ([Hiding a collateral](#hiding-a-collateral)) |
+| `409` hiding a collateral, `details.code` `COLLATERAL_LEFT_REGISTRY` ("left the collateral of") | A version whose market does not take that token was switched on while the change was being written; nothing was written | Check which version is on, and hide the collateral again if its market still takes it |
+| `404` "no registry route matches …/hidden-collaterals", or "…/hidden" hiding a collateral | The Worker at that address was deployed before hidden collaterals | Deploy the release with hidden collaterals first |
+| `422` applying a list | Some rows cannot be applied; `details.problems` names each with why; nothing was written | Fix those rows — review shows them in context — and apply again |
+| `409` applying a list, `details.code` `TOKEN_LEFT_REGISTRY`, `COLLATERAL_LEFT_REGISTRY` or `DECISION_CHANGED` ("while it was being applied") | A version without one of the list's tokens, or collaterals, was switched on — or, for `DECISION_CHANGED`, someone else decided one of its rows — while the list was being written; nothing was written | Review the file again, then apply it |
+| `503` "the database is missing tables this release needs", from a token policy, deprecated or hidden collateral route, `/active` or the market reads | The worker was deployed before its D1 migrations: the token policy tables, `0005`, the deprecated collateral tables, `0007`, or the hidden collateral tables, `0008`, are missing | Apply the migrations to this environment (`npm run d1:migrate:<env>`, or `npx wrangler d1 migrations apply APP_DB --remote -c <config>`) |
 | `422`, `details.code` `OVERLAY_FEED_UNREADABLE`, writing an overlay | A feed the overlay names does not answer its decimals on that chain: it reverts, or nothing is deployed at that address there — most often a feed of another chain | Check the address against the chain's feed; a `503` instead is the node provider not answering, and worth trying again |
 | `409` writing overlays, `details.code` `VERSION_NOT_IMPORTING` ("… registry version cannot be changed" or "is no longer importing") | The draft is no longer open: it was validated, switched on, or replaced by a newer attempt of its commit (`GET /registry/v1/admin/versions/<id>` says which) | Look for the newest open draft first (`GET /registry/v1/admin/versions?status=importing`) and continue there; start a new attempt (step 1 with `forceNewAttempt`) only if there is none |
 | `409` on validate, `details.code` `IMPORT_STILL_RUNNING` ("the import … is still running") | The import has not finished | Send step 1 again until it completes |
@@ -1652,6 +2291,8 @@ whose reasons are in the draft it names.
 | `409 CONFLICT`, `details.code` `SYNC_ALREADY_RUNNING` | An import is in progress — the hourly one, a request you already sent, or one you are asking to change with `forceNewAttempt`, `holdForReview` or `sourceCommitSha`. Such a request that failed, with a `503` say, may have started its run first: sent again as it was, it is refused. "another invocation is importing right now" means an invocation holds the run this very moment. A request that failed gave it back as it failed, unless the database was still not answering then (`registry lease not released` in the worker's log); that one, like one stopped without an answer — by a deploy, or past the time or CPU a Worker is given — holds it until its lease runs out, at most 15 minutes | Continue it with an empty body until it says `completed`, sending it again a little later while another invocation is importing; only then ask for a new attempt. A run that every request fails on the same way never says `completed`: cancel it, as `sync-stalled` in [Keeping an eye on it](#keeping-an-eye-on-it) says |
 | `409` cancelling a run, `details.code` `SYNC_RUN_HELD` ("an invocation holds the sync run until …") or `SYNC_RUN_ENDED` ("has already ended") | An invocation holds the run until the time the message names, and may be importing into it; or the run has ended already | Cancel it again once that time has passed. A run that has ended needs no cancel: `GET /registry/v1/admin/sync-runs/<id>` says how it ended |
 | A market reports `"status": "partially"` or `"status": "error"` | A price feed it reads reverts, usually one Chainlink retired | [A market that stopped answering](#a-market-that-stopped-answering) |
+| `/active` and the market reads carry `X-Registry-Stale: 0`, and the log has the warning `deprecated collateral decisions unreadable; answering with the ones last recorded`, or `hidden collateral decisions unreadable; answering with the ones last recorded` | The database answered for the version that is on, but not for the deprecated or the hidden collateral decisions, so the flags are the ones the API last recorded, and the answer may not be kept | Check the database's health; the answers recover by themselves once it answers |
+| `503 UPSTREAM_UNAVAILABLE` from `/active` and the market reads while the database cannot be reached, though other routes answer from the cache | No deprecated, or no hidden, collateral decisions are recorded in the environment's `kv_registry` to answer with: no read of `/active` or the market reads, and no decision of that kind, has recorded them since this release, or the record was removed | Nothing to change: once the database answers, the reads record them again, within five minutes at most |
 | Answers carry `X-Registry-Stale: <seconds>`, and the log has the error `registry database unreachable; answering from the version it last named` | The database could not be reached, so the API is answering from the version it last saw, and saying how old it is. Each isolate logs the error once a minute while this lasts | Check the database's health; the API recovers by itself once D1 answers, and starts returning `503` if the outage outlasts the configured window |
 | `503 UPSTREAM_UNAVAILABLE` from the market and registry routes, or from `/admin/status` | The database could not be reached, and there is no version within the window to answer from. Or, from a route that reads the chain — the market and account routes, transaction history, governance — the node provider proxy did not serve the request: no provider answered it, the worker could not reach the proxy or lost its answer, or the proxy answered a call with an error that is not a revert. Such an answer says `a node provider did not answer`, with the proxy's `Retry-After` when it sent one; the worker's log line `route failed` with the answer's `requestId` has the error — `HTTP 401` in it is the proxy refusing `NODE_PROXY_KEY` — and the proxy's own log has `upstream error` or `json-rpc error` | Check the database's health; nothing in the registry needs changing. For a node provider, fix the proxy, its binding or its key: the routes answer again as soon as it serves them |
 | `500 INTERNAL` from the market and registry routes | The database answered with a fault — most often a release deployed before its migrations — or a bug, such as a call the contract reverted where the route needed its value. A node provider that did not answer is a `503`, not this. The worker's log line `route failed` or `registry route failed` with the answer's `requestId` has the error. On an activation or a rollback, with "an activation requires an approval", "a rollback restores only the older version …" or "the active registry version moves only with its activation", it is a release from before approvals answering, after the environment's first approval: deployed again, or beside the release with approvals | Apply the migrations if they are missing; deploy the release with approvals, or a later one, to all traffic if an older one answers; otherwise report the log line |

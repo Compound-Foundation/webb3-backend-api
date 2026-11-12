@@ -75,11 +75,18 @@ migration that has been applied anywhere.
 
 Migrations are numbered in the order they are applied, not by feature:
 `0001` is the Comet registry schema, `0002` marks the markets nobody has
-reviewed yet, `0003` adds how the frontend lists a market — its slug and
-whether it is institutional — `0004` drops the columns and indexes nothing
-uses, and `0011` adds the approvals an activation needs. `0005` to `0010`
-are left to work merged later, which an environment applies after `0011`:
+reviewed yet, and `0003` adds how the frontend lists a market — its slug and
+whether it is institutional. `0004` drops the columns and indexes nothing
+uses, and `0005` stores token policies — which tokens an administrator has
+marked strategic, and the audit of every change. `0006` stores which
+collaterals of which Comets an administrator has marked legacy, with the audit
+of every change, and `0007` renames them deprecated collaterals: tables,
+columns, view, indexes and triggers alike. `0008` stores which collaterals of
+which Comets an administrator has hidden from token discovery, with the audit
+of every change. `0011` adds the approvals an activation needs, and an
+environment that applied it first applies `0005` to `0008` after it:
 `wrangler d1 migrations apply` applies every file not applied yet, by name.
+`0009` and `0010` are left to work merged later.
 
 Apply migrations to the local Miniflare database under `.wrangler/state`:
 ```sh
@@ -94,10 +101,13 @@ npm run d1:migrate:stage
 npm run d1:migrate:production
 ```
 
+A migration has to work with the release deployed before it, which serves
+until the deploy that follows.
+
 The Comet registry also binds `kv_registry` for its snapshot cache, its last
-check of the chain and the last announcement it gave up, two rate limiters
-for its administrative routes, and an hourly Cron trigger for its resumable
-sync.
+check of the chain, the deprecated and the hidden collateral decisions it
+last recorded and the last announcement it gave up, two rate limiters for
+its administrative routes, and an hourly Cron trigger for its resumable sync.
 `REGISTRY_ADMIN_AUTH_RATE_LIMITER` counts every request under
 `/registry/v1/admin/` before its token is checked, 60 a minute for each
 client address (`CF-Connecting-IP`; an IPv6 client by its /64), so wrong
@@ -322,6 +332,15 @@ market routes read it the same way:
 - `REGISTRY_SNAPSHOT_CACHE_TTL_S` is the `max-age` public reads advertise to
   browsers and proxies.
 
+The deprecated and the hidden collateral decisions
+([Deprecated Collaterals](#deprecated-collaterals),
+[Hidden Collaterals](#hidden-collaterals)) are no part of a version, so they
+are not cached with it. `/active` and the market reads read them beside the
+pointer, in one more statement for each kind, and mark the version's
+collaterals with them in the answer; the answer's `ETag` names the flags it
+carries, so a decision that changes them is never confirmed with a `304` to a
+client holding a copy made before it.
+
 When D1 cannot be reached at all, a request is answered from the version D1
 last named, for up to `REGISTRY_STALE_FALLBACK_MAX_S` after that. Such a
 response carries `X-Registry-Stale` with its age in seconds and
@@ -333,7 +352,28 @@ nothing cached, every route answers `503 UPSTREAM_UNAVAILABLE`. A D1 that
 answers "no version is active" is an answer, not an outage: it is served as
 `503 REGISTRY_NOT_ACTIVE`, never from the cache; and a D1 that answers with a
 fault, such as a table a migration has not created yet, is a `500`, never
-masked by the cache.
+masked by the cache. The routes that read the token policy, deprecated
+collateral or hidden collateral tables are the one exception, for those
+tables: without migration `0005` the token policy routes, without `0007`
+`/active`, the market reads and the deprecated collateral routes, and without
+`0008` the same reads and the hidden collateral routes, answer
+`503 UPSTREAM_UNAVAILABLE`, naming the migrations to apply.
+
+During an outage `/active` and the market reads mark deprecated and hidden
+collaterals by the decisions the worker last recorded in `kv_registry`, in a
+record of each kind. Every command that decides about a collateral records
+its kind's once it has committed. An isolate checks a record against the
+decisions it reads whenever they are not the ones it last found there or
+wrote, and every five minutes besides, and writes them only where the record
+differs: KV takes one write a second to a key, and the isolates of a deploy,
+starting together, mostly find the record right. KV also keeps whichever
+write reaches it last, so a read that began before a decision and wrote after
+it puts back the decisions before it, until the next check puts that right,
+within about five minutes while the reads go on. An answer that could read
+the version but not the decisions, of one kind or both, is marked the same
+way, as `X-Registry-Stale: 0`, and one with either kind not recorded to
+answer with is `503 UPSTREAM_UNAVAILABLE`. With the window at `0` nothing is
+recorded, and nothing is answered from the records.
 
 An operator changes what the API serves by importing, reviewing, validating,
 approving and activating a version; see the admin routes in
@@ -357,7 +397,9 @@ person, but it goes back one step only: to the version the one on replaced
 when it was last activated, if that is older. Going further back takes
 another rollback, and each is announced. The code holds these rules for
 every move, and migration `0011` holds them in the database too from an
-environment's first approval on.
+environment's first approval on. A decision about a token or a collateral is
+one admin's: it takes effect as soon as it is made, needs nobody's approval,
+and is not announced.
 
 Every activation and rollback that changes what is served is announced,
 once it has committed, to the webhook `COMET_REGISTRY_WEBHOOK_URL` names — a
@@ -484,6 +526,195 @@ curl -X POST .../registry/v1/admin/versions/$VERSION/validate ...
 A new attempt at the same commit inherits what was reviewed for the attempts
 before it, so a candidate that ended invalid does not mean reviewing it all
 again.
+
+# Token Policies
+
+An administrator can mark a token strategic. A strategic token is meant to be
+shown in every market that takes it as collateral, whatever that market holds
+of it, unless that market's Comet hides it (`hidden`) or has it deprecated
+(`deprecated`). A policy is decided, audited, and read back through the
+administrative routes ([API.md](./API.md)).
+
+A policy belongs to the token — a chain id and an address — and not to a
+registry version, so it survives every activation; a version that drops the
+token and a later one that brings it back bring its policy back with it. It
+is decided only for a token of the active version, and a token nobody has
+decided about is not strategic, without a row. While a version without the
+token is active, its decision is kept, listed as `retained`, and readable with
+its history. Every change is written in one D1 transaction with an event that
+records the value it replaced, the value it set, the actor and the reason, and
+migration `0005` enforces that in the database: a policy row is written only
+beside its token's newest event, which records that change; events are never
+edited, replaced or deleted, and a policy row is never deleted.
+
+A reviewed list of decisions is a file, and nobody writes its addresses by
+hand: the export answers every token of every network of the
+active version with its decision, in exactly the form review and apply take
+back. Mark the tokens the list decides, give the reason once for the list or
+on a row, review the diff, and apply the changes it shows. Apply writes the
+whole list in one D1 transaction, with one event per change, and refuses the
+whole list, writing nothing, if any row names a chain or a token the active
+version does not hold, names a token by a symbol that is not its own, or
+changes a decision without a reason:
+
+```sh
+curl -s "$API/registry/v1/admin/token-policies" -H "Authorization: Bearer $TOKEN" > token-policies.json
+# edit token-policies.json: "isStrategic": true on the approved tokens, and "reason"
+curl -s -X POST "$API/registry/v1/admin/token-policies/review" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' --data @token-policies.json > review.json
+jq 'if .error then .error else .summary end' review.json
+# apply the rows the review shows as changes
+jq 'if .error then error("the review failed: \(.error.message)")
+    elif .summary.problems > 0 then error("the review found problems: fix the file and review it again")
+    elif .summary.change == 0 then error("the review shows no change: there is nothing to apply")
+    else {reason: null, policies: [.policies[] | select(.action == "change") | {chainId, tokenAddress, symbol, isStrategic: .requested, reason}]}
+    end' review.json > reviewed.json \
+  && curl -s -X POST "$API/registry/v1/admin/token-policies/apply" -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' --data @reviewed.json \
+  | jq 'if .error then .error else .summary end'
+```
+
+Apply compares the list with the decisions in force when it runs, so review it
+right before applying it, and apply the rows the review shows as changes
+rather than the edited file: a decision someone makes on another token after
+the review then stays as it is. Applying a list again changes nothing. A list
+applies only where the active version holds every token it names, so the file
+kept for other environments is best reduced to the rows the list decides —
+the routes leave every token a list does not name as it is — and reviewed in
+each environment before it is applied there.
+
+# Deprecated Collaterals
+
+An administrator can mark a collateral of a market deprecated: one the app
+no longer offers in that market, and keeps showing to a user who still holds
+some of it, so that it can be withdrawn. This replaces the list the frontend
+kept itself, which calls them legacy collateral, and which is also
+how it keeps wUSDM out of the USDT market now: that rule is the list's
+row for it, and so, once the list is applied, the decision `isDeprecated` on
+wUSDM in cUSDTv3. `/registry/v1/active` and the market reads mark every
+collateral with `isDeprecated`, by the decisions in force when they answer.
+The market no longer offers such a collateral, so token discovery does not
+show it there. Every other market that takes the token decides it by its own
+decisions, and the app decides per market what it offers.
+
+A decision belongs to the collateral of the Comet — a chain id, the Comet's
+address and the token's — and not to a registry version, so it survives
+every activation, as a token policy does; a version that drops the
+collateral from its market and a later one that brings it back bring its
+decision back with it. It is decided only for a collateral of a market of the
+active version, and a collateral nobody has decided about is not deprecated,
+without a row. Every change is written in one D1 transaction with an event
+that records the value it replaced, the value it set, the actor and the
+reason, and the schema enforces that in the database as `0005` does for
+token policies: migration `0006` created it while the feature was called
+legacy collaterals, and `0007` renamed it.
+
+The routes are those of the token policies, for a collateral of a Comet in
+place of a token, under the same limiter budgets: marking a collateral and
+applying a list share the `policy` one, and the reads and the review count as
+reads. One collateral is marked with
+`PATCH …/networks/{chain_id}/markets/{comet}/collaterals/{token}/deprecated`,
+and a list is exported, reviewed without writing anything, and applied in one
+transaction:
+
+```sh
+curl -s "$API/registry/v1/admin/deprecated-collaterals" -H "Authorization: Bearer $TOKEN" > deprecated-collaterals.json
+# edit deprecated-collaterals.json: "isDeprecated": true on the deprecated collaterals, and "reason"
+curl -s -X POST "$API/registry/v1/admin/deprecated-collaterals/review" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' --data @deprecated-collaterals.json > review.json
+jq 'if .error then .error else .summary end' review.json
+# apply the rows the review shows as changes
+jq 'if .error then error("the review failed: \(.error.message)")
+    elif .summary.problems > 0 then error("the review found problems: fix the file and review it again")
+    elif .summary.change == 0 then error("the review shows no change: there is nothing to apply")
+    else {reason: null, collaterals: [.collaterals[] | select(.action == "change") | {chainId, cometAddress, deploymentKey, tokenAddress, symbol, isDeprecated: .requested, reason}]}
+    end' review.json > reviewed.json \
+  && curl -s -X POST "$API/registry/v1/admin/deprecated-collaterals/apply" -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' --data @reviewed.json \
+  | jq 'if .error then .error else .summary end'
+```
+
+Apply compares the list with the decisions in force when it runs, as it does
+for token policies: a decision someone makes after the review is changed like
+any other row the list contradicts, and shows in the answer as a change. That
+is why the snippet applies only the rows the review shows as changes, as the
+runbook does
+([A reviewed list of deprecated collaterals](./REGISTRY_RUNBOOK.md#a-reviewed-list-of-deprecated-collaterals)).
+
+The frontend's list is not seeded by a migration: a migration cannot know
+which version an environment has on, and a decision is only made about a
+collateral of one. It is checked in beside the registry seed, as
+[`registry/seed/production.deprecated-collaterals.json`](./registry/seed/README.md#the-deprecated-collaterals):
+20 collaterals of five Ethereum markets, with every Comet and token address,
+in a list the review and apply routes take as it is. A first bring-up
+reviews it and applies what it changes once its first version is on
+([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#8-mark-the-initial-deprecated-collaterals)),
+and the runbook says where each address comes from
+([The initial list of deprecated collaterals](./REGISTRY_RUNBOOK.md#the-initial-list-of-deprecated-collaterals)).
+
+# Hidden Collaterals
+
+An administrator can hide a collateral of a market from token discovery. A
+hidden collateral stays a collateral of its market: the market still takes
+it, and a user's positions in it and the actions on them are shown as
+before; only discovery leaves it out. To stop offering a collateral in a
+market, an administrator marks it deprecated instead
+([Deprecated Collaterals](#deprecated-collaterals)).
+`/registry/v1/active` and the market reads mark every collateral with
+`isHidden` beside `isDeprecated`, by the decisions in force when they answer.
+No other market's decision hides a collateral in a market: each decides by
+its own. So to keep a token out of discovery on the whole chain, an
+administrator hides it in every market that takes it as collateral, those
+whose status is `deprecated` among them; a market that has it deprecated
+does not show it either.
+
+A decision belongs to the collateral of the Comet — a chain id, the Comet's
+address and the token's — and not to a registry version, as a deprecated
+collateral's does, so it survives every activation and comes back with a
+version that brings the collateral back to its market. It is decided only for
+a collateral of a market of the active version, so a collateral a new version
+adds can be hidden only once that version is on. It names the token the
+version holds, not the one the app shows in its place: WETH, which the app
+shows as ETH at the zero address on seven chains (WPOL and WRON likewise, as
+POL and RON), and wstETH, beside which the app offers stETH on Ethereum. A
+collateral nobody has decided about is not hidden, without a row. Every change
+is written in one D1 transaction with its audit event, and migration `0008`
+enforces that in the database as `0007` does for deprecated collaterals, in
+tables of its own. It only adds them, so the release before it runs on beside
+them; a Worker rolled back to that release ignores the decisions.
+
+The routes are those of the deprecated collaterals, under the same limiter
+budgets: hiding a collateral and applying a list share the `policy` one, and
+the reads and the review count as reads. One collateral is hidden with
+`PATCH …/networks/{chain_id}/markets/{comet}/collaterals/{token}/hidden`, and
+a list is exported, reviewed without writing anything, and applied in one
+transaction, with its rows under `hiddenCollaterals`, so that neither kind's
+review takes the other's file:
+
+```sh
+curl -s "$API/registry/v1/admin/hidden-collaterals" -H "Authorization: Bearer $TOKEN" > hidden-collaterals.json
+# edit hidden-collaterals.json: "isHidden": true on the collaterals to hide, and "reason"
+curl -s -X POST "$API/registry/v1/admin/hidden-collaterals/review" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' --data @hidden-collaterals.json > review.json
+jq 'if .error then .error else .summary end' review.json
+# apply the rows the review shows as changes
+jq 'if .error then error("the review failed: \(.error.message)")
+    elif .summary.problems > 0 then error("the review found problems: fix the file and review it again")
+    elif .summary.change == 0 then error("the review shows no change: there is nothing to apply")
+    else {reason: null, hiddenCollaterals: [.hiddenCollaterals[] | select(.action == "change") | {chainId, cometAddress, deploymentKey, tokenAddress, symbol, isHidden: .requested, reason}]}
+    end' review.json > reviewed.json \
+  && curl -s -X POST "$API/registry/v1/admin/hidden-collaterals/apply" -H "Authorization: Bearer $TOKEN" \
+    -H 'Content-Type: application/json' --data @reviewed.json \
+  | jq 'if .error then .error else .summary end'
+```
+
+The runbook has the steps
+([Hiding a collateral](./REGISTRY_RUNBOOK.md#hiding-a-collateral)). Every
+command records the hidden decisions in force in `kv_registry` once it has
+committed, apart from the deprecated ones, and `/active` and the market reads
+answer with that record while D1 cannot be reached
+([What a request reads](#what-a-request-reads)). Nothing is hidden when an
+environment is brought up: there is no list to seed.
 
 # Testing
 

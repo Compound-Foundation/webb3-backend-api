@@ -35,7 +35,7 @@ t.test('what a handler raised to say something says it, on every route', async t
 
 t.test('a registry that could not be read is a 503 that says nothing of why', async t => {
   const unavailable = new RegistryUnavailable(
-    `the active version could not be read`,
+    `the deprecated collateral decisions could not be read`,
     new Error('D1_ERROR: Network connection lost.'),
   );
   const answer = {
@@ -88,8 +88,8 @@ t.test('a fault that says unavailable is a 500 on a legacy route, and an outage 
 
 /*
  * Nothing active is what D1 said, on every route that asked: the market
- * routes and the registry's active reads. It is one answer, so it is built
- * in one place.
+ * routes, the registry's active reads, and the token policy and deprecated
+ * collateral routes. It is one answer, so it is built in one place.
  */
 t.test('nothing active is one answer, built in one place', async t => {
   const inactive = noActiveVersion();

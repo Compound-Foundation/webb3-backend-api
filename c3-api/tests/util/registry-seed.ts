@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import type { RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
+import type { DeprecatedCollateralListV1, RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
 import { marketKey } from '../../lib/model/comet-registry.js';
 
 /*
@@ -34,6 +34,21 @@ function readSeedComets(): Record<string, string> {
 }
 
 /*
+ * The collaterals the app hid by its own list, which an environment marks
+ * deprecated once its first version is on: the body of
+ * `POST …/deprecated-collaterals/review` and `/apply`, as the file holds it.
+ */
+const DEPRECATED_PATH = './registry/seed/production.deprecated-collaterals.json';
+
+function readSeedDeprecatedText(): string {
+  return readFileSync(DEPRECATED_PATH, 'utf8');
+}
+
+function readSeedDeprecated(): DeprecatedCollateralListV1 {
+  return JSON.parse(readSeedDeprecatedText()) as DeprecatedCollateralListV1;
+}
+
+/*
  * The body cut down to the networks and markets a snapshot holds, in the
  * file's order, and its expectations with them: a key in expectedDigests
  * without its document is refused with 400.
@@ -53,4 +68,4 @@ function bodyFor(snapshot: Pick<RegistrySnapshotV1, 'networks'>, seed: SeedBody 
 }
 
 export type { SeedBody };
-export { bodyFor, readSeed, readSeedComets, readSeedText };
+export { bodyFor, readSeed, readSeedComets, readSeedDeprecated, readSeedDeprecatedText, readSeedText };
