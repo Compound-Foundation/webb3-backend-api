@@ -304,7 +304,6 @@ t.test('a computation takes only a Comet the registry materialized', async t => 
     marketOf<market.MarketSummary>(usdc),
     marketOf<market.MarketDaySummary>(usdc),
     marketOf<market.MarketMinutelySummary>(usdc),
-    marketOf<market.VersionedCollaterals>(usdc),
     marketOf<market.MarketLatestSummary>(usdc),
     marketOf<market.HistoricalMarketDaySummaries>(usdc),
     marketOf<market.MarketRewards>(usdc),
@@ -342,7 +341,7 @@ t.test('a computation takes only a Comet the registry materialized', async t => 
   marketOf<comet.BaseUsdPrice>(constant);
   // @ts-expect-error and through the feed the Comet names for it, at the scale its version states
   marketOf<comet.CometBasePrice>(constant);
-  // @ts-expect-error and every price of a market's collateral is
+  // @ts-expect-error and every collateral of a market is the version's, priced as it says
   marketOf<market.Collaterals>(constant);
   // @ts-expect-error so a market summary prices with its version
   marketOf<market.MarketSummary>(constant);
@@ -350,8 +349,6 @@ t.test('a computation takes only a Comet the registry materialized', async t => 
   marketOf<market.MarketDaySummary>(constant);
   // @ts-expect-error
   marketOf<market.MarketMinutelySummary>(constant);
-  // @ts-expect-error a market's collateral is listed as the version describes it
-  marketOf<market.VersionedCollaterals>(constant);
   // @ts-expect-error and the summary of the latest block reports it so
   marketOf<market.MarketLatestSummary>(constant);
   // @ts-expect-error

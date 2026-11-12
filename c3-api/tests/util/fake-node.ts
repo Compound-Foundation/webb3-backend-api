@@ -13,9 +13,10 @@ import type { RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
  * collateral, its totals are accrued at the latest block, and every other
  * value is 1.0 at eight decimals, a price among them, and so is what an
  * account holds and is owed, in the token the snapshot says the market pays.
- * `script` changes what one read answers — a value, a revert, an error of the
- * node, or a failure of the call — and can hold a request back, for a while
- * or for good.
+ * A block is answered by its number: the latest block as given, and one below
+ * it as many seconds older as it is blocks below it. `script` changes what
+ * one read answers — a value, a revert, an error of the node, or a failure of
+ * the call — or what a block read does.
  *
  * It is the one fake node of the Comet reads, so a read the computations
  * start to make is added here once. A read it does not know fails the test,
@@ -69,9 +70,8 @@ type NodeError = { code: number, message: string, data?: string };
 type NodeScript = {
   // 'revert' and 'fail' stand for the errors of a call that reverts and of one the node could not serve
   answer?: (read: Read) => unknown[] | NodeError | 'revert' | 'fail' | undefined,
-  block?:  () => Block | 'fail',
-  // what a request waits for before it is answered; 'forever' never answers it
-  hold?:   (request: { network: string, calls: Call[] }) => Promise<unknown> | 'forever' | undefined,
+  // what a read of a block answers in place of it: another block, null, as a node answers for a block it does not have, or an error
+  block?:  (reference: number | 'latest') => Block | null | 'fail' | undefined,
 };
 
 type FakeNode = {
@@ -93,9 +93,13 @@ function fakeNode(snapshot: RegistrySnapshotV1, latest: Block, script: NodeScrip
 
   const answer = (network: string, { id, method, params }: Call) => {
     if (method === 'eth_getBlockByNumber') {
-      const block = script.block?.() ?? latest;
+      const reference = params[0] === 'latest' ? 'latest' : Number.parseInt(params[0], 16);
+      const scripted  = script.block?.(reference);
+      const block     = scripted !== undefined ? scripted : reference === 'latest' ? latest : blockAt(latest, reference);
       return block === 'fail'
         ? { jsonrpc: '2.0', id, error: { code: -32000, message: 'header not found' } }
+        : block === null
+        ? { jsonrpc: '2.0', id, result: null }
         : { jsonrpc: '2.0', id, result: { number: `0x${block.number.toString(16)}`, timestamp: `0x${block.timestamp.toString(16)}`, transactions: [] } };
     }
     const [ { to, data }, tag ] = params;
@@ -145,15 +149,15 @@ function fakeNode(snapshot: RegistrySnapshotV1, latest: Block, script: NodeScrip
     const body = await request.json() as Call | Call[];
     const calls = body instanceof Array ? body : [ body ];
     requests.push({ network, calls });
-    const hold = script.hold?.({ network, calls });
-    if (hold === 'forever') {
-      return new Promise<Response>(() => {});
-    }
-    await hold;
     const responses = calls.map(call => answer(network, call));
     return new Response(JSON.stringify(body instanceof Array ? responses : responses[0]));
   };
   return { fetch, requests };
+}
+
+// the block of a number at or below the latest, as the node answers it: a second older for every block below the latest
+function blockAt(latest: Block, number: number): Block {
+  return { number, timestamp: latest.timestamp - (latest.number - number) };
 }
 
 // puts `node` in place of the global fetch for the length of a test
@@ -161,14 +165,13 @@ function serve(t: Test, node: FakeNode): void {
   t.capture(globalThis, 'fetch', node.fetch);
 }
 
-const isBlockRead = (request: { calls: Call[] }) => request.calls[0]!.method === 'eth_getBlockByNumber';
-
-// what a node was asked: its latest-block reads, the batches of everything else, and the contracts it was called on
-const blockReads = (node: FakeNode) => node.requests.filter(isBlockRead);
-const batches    = (node: FakeNode) => node.requests.filter(request => !isBlockRead(request));
-const asked      = (node: FakeNode) => new Set<string>(node.requests.flatMap(request => request.calls
+// what a node was asked: the blocks it read by number, in the order it read them, and the contracts it was called on
+const headerReads = (node: FakeNode) => node.requests.flatMap(request => request.calls
+  .filter(call => call.method === 'eth_getBlockByNumber' && call.params[0] !== 'latest')
+  .map(call => Number.parseInt(call.params[0], 16)));
+const asked       = (node: FakeNode) => new Set<string>(node.requests.flatMap(request => request.calls
   .filter(call => call.method !== 'eth_getBlockByNumber')
   .map(call => call.params[0].to.toLowerCase())));
 
 export type { Block, Call, FakeNode, NodeError, NodeScript, Read };
-export { COMET, asked, batches, blockReads, fakeNode, serve };
+export { COMET, asked, blockAt, fakeNode, headerReads, serve };

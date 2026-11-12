@@ -2,6 +2,7 @@ import type { EvmRpc      } from './evm/rpc.js';
 import type { EthCall     } from './evm/eth-call.js';
 import type { EthGetLogs  } from './evm/eth-get-logs.js';
 import type { EthGetBlock } from './evm/eth-get-block.js';
+import type { EthGetBlockHeader } from './evm/eth-get-block-header.js';
 import type { EthGetTransactionByHash } from './evm/eth-get-transaction-by-hash.js';
 
 export type Evm = (
@@ -9,6 +10,7 @@ export type Evm = (
   | EthCall
   | EthGetLogs
   | EthGetBlock
+  | EthGetBlockHeader
   | EthGetTransactionByHash
 );
 
@@ -16,6 +18,10 @@ export { EvmRpc,      evmRpc      } from './evm/rpc.js';
 export { EthCall,     ethCall     } from './evm/eth-call.js';
 export { EthGetLogs,  ethGetLogs  } from './evm/eth-get-logs.js';
 export { EthGetBlock, ethGetBlock } from './evm/eth-get-block.js';
+export {
+  EthGetBlockHeader,
+  ethGetBlockHeader,
+} from './evm/eth-get-block-header.js';
 export {
   EthGetTransactionByHash,
   ethGetTransactionByHash,
@@ -47,6 +53,8 @@ export function applyIndexBias(
       ...computations.ethGetBlock,
       index: composeIndex(index.index ?? computations.ethGetBlock.index),
     },
+    // ethGetBlockHeader ignores it too: the read itself is never cached (eth-get-block-header.ts)
+    ethGetBlockHeader: computations.ethGetBlockHeader,
     // ethCall, ethGetLogs, ethGetTransactionByHash all succumb to bias
     ethCall:     { ...computations.ethCall,     ...index },
     ethGetLogs:  { ...computations.ethGetLogs,  ...index },

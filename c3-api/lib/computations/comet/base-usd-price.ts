@@ -24,7 +24,8 @@ type BaseUsdPrice = Compute.Spec<{
 
 /*
  * Whether what a market quotes is converted to USD. It is the one rule of
- * every reader of a quote — the base asset's USD price and a rewards APR — so
+ * every reader of a quote — the base asset's USD price, the totals in USD of
+ * a summary and the value of each of its collaterals, and a rewards APR — so
  * they cannot disagree about a market. There is no default, so a quote added
  * to PRICE_QUOTES does not compile until it is decided here.
  */

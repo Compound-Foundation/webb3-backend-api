@@ -31,6 +31,17 @@ const EXCEPTION_KINDS = [ 'zero_price', 'fixed_price', 'deprecated_price_remap' 
 
 const ACTIVATION_ACTIONS = [ 'activate', 'rollback' ] as const;
 
+/*
+ * What /summary says of the value of a collateral in its market, and why
+ * discovery shows its token there or not. `exception` is a value a price
+ * exception of the registry priced, and `unavailable` one that could not be
+ * read. `hidden` is a token the market's Comet hides, and `deprecated` one it
+ * has deprecated and does not hide: discovery shows neither, whatever else
+ * holds.
+ */
+const COLLATERAL_VALUE_STATUSES = [ 'fresh', 'exception', 'unavailable' ] as const;
+const VISIBILITY_REASONS        = [ 'hidden', 'deprecated', 'strategic', 'collateral_threshold', 'below_threshold', 'data_unavailable' ] as const;
+
 type ContractRole  = (typeof CONTRACT_ROLES)[number];
 
 /*
@@ -398,8 +409,9 @@ type TokenPolicyEventV1 = {
  * Every token of one network of the active version, with the decision in
  * force for each, and the decisions kept for tokens of the chain the active
  * version does not hold: each applies again if a version brings its token
- * back. `inActiveVersion` is false for a chain the active version does not
- * hold at all, which has no tokens to list but may still have decisions kept.
+ * back and serves a market that names it. `inActiveVersion` is false for a
+ * chain the active version does not hold at all, which has no tokens to list
+ * but may still have decisions kept.
  */
 type TokenPoliciesV1 = {
   registryVersion: VersionRefV1,
@@ -412,7 +424,8 @@ type TokenPoliciesV1 = {
 /*
  * One token's decision, and the changes that led to it, newest committed
  * first. `inActiveVersion` is false for a decision kept while the active
- * version does not hold the token, which applies again once one does.
+ * version does not hold the token, which applies again once one does and
+ * serves a market that names it.
  */
 type TokenPolicyDetailV1 = TokenPolicyV1 & {
   registryVersion: VersionRefV1,
@@ -640,6 +653,24 @@ type HiddenCollateralListV1     = CollateralDecisionListV1<'isHidden', 'hiddenCo
 type HiddenCollateralReviewV1   = CollateralDecisionReviewV1<'hiddenCollaterals'>;
 type HiddenCollateralApplyV1    = CollateralDecisionApplyV1<'isHidden', 'hiddenCollaterals'>;
 
+type CollateralValueStatusV1 = (typeof COLLATERAL_VALUE_STATUSES)[number];
+type VisibilityReasonV1      = (typeof VISIBILITY_REASONS)[number];
+
+type NotShownV1 = 'hidden' | 'deprecated' | 'below_threshold';
+
+/*
+ * Whether discovery shows a token follows from its reason, so a client given
+ * both may read either. /summary can say the first without the second, where
+ * the decisions it read settle only that (summary-tokens.ts).
+ */
+type VisibilityV1 = (
+  | { isVisible: true,  visibilityReason: Exclude<VisibilityReasonV1, NotShownV1> }
+  | { isVisible: false, visibilityReason: Extract<VisibilityReasonV1, NotShownV1> }
+);
+
+// a block a value was read at: its number, and its timestamp in seconds
+type BlockRefV1 = { number: number, timestamp: number };
+
 /*
  * What a Comet contract carries when it was materialized from the registry:
  * the version that described it, the market as that version describes it, and
@@ -688,6 +719,8 @@ export type {
   AssetDisplayOverrideV1,
   AssetRole,
   BaseAssetV1,
+  BlockRefV1,
+  CollateralValueStatusV1,
   CollateralAssetV1,
   CollateralDecisionApplyV1,
   CollateralDecisionDetailV1,
@@ -749,6 +782,8 @@ export type {
   ValidationCheckV1,
   ValidationSummaryV1,
   VersionRefV1,
+  VisibilityReasonV1,
+  VisibilityV1,
 };
 
 export {

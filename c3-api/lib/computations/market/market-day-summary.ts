@@ -30,8 +30,9 @@ const { implement, pipe1 } = Compute.Functor<MarketDaySummary>({});
  * summary at that block the same way.
  */
 const marketDaySummary = implement({
-  // 9: an empty market's APRs come from its Comet's rate model (#23)
-  version: 9,
+  // 10: an empty market's APRs come from its Comet's rate model (#23).
+  // 9 is taken by values of another shape.
+  version: 10,
   index: Index.DailyBlockIndex,
   /*
    * Key the computation by the materialized `date' of the block,

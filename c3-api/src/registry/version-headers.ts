@@ -17,13 +17,18 @@ type VersionRef = {
   checksum: string,
 };
 
+// for an answer whose version the legacy router names itself (summary-tokens.ts)
+function staleHeaders(staleFor: number | null): Record<string, string> {
+  return staleFor === null ? {} : { 'X-Registry-Stale': String(staleFor), 'Cache-Control': 'no-store' };
+}
+
 function registryHeaders({ id, checksum }: VersionRef, staleFor: number | null = null): Record<string, string> {
   return {
     'X-Registry-Version':  id,
     'X-Registry-Checksum': checksum,
-    ...(staleFor === null ? {} : { 'X-Registry-Stale': String(staleFor), 'Cache-Control': 'no-store' }),
+    ...staleHeaders(staleFor),
   };
 }
 
 export type { VersionRef };
-export { registryHeaders };
+export { registryHeaders, staleHeaders };

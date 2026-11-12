@@ -54,7 +54,7 @@ testDebug.log({ flags });
  * what it read on the way (the cache seed). Both live in R2, outside the
  * repository, in one place every branch shares, while the result changes
  * with the computation: since version 6 a day summary reports the status of
- * its price reads.
+ * its price reads, and since version 7 it carries its totals in USD too.
  *
  * So they are named by the SHA-256 of the expectation, which this test pins,
  * as the all-networks historical summary pins its own. Regenerating them

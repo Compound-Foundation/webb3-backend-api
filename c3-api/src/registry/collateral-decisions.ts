@@ -77,7 +77,8 @@ type CollateralMarks = { deprecated: DecisionSet<CollateralOfComet>, hidden: Dec
  * Both kinds' decisions, for the active reads, which mark every collateral
  * with each: read side by side, each kind by a statement of its own, and said
  * to come from a record where either kind's did. A kind that could not be
- * read fails the read, the deprecated kind first.
+ * read fails the read, the deprecated kind first. /summary, which answers
+ * without a kind it could not read, reads each kind apart.
  */
 async function readMarks(deps: CacheDeps): Promise<{ marks: CollateralMarks, recorded: boolean }> {
   const [ deprecated, hidden ] = await Promise.allSettled([ markedDecisions(DEPRECATED_RECORD, deps), markedDecisions(HIDDEN_RECORD, deps) ]);
