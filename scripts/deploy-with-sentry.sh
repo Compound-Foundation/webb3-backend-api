@@ -8,9 +8,13 @@
 #
 # The first argument is the Sentry project; the rest go to `wrangler deploy`.
 #
-# Requires SENTRY_AUTH_TOKEN: a Sentry organization auth token, created under
-# Settings > Developer Settings > Organization Tokens. Never commit it.
+# Uploading needs a Sentry organization auth token. The script uses
+# SENTRY_AUTH_TOKEN when it is set (for example in CI). Otherwise it reads the
+# token from 1Password with the `op` CLI, from SENTRY_AUTH_TOKEN_OP_REF or the
+# default reference below. Never commit the token.
 set -euo pipefail
+
+DEFAULT_TOKEN_REF="op://Engineering/sentry-deployments-auth-token/credential"
 
 if [[ $# -lt 1 ]]; then
   echo "usage: $0 <sentry-project> [wrangler deploy args...]" >&2
@@ -19,9 +23,20 @@ fi
 sentry_project="$1"
 shift
 
+# Read the token before deploying, so a missing token stops the deploy.
 if [[ -z "${SENTRY_AUTH_TOKEN:-}" ]]; then
-  echo "SENTRY_AUTH_TOKEN is not set. It is needed to upload source maps to Sentry." >&2
-  exit 1
+  token_ref="${SENTRY_AUTH_TOKEN_OP_REF:-$DEFAULT_TOKEN_REF}"
+  if ! command -v op >/dev/null 2>&1; then
+    echo "SENTRY_AUTH_TOKEN is not set and the 1Password CLI (op) is not installed." >&2
+    echo "Install it (https://developer.1password.com/docs/cli/get-started/) or set SENTRY_AUTH_TOKEN." >&2
+    exit 1
+  fi
+  if ! SENTRY_AUTH_TOKEN="$(op read --no-newline "$token_ref")" || [[ -z "$SENTRY_AUTH_TOKEN" ]]; then
+    echo "Could not read the Sentry auth token from 1Password ($token_ref)." >&2
+    echo "Sign in with 'op signin' (or unlock the 1Password app), or set SENTRY_AUTH_TOKEN." >&2
+    exit 1
+  fi
+  export SENTRY_AUTH_TOKEN
 fi
 
 export SENTRY_ORG="compound-foundation"
