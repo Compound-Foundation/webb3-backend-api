@@ -3,6 +3,7 @@ import * as Json     from '../json-types.js';
 import * as Quota    from '../quota.js';
 import * as Fallible from '../fallible/fallible.js';
 import { keccak256 } from '../hash.js';
+import { throttleBy } from '../throttle.js';
 
 interface Cache {
   debug: Debug.Logger;
@@ -80,7 +81,7 @@ function kvKeyOf(key: string): string {
 }
 
 /*
- * When this isolate last logged a call KV refused, by namespace and kind.
+ * When this isolate logs a call KV refused, by namespace and kind.
  *
  * A refusal is a warning: the request is answered without the cache. It is
  * logged once a minute rather than once a call, since a KV that does not
@@ -89,9 +90,7 @@ function kvKeyOf(key: string): string {
  */
 type Refusal = 'unreadable' | 'unwritable';
 
-const reportedRefusals = new WeakMap<KVNamespace, { [_ in Refusal]?: number }>();
-
-const REPORT_REFUSAL_EVERY_MS = 60_000;
+const refusalDue = throttleBy<KVNamespace>(60_000);
 
 /*
  * Workers KV Cache
@@ -175,13 +174,9 @@ class WorkersKvCache implements Cache {
   }
 
   private refused(kind: Refusal, key: string, error: unknown): void {
-    const at       = Date.now();
-    const reported = reportedRefusals.get(this.store) ?? {};
-    const last     = reported[kind];
-    if (last !== undefined && at - last < REPORT_REFUSAL_EVERY_MS) {
+    if (!refusalDue(this.store, kind)) {
       return;
     }
-    reportedRefusals.set(this.store, { ...reported, [kind]: at });
     const message = error instanceof Error ? error.message : String(error);
     this.log.warn(`computation cache ${kind}: ${message}: ${key}`);
   }

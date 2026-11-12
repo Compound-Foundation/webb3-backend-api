@@ -2,20 +2,19 @@ import t from 'tap';
 
 import { randomUUID } from 'node:crypto';
 
-import { createTestHarness } from 'wrangler';
-
 import type { Env } from '../../../entrypoint.js';
 import type { Address } from '../../../lib/model/comet-registry.js';
-import { sha256Hex } from '../../../src/http/bearer-auth.js';
-import { activeSnapshot, cacheDepsOf } from '../../../src/registry/cache.js';
+import { POINTER_KEY, activeSnapshot, cacheDepsOf } from '../../../src/registry/cache.js';
 import { CHECK_KEY, checkChain } from '../../../src/registry/drift.js';
 import { FAILURE_KEY } from '../../../src/registry/notifications.js';
-import { activateVersion, markInvalid, recordValidationResults } from '../../../src/registry/repository.js';
+import { activateVersion } from '../../../src/registry/repository.js';
 
-import { applyMigrations } from '../../util/d1.js';
 import { FakeChain, fakeChain } from '../../util/fake-chain.js';
+import { quietLog } from '../../util/quiet-log.js';
 import { activateSeeded, approveSeeded, loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
-import { registryWorker } from '../../util/registry-worker.js';
+import { registryHarness } from '../../util/registry-harness.js';
+import { markInvalid, recordValidationResults } from '../../util/registry-repository.js';
+import { ADMIN_TOKEN } from '../../util/test-env.js';
 
 /*
  * The status route: one answer a monitor polls and an operator reads.
@@ -24,27 +23,7 @@ import { registryWorker } from '../../util/registry-worker.js';
  * and each condition worth waking someone for names itself, so a check can be
  * "alerts is empty" without the monitor knowing the registry's rules.
  */
-const ADMIN_TOKEN = 'registry-admin-token-for-tests';
-const SECRETS     = {
-  COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([ { name: 'test-admin', sha256: await sha256Hex(ADMIN_TOKEN), role: 'admin', notAfter: null } ]),
-};
-
-const server = createTestHarness({ workers: [ registryWorker(SECRETS) ] });
-
-// the worker again, with `vars` set over the ones wrangler.toml gives it, until the next freshDatabase
-async function withVars(vars: Record<string, string>): Promise<void> {
-  await server.update({ workers: [ { ...registryWorker(SECRETS), vars } ] });
-}
-
-// the worker again, with secrets set beside its token list, until the next freshDatabase
-async function withSecrets(secrets: Record<string, string>): Promise<void> {
-  await server.update({ workers: [ registryWorker({ ...SECRETS, ...secrets }) ] });
-}
-
-t.before(async () => {
-  await server.listen();
-});
-t.teardown(() => server.close());
+const { server, freshDatabase, withVars, withSecrets } = await registryHarness({ admin: true });
 
 const snapshot = loadRegistrySnapshotFixture();
 const auth     = { 'Authorization': `Bearer ${ADMIN_TOKEN}` };
@@ -77,17 +56,19 @@ type Status = {
   alerts: string[],
 };
 
-async function freshDatabase(): Promise<D1Database> {
-  await server.reset();
-  const { APP_DB } = await server.getWorker<Env>().getEnv();
-  await applyMigrations(APP_DB);
-  return APP_DB;
-}
-
 async function status(): Promise<Status> {
   const response = await server.fetch('/registry/v1/admin/status', { headers: auth });
   t.equal(response.status, 200);
   return await response.json() as Status;
+}
+
+// waits for the pointer record a read writes past its answer, through waitUntil, for two seconds at most
+async function pointerRecorded(): Promise<void> {
+  const { kv_registry } = await server.getWorker<Env>().getEnv();
+  const deadline = Date.now() + 2000;
+  while (await kv_registry.get(POINTER_KEY) === null && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
 }
 
 const COMMIT = 'a34d9b571c833b5d77f052ab8e2dbdbe10df726d';
@@ -137,6 +118,7 @@ t.test('a healthy registry raises nothing', async t => {
 
   // the worker caches what it serves, which is what the status then reports
   t.equal((await server.fetch('/registry/v1/active')).status, 200);
+  await pointerRecorded();
 
   const healthy = await status();
   t.equal(healthy.active?.versionId, versionId);
@@ -619,10 +601,11 @@ t.test('a version the chain has drifted from is raised, until the version on agr
     const at = new Date(month + ++days * 86_400_000);
     return checkChain({
       kv:              env.kv_registry,
-      active:          () => activeSnapshot(cacheDepsOf(env)),
+      active:          () => activeSnapshot(cacheDepsOf(env, quietLog)),
       transportFor:    chain.transportFor,
       intervalSeconds: 86_400,
       now:             () => at,
+      debug:           quietLog,
     });
   };
   // switches a version on, and serves it once, as the first request after the switch would

@@ -2,16 +2,12 @@ import t from 'tap';
 
 import { randomUUID } from 'node:crypto';
 
-import { createTestHarness } from 'wrangler';
-
 import type { Env } from '../../../entrypoint.js';
 import type { ActivationResultV1, ApprovalV1 } from '../../../lib/model/comet-registry.js';
-import { sha256Hex } from '../../../src/http/bearer-auth.js';
 import { registryConfig } from '../../../src/registry/config.js';
 
-import { applyMigrations } from '../../util/d1.js';
 import { loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
-import { registryWorker } from '../../util/registry-worker.js';
+import { registryHarness } from '../../util/registry-harness.js';
 
 /*
  * Two people switch a version on: an admin approves it, and an admin of
@@ -26,32 +22,15 @@ const BOB   = 'registry-bob-token-for-tests';
 const CAROL_OLD = 'registry-carol-old-token-for-tests';
 const CAROL_NEW = 'registry-carol-new-token-for-tests';
 
-const admin = async (name: string, token: string) => ({ name, sha256: await sha256Hex(token), role: 'admin', notAfter: null });
-
-const server = createTestHarness({
-  workers: [ registryWorker({
-    COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([
-      await admin('alice', ALICE),
-      await admin('bob', BOB),
-      await admin('carol', CAROL_OLD),
-      await admin('carol', CAROL_NEW),
-    ]),
-  }) ],
-});
-
-t.before(async () => {
-  await server.listen();
-});
-t.teardown(() => server.close());
+// the worker lists these admins' tokens alone
+const { server, freshDatabase } = await registryHarness({ tokens: [
+  { name: 'alice', token: ALICE,     role: 'admin' },
+  { name: 'bob',   token: BOB,       role: 'admin' },
+  { name: 'carol', token: CAROL_OLD, role: 'admin' },
+  { name: 'carol', token: CAROL_NEW, role: 'admin' },
+] });
 
 const snapshot = loadRegistrySnapshotFixture();
-
-async function freshDatabase(): Promise<D1Database> {
-  await server.reset();
-  const { APP_DB } = await server.getWorker<Env>().getEnv();
-  await applyMigrations(APP_DB);
-  return APP_DB;
-}
 
 /*
  * Validated versions, each a later attempt than the one before: the order a

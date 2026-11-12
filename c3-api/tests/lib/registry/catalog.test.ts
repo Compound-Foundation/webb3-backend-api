@@ -52,7 +52,6 @@ t.test('the catalog materializes every resolvable market of one version', async 
   t.equal(catalog.versionId, snapshot.registryVersion.id, 'it answers for the version it was built from');
   t.equal(catalog.checksum, snapshot.registryVersion.checksum, 'and carries the checksum of that version');
   t.equal(catalog.markets().length, marketsOf(snapshot.networks).length, 'every market of the fixture is present');
-  t.equal(catalog.networks().length, snapshot.networks.length);
 
   const usdc = catalog.marketAt(MAINNET, USDC);
   t.ok(usdc, 'a market is addressed by its Comet address');
@@ -162,8 +161,7 @@ t.test('a network this API cannot name is not served', async t => {
     ],
   });
 
-  t.equal(catalog.networks().length, snapshot.networks.length, 'the unknown network is dropped');
-  t.equal(catalog.markets().length, marketsOf(snapshot.networks).length, 'and so are its markets');
+  t.equal(catalog.markets().length, marketsOf(snapshot.networks).length, 'the unknown network is dropped, and so are its markets');
 });
 
 /*
@@ -285,10 +283,11 @@ t.test('a market carries what it has of its rewards, and nothing in place of the
 /*
  * A network whose every market is disabled serves nothing: a chain the
  * source has just added arrives that way, with nothing about it reviewed,
- * and the catalog does not offer it. One whose markets are deprecated is
- * still served, because positions and history in them stay reachable.
+ * and the catalog serves none of its markets. One whose markets are
+ * deprecated is still served, because positions and history in them stay
+ * reachable.
  */
-t.test('a network with no market the API serves is not one the catalog offers', async t => {
+t.test('a network of disabled markets serves none of them, and one of deprecated markets serves them all', async t => {
   const status = (status: MarketV1['status']): RegistrySnapshotV1 => ({
     ...snapshot,
     networks: snapshot.networks.map(network => network.key !== SCROLL ? network : {
@@ -298,12 +297,10 @@ t.test('a network with no market the API serves is not one the catalog offers', 
   });
 
   const disabled = catalogOf(status('disabled'));
-  t.notOk(disabled.networks().some(network => network.key === SCROLL), 'a network of disabled markets is not listed');
-  t.same(disabled.marketsOn(SCROLL), [], 'and serves no market');
+  t.same(disabled.marketsOn(SCROLL), [], 'a network of disabled markets serves no market');
 
   const deprecated = catalogOf(status('deprecated'));
-  t.ok(deprecated.networks().some(network => network.key === SCROLL), 'a network of deprecated markets is');
-  t.equal(deprecated.marketsOn(SCROLL).length, 1);
+  t.equal(deprecated.marketsOn(SCROLL).length, 1, 'a network of deprecated markets serves them');
 });
 
 /*

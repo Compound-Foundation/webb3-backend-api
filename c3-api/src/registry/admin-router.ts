@@ -1,15 +1,16 @@
 import type { Env } from '../../entrypoint.js';
 
-import { SyncOutcome, parseMarketKey } from '../../lib/model/comet-registry.js';
+import { parseMarketKey } from '../../lib/model/comet-registry.js';
 
 import { allows, authenticateAdmin, refuseRole } from '../http/bearer-auth.js';
 import { clientOf } from '../http/client-address.js';
 import { ApiError, methodNotAllowed } from '../http/errors.js';
 import { MAX_BODY_BYTES, jsonResponse, readJsonObject } from '../http/json.js';
 
-import { cacheDepsOf } from './cache.js';
+import { cacheDepsOf, isUnreachable } from './cache.js';
 import { registryConfig } from './config.js';
 import { readCreationBlocks, readFeeds } from './enrichment.js';
+import { isRegistryError, isTransportFailure } from './errors.js';
 import { registryStatus } from './status.js';
 import {
   CreationReader,
@@ -36,6 +37,7 @@ import {
 } from './handlers.js';
 import { isExplicit } from './importer.js';
 import type { InvocationResult } from './importer.js';
+import type { SyncOutcome } from './rows.js';
 import { runRegistrySync, transportFor } from './scheduled.js';
 
 /*
@@ -126,16 +128,35 @@ const MAX_OVERLAYS_PER_REQUEST = 100;
 const MAX_OVERLAYS_BODY_BYTES  = 512 * 1024;
 
 /*
+ * A value as a reason, trimmed, or what keeps it from being one. Every
+ * command is held to this one rule, so they all take the same reasons.
+ */
+function reasonOf(value: unknown): { reason: string } | { problem: 'malformed' | 'nul' } {
+  if (typeof(value) !== 'string' || value.trim().length === 0 || value.length > MAX_REASON) {
+    return { problem: 'malformed' };
+  }
+  /*
+   * SQLite's text functions stop at a NUL, so the audit tables' checks would
+   * read a reason that starts with one as empty and refuse it with a database
+   * error, and one that only contains one would be stored cut short.
+   */
+  return value.includes('\u0000') ? { problem: 'nul' } : { reason: value.trim() };
+}
+
+/*
  * A reason is required wherever an operator changes what the registry serves,
  * because the audit row that records the change is only as useful as the
  * reason stored with it.
  */
 function requireReason(body: Record<string, unknown>): string {
-  const reason = body.reason;
-  if (typeof(reason) !== 'string' || reason.trim().length === 0 || reason.length > MAX_REASON) {
-    throw new ApiError('BAD_REQUEST', `a non-empty reason of at most ${MAX_REASON} characters is required`);
+  const checked = reasonOf(body.reason);
+  if ('problem' in checked) {
+    throw new ApiError('BAD_REQUEST', {
+      malformed: `a non-empty reason of at most ${MAX_REASON} characters is required`,
+      nul:       `a reason cannot contain a NUL character`,
+    }[checked.problem]);
   }
-  return reason.trim();
+  return checked.reason;
 }
 
 function requireExactKeys(body: Record<string, unknown>, allowed: string[]): void {
@@ -249,28 +270,16 @@ async function limit(env: Env, fingerprint: string, family: string): Promise<voi
   }
 }
 
-type SyncFailure = Extract<InvocationResult, { kind: 'invalid' | 'failed' }>;
-
 /*
- * The error an administrative sync answers with when the invocation failed.
- *
- * A registry error is answered as the routes answer it everywhere: a request
- * the registry has to refuse, such as a commit the tracked ref cannot reach,
- * is the client's to fix. A candidate that failed its checks would fail the
- * same way again, so it is refused with the ids to inspect it by rather than
- * offered as something to retry. A database or a source that did not answer
- * is a 503; a fault never reaches here — it is raised, and answered 500.
+ * The error an administrative sync answers with when its candidate failed its
+ * checks. It would fail the same way again, so it is refused with the ids to
+ * inspect it by rather than offered as something to retry.
  */
-function syncFailure(result: SyncFailure): Error {
-  switch (result.kind) {
-    case 'invalid':
-      return new ApiError('UNPROCESSABLE', result.reason, {
-        syncRunId:         result.runId,
-        registryVersionId: result.versionId,
-      });
-    case 'failed':
-      return result.error ?? new ApiError('UPSTREAM_UNAVAILABLE', result.reason);
-  }
+function syncFailure(result: Extract<InvocationResult, { kind: 'invalid' }>): ApiError {
+  return new ApiError('UNPROCESSABLE', result.reason, {
+    syncRunId:         result.runId,
+    registryVersionId: result.versionId,
+  });
 }
 
 /*
@@ -279,7 +288,7 @@ function syncFailure(result: SyncFailure): Error {
  * candidate completed its import as one that validated did, and says that it
  * is held, and how many of its checks failed.
  */
-function syncAnswer(result: Exclude<InvocationResult, SyncFailure>): {
+function syncAnswer(result: Exclude<InvocationResult, { kind: 'invalid' }>): {
   status:        'idle' | 'running' | 'completed',
   outcome:       SyncOutcome | null,
   heldForReview: boolean,
@@ -357,9 +366,22 @@ async function postSync(
     env,
     isExplicit(request) ? { ...request, reason: requireReason(body) } : request,
     { requestId },
-  );
+  ).catch((error: unknown) => {
+    /*
+     * A registry error is answered as the routes answer it everywhere: a
+     * request the registry has to refuse, such as a commit the tracked ref
+     * cannot reach, is the client's to fix. A database or a source that did
+     * not answer, with no registry error to say so, is worth trying again
+     * whatever it said: a 503, whose cause the line runRegistrySync logged
+     * names. A fault is raised as it is, and answered 500.
+     */
+    if (!isRegistryError(error) && (isTransportFailure(error) || isUnreachable(error))) {
+      throw new ApiError('UPSTREAM_UNAVAILABLE', `the import was interrupted by a service that did not answer`);
+    }
+    throw error;
+  });
 
-  if (result.kind === 'invalid' || result.kind === 'failed') {
+  if (result.kind === 'invalid') {
     throw syncFailure(result);
   }
   const { status, outcome, heldForReview, checksFailed } = syncAnswer(result);
@@ -579,4 +601,4 @@ async function routeAdmin(
   }
 }
 
-export { ROUTES, overlayDocuments, routeAdmin, syncAnswer, syncFailure };
+export { ROUTES, overlayDocuments, routeAdmin, syncAnswer };

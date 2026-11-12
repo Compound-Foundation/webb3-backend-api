@@ -1,29 +1,50 @@
-import t from 'tap';
+import t, { Test } from 'tap';
 
 import { randomUUID } from 'node:crypto';
 
 import C3Api, { type Env } from '../../../entrypoint.js';
-import { sha256Hex } from '../../../src/http/bearer-auth.js';
-import { ApiError } from '../../../src/http/errors.js';
-import { syncAnswer, syncFailure } from '../../../src/registry/admin-router.js';
+import { syncAnswer } from '../../../src/registry/admin-router.js';
 import { CHECK_KEY } from '../../../src/registry/drift.js';
 import { RegistryError } from '../../../src/registry/errors.js';
 import { ERROR_STATUS, asApiError } from '../../../src/registry/router.js';
 import { runRegistrySync } from '../../../src/registry/scheduled.js';
+import { MAX_ITEM_ATTEMPTS } from '../../../src/registry/sync.js';
 
+import { consoleLines } from '../../util/console.js';
+import { fakeSource } from '../../util/fake-source.js';
+import type { FakeSource } from '../../util/fake-source.js';
 import { MemoryKv } from '../../util/kv.js';
 import { activeRegistryDatabase } from '../../util/registry-database.js';
-import { makeTestEnv } from '../../util/test-env.js';
+import { ADMIN_TOKEN, adminTestEnv, failingDatabase, makeTestEnv, tokenList } from '../../util/test-env.js';
 
 import '../../../shim/node-self.js';
+
+// olga's, an operator's, which may ask for an import
+const OPERATOR_TOKEN = 'registry-operator-token-for-tests';
+
+// an administrative sync, through the worker
+function adminSync(env: Env, body: unknown = {}, token: string = ADMIN_TOKEN): Promise<Response> {
+  return C3Api.fetch(new Request('https://api.test.local/registry/v1/admin/sync', {
+    method:  'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body:    JSON.stringify(body),
+  }), env);
+}
+
+type Failure = { error: { code: string, message: string, details?: unknown } };
 
 /*
  * What an administrative sync answers when the invocation failed. A script
  * retries a 503, so only a failure worth retrying may be one: a request the
  * registry refuses, a source that answered with something it cannot use, or
  * a candidate that failed its checks, fails the same way every time.
+ *
+ * Here the database raises each registry error at the import's first read:
+ * the answer depends on the code alone, whatever raised it.
  */
 t.test('a registry error is answered by its code, and only a carrier that did not answer is a 503', async t => {
+  captureErrors(t);
+  captureWarnings(t);
   for (const [ code, status ] of [
     [ 'SOURCE_COMMIT_UNREACHABLE', 422 ],
     [ 'SOURCE_TREE_TRUNCATED',     422 ],
@@ -35,10 +56,10 @@ t.test('a registry error is answered by its code, and only a carrier that did no
     [ 'SOURCE_REQUEST_FAILED',     503 ],
     [ 'CHAIN_REQUEST_FAILED',      503 ],
   ] as const) {
-    const error  = new RegistryError(code, 'what the registry says');
-    const answer = asApiError(syncFailure({ kind: 'failed', processed: 0, reason: `${code}: …`, error }));
-    t.equal(answer?.status, status, `${code} is answered ${status}`);
-    t.same(answer?.details, { code }, 'with the registry\'s own code in its details');
+    const response  = await adminSync(await adminTestEnv({ DEBUG: '', APP_DB: failingDatabase(new RegistryError(code, 'what the registry says')) }));
+    const { error } = await response.json() as Failure;
+    t.equal(response.status, status, `${code} is answered ${status}`);
+    t.same(error.details, { code }, 'with the registry\'s own code in its details');
   }
 
   const retried = Object.entries(ERROR_STATUS)
@@ -47,22 +68,59 @@ t.test('a registry error is answered by its code, and only a carrier that did no
   t.same(retried.sort(), [ 'CHAIN_REQUEST_FAILED', 'SOURCE_REQUEST_FAILED' ], 'and no other code is one a script would retry');
 });
 
+/*
+ * GitHub lists two roots and answers for neither, so each request spends an
+ * attempt at both, and the one that spends their last decides the candidate,
+ * which cannot validate without their markets.
+ */
 t.test('a candidate that failed its checks is refused with the ids to inspect it by', async t => {
-  const error = syncFailure({
-    kind: 'invalid', processed: 0, runId: 'run-1', versionId: 'version-1', reason: 'validation failed',
-  }) as ApiError;
+  captureErrors(t);
+  captureWarnings(t);
+  const registry = await activeRegistryDatabase();
+  t.teardown(() => registry.dispose());
+  unreadableRoots(t);
+  const env = await adminTestEnv({ DEBUG: '', APP_DB: registry.db });
 
-  t.ok(error instanceof ApiError);
-  t.equal(error.status, 422, 'not a 503 a script would retry');
-  t.equal(error.message, 'validation failed');
-  t.same(error.details, { syncRunId: 'run-1', registryVersionId: 'version-1' });
+  const first = await adminSync(env);
+  t.equal(first.status, 202, 'the first attempt at both roots fails, and the import has work left');
+  const { syncRunId, registryVersionId } = await first.json() as { syncRunId: string, registryVersionId: string };
+  for (let attempt = 2; attempt < MAX_ITEM_ATTEMPTS; attempt++) {
+    t.equal((await adminSync(env)).status, 202, `and so does attempt ${attempt}`);
+  }
+
+  const last = await adminSync(env);
+  t.equal(last.status, 422, 'the last is refused, not a 503 a script would retry');
+  const { error } = await last.json() as Failure;
+  t.same([ error.code, error.message ], [ 'UNPROCESSABLE', 'validation failed' ], 'saying why');
+  t.same(error.details, { syncRunId, registryVersionId }, 'and naming the run and the candidate to inspect');
 });
 
-t.test('anything else is a service that did not answer', async t => {
-  const error = syncFailure({ kind: 'failed', processed: 0, reason: 'the import was interrupted by a service that did not answer' }) as ApiError;
-
-  t.equal(error.status, 503);
-  t.equal(error.message, 'the import was interrupted by a service that did not answer');
+/*
+ * A database or a source that did not answer, with no registry error to say
+ * so, is worth retrying, whatever it said: one 503 under one message, while
+ * the log line says what failed. D1 restarted under the request says to retry
+ * it, so does a connection it lost, and a Worker out of the subrequests it is
+ * given is the same work, interrupted.
+ */
+t.test('a service that did not answer is a 503, and the log says which', async t => {
+  const errors = captureErrors(t);
+  captureWarnings(t);
+  for (const failure of [
+    'D1_ERROR: D1 DB reset because its code was updated.',
+    'D1_ERROR: Network connection lost.',
+    'Too many subrequests.',
+  ]) {
+    errors.length = 0;
+    const response  = await adminSync(await adminTestEnv({ DEBUG: '', APP_DB: failingDatabase(failure) }));
+    const { error } = await response.json() as Failure;
+    t.equal(response.status, 503, `${failure} is a 503`);
+    t.same(
+      [ error.code, error.message, 'details' in error ],
+      [ 'UPSTREAM_UNAVAILABLE', 'the import was interrupted by a service that did not answer', false ],
+      'whose message is the same whatever failed',
+    );
+    t.ok(errors.includes('registry sync failed') && errors.some(line => line.includes(failure)), 'and the log says what');
+  }
 });
 
 /*
@@ -95,25 +153,36 @@ t.test('a sync is answered by what its invocation did', async t => {
   );
 });
 
-function failingDatabase(message: string): D1Database {
-  const fail = () => { throw new Error(message); };
-  return { prepare: fail, batch: fail, exec: fail, dump: fail } as unknown as D1Database;
+// GitHub as `source` answers it, in place of the global fetch for the length of a test
+function useSource(t: Test, source: FakeSource): void {
+  const fetchBefore = globalThis.fetch;
+  globalThis.fetch = (async (input: Request | string, init?: RequestInit) => (
+    source.fetch(new Request(input, init))
+  )) as unknown as typeof globalThis.fetch;
+  t.teardown(() => { globalThis.fetch = fetchBefore; });
 }
 
-function captureErrors(t: { teardown: (fn: () => void) => void }): string[] {
-  const lines: string[] = [];
-  const error = console.error;
-  console.error = (...parameters: unknown[]) => { lines.push(parameters.map(String).join(' ')); };
-  t.teardown(() => { console.error = error; });
-  return lines;
+/*
+ * GitHub, with the tracked ref naming a commit whose tree lists two roots,
+ * and answering for neither: every attempt at a root fails before a chain is
+ * asked anything.
+ */
+function unreadableRoots(t: Test): void {
+  useSource(t, fakeSource({
+    commit: 'c'.repeat(40),
+    roots:  [ 'usdc', 'weth' ].map((key, index) => ({
+      path: `deployments/mainnet/${key}/roots.json`,
+      sha:  String(index + 1).repeat(40),
+    })),
+  }));
 }
 
-function captureWarnings(t: { teardown: (fn: () => void) => void }): string[] {
-  const lines: string[] = [];
-  const warn = console.warn;
-  console.warn = (...parameters: unknown[]) => { lines.push(parameters.map(String).join(' ')); };
-  t.teardown(() => { console.warn = warn; });
-  return lines;
+function captureErrors(t: Test): string[] {
+  return consoleLines(t, [ 'error' ]);
+}
+
+function captureWarnings(t: Test): string[] {
+  return consoleLines(t, [ 'warn' ]);
 }
 
 /*
@@ -130,25 +199,6 @@ t.test('a fault is raised and logged whole, whatever DEBUG says', async t => {
   t.ok(errors.some(line => line.includes('no such table: sync_runs')), 'with the error itself');
 });
 
-t.test('a database restarted under the request did not answer: 503, not a fault', async t => {
-  captureErrors(t);
-  const env = makeTestEnv({ DEBUG: '', APP_DB: failingDatabase('D1_ERROR: D1 DB reset because its code was updated.') });
-
-  const result = await runRegistrySync(env);
-  t.equal(result.kind, 'failed');
-  t.equal(result.kind === 'failed' && (syncFailure(result) as ApiError).status, 503, 'D1 says to retry it, so a script may');
-});
-
-t.test('a service that did not answer is a failed invocation, logged with what failed', async t => {
-  const errors = captureErrors(t);
-  const env = makeTestEnv({ DEBUG: '', APP_DB: failingDatabase('D1_ERROR: Network connection lost.') });
-
-  const result = await runRegistrySync(env);
-  t.same(result, { kind: 'failed', processed: 0, reason: 'the import was interrupted by a service that did not answer' });
-  t.equal(result.kind === 'failed' && (syncFailure(result) as ApiError).status, 503, 'which a script may retry');
-  t.ok(errors.some(line => line.includes('Network connection lost')), 'and the log says which service it was');
-});
-
 /*
  * A sync a person asked for, refused for what it asked or for what the source
  * answered, is answered with why, and is theirs to act on: the log has it as
@@ -163,18 +213,19 @@ t.test('a refusal a person is answered with is a warning, under the id of the an
   // a configuration the import refuses before it asks anything of anyone
   const env = makeTestEnv({ DEBUG: '', COMET_SYNC_LEASE_SECONDS: 'a while' });
 
-  const asked = await runRegistrySync(env, { requestedBy: 'test-admin' }, { requestId });
-  t.equal(asked.kind === 'failed' && asked.error?.code, 'SOURCE_CONFIGURATION_INVALID', 'the request is refused');
+  await t.rejects(runRegistrySync(env, { requestedBy: 'test-admin' }, { requestId }),
+    { code: 'SOURCE_CONFIGURATION_INVALID' }, 'the request is refused');
   t.ok(warnings.some(line => line.includes('registry sync refused')), 'and the log has it as a warning');
   t.ok(warnings.some(line => line.includes(requestId)), 'under the id of the answer');
   t.same(errors, [], 'and not as an error: nothing failed');
 
-  await runRegistrySync(env);
-  t.ok(errors.some(line => line.includes('registry sync failed')), 'the schedule meeting the same refusal is an error');
+  await t.rejects(runRegistrySync(env), { code: 'SOURCE_CONFIGURATION_INVALID' }, 'the schedule meets the same refusal');
+  t.ok(errors.some(line => line.includes('registry sync failed')), 'which is an error');
 
   errors.length = 0;
   const down = makeTestEnv({ DEBUG: '', APP_DB: failingDatabase('D1_ERROR: Network connection lost.') });
-  await runRegistrySync(down, { requestedBy: 'test-admin' }, { requestId });
+  await t.rejects(runRegistrySync(down, { requestedBy: 'test-admin' }, { requestId }),
+    { message: 'D1_ERROR: Network connection lost.' }, 'a database that did not answer is raised as it was');
   t.ok(errors.some(line => line.includes('registry sync failed')), 'and so is a service that did not answer, whoever asked');
   t.ok(errors.some(line => line.includes(requestId)), 'under the id of the answer');
 });
@@ -197,21 +248,8 @@ t.test('an administrative sync refused while another imports is logged under its
 
   const errors   = captureErrors(t);
   const warnings = captureWarnings(t);
-  const env = makeTestEnv({
-    DEBUG:                            '',
-    MEMORY_CACHE_SEED:                'registry-sync-failure',
-    APP_DB:                           registry.db,
-    COMET_REGISTRY_ADMIN_TOKENS:      JSON.stringify([
-      { name: 'test-admin', sha256: await sha256Hex('registry-admin-token-for-tests'), role: 'admin', notAfter: null },
-    ]),
-    REGISTRY_ADMIN_RATE_LIMITER:      { limit: async () => ({ success: true }) },
-    REGISTRY_ADMIN_AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
-  });
-  const response = await C3Api.fetch(new Request('https://api.test.local/registry/v1/admin/sync', {
-    method:  'POST',
-    headers: { 'Authorization': 'Bearer registry-admin-token-for-tests', 'Content-Type': 'application/json' },
-    body:    '{}',
-  }), env);
+  const env = await adminTestEnv({ DEBUG: '', MEMORY_CACHE_SEED: 'registry-sync-failure', APP_DB: registry.db });
+  const response = await adminSync(env);
 
   t.equal(response.status, 409);
   const { error } = await response.json() as { error: { requestId: string, details: { code: string } } };
@@ -233,42 +271,17 @@ t.test('an administrative sync with work left answers 202, and attempts up to fi
   captureWarnings(t);
   const registry = await activeRegistryDatabase();
   t.teardown(() => registry.dispose());
+  unreadableRoots(t);
 
-  const fetchBefore = globalThis.fetch;
-  globalThis.fetch = (async (input: Request | string, init?: RequestInit) => {
-    const { url } = new Request(input, init);
-    if (url.endsWith('/commits/main')) {
-      return new Response('c'.repeat(40));
-    }
-    if (url.includes('/git/trees/')) {
-      return new Response(JSON.stringify({
-        truncated: false,
-        tree: [ 'usdc', 'weth' ].map((key, index) => ({
-          path: `deployments/mainnet/${key}/roots.json`, type: 'blob', sha: String(index + 1).repeat(40), size: 100,
-        })),
-      }));
-    }
-    throw new TypeError('fetch failed');
-  }) as unknown as typeof globalThis.fetch;
-  t.teardown(() => { globalThis.fetch = fetchBefore; });
-
-  const env = makeTestEnv({
+  const env = await adminTestEnv({
     DEBUG:                             '',
     MEMORY_CACHE_SEED:                 'registry-sync-default',
     APP_DB:                            registry.db,
-    COMET_REGISTRY_ADMIN_TOKENS:       JSON.stringify([
-      { name: 'olga', sha256: await sha256Hex('registry-operator-token-for-tests'), role: 'operator', notAfter: null },
-    ]),
-    REGISTRY_ADMIN_RATE_LIMITER:       { limit: async () => ({ success: true }) },
-    REGISTRY_ADMIN_AUTH_RATE_LIMITER:  { limit: async () => ({ success: true }) },
+    COMET_REGISTRY_ADMIN_TOKENS:       await tokenList([ { name: 'olga', token: OPERATOR_TOKEN, role: 'operator' } ]),
     // the Cron's batch, which an administrative sync does not keep to
     COMET_SYNC_MARKETS_PER_INVOCATION: '1',
   });
-  const sync = (body: unknown) => C3Api.fetch(new Request('https://api.test.local/registry/v1/admin/sync', {
-    method:  'POST',
-    headers: { 'Authorization': 'Bearer registry-operator-token-for-tests', 'Content-Type': 'application/json' },
-    body:    JSON.stringify(body),
-  }), env);
+  const sync = (body: unknown) => adminSync(env, body, OPERATOR_TOKEN);
 
   const one = await sync({ markets: 1 });
   t.equal(one.status, 202, 'an import with work left is accepted, for a later request to continue');
@@ -356,19 +369,10 @@ t.test('a cancel is answered with what it found or did, whatever happens to the 
     },
   }) as D1Database;
 
-  const env = makeTestEnv({
-    DEBUG:                            '',
-    MEMORY_CACHE_SEED:                'registry-sync-cancel',
-    APP_DB:                           db,
-    COMET_REGISTRY_ADMIN_TOKENS:      JSON.stringify([
-      { name: 'test-admin', sha256: await sha256Hex('registry-admin-token-for-tests'), role: 'admin', notAfter: null },
-    ]),
-    REGISTRY_ADMIN_RATE_LIMITER:      { limit: async () => ({ success: true }) },
-    REGISTRY_ADMIN_AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
-  });
+  const env = await adminTestEnv({ DEBUG: '', MEMORY_CACHE_SEED: 'registry-sync-cancel', APP_DB: db });
   const cancel = () => C3Api.fetch(new Request(`https://api.test.local/registry/v1/admin/sync-runs/${runId}/cancel`, {
     method:  'POST',
-    headers: { 'Authorization': 'Bearer registry-admin-token-for-tests', 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json' },
     body:    JSON.stringify({ reason: 'a stored overlay no longer parses' }),
   }), env);
 
@@ -422,8 +426,7 @@ t.test('a Cron whose import failed fails, and is not run again', async t => {
 
   const down = await cron(makeTestEnv({ DEBUG: '', APP_DB: failingDatabase('D1_ERROR: Network connection lost.') }));
   t.equal(down.outcome, 'exception', 'an import a database did not answer fails the Cron');
-  t.match(String(down.error), /registry sync failed: the import was interrupted by a service that did not answer/,
-    'saying why, as the import answers it');
+  t.match(down.error, { message: 'D1_ERROR: Network connection lost.' }, 'on what did not answer, as it was raised');
   t.equal(down.noRetry, true, 'and asks not to be run again');
 
   const fault = await cron(makeTestEnv({ DEBUG: '', APP_DB: failingDatabase('D1_ERROR: no such table: sync_runs: SQLITE_ERROR') }));
@@ -464,10 +467,10 @@ t.test('a Cron that loses the running slot to an administrative sync has nothing
   // GitHub, with an administrative sync starting its run, under its own live lease, while the ref is asked for
   const commit = 'c'.repeat(40);
   let started: string | null = null;
-  const fetchBefore = globalThis.fetch;
-  globalThis.fetch = (async (input: Request | string, init?: RequestInit) => {
-    const { url } = new Request(input, init);
-    if (url.endsWith('/commits/main')) {
+  useSource(t, fakeSource({
+    commit,
+    roots:    [ { path: 'deployments/mainnet/usdc/roots.json', sha: 'd'.repeat(40) } ],
+    onCommit: async () => {
       started = randomUUID();
       await db.prepare(
         `INSERT INTO sync_runs (
@@ -475,17 +478,8 @@ t.test('a Cron that loses the running slot to an administrative sync has nothing
            lease_owner, lease_expires_at, expected_count, started_at
          ) VALUES (?1, ?2, 'main', 'manual', 'test-admin', 'running', ?3, ?4, 1, ?5)`
       ).bind(started, commit, randomUUID(), new Date(Date.now() + 900_000).toISOString(), new Date().toISOString()).run();
-      return new Response(commit);
-    }
-    if (url.includes('/git/trees/')) {
-      return new Response(JSON.stringify({
-        truncated: false,
-        tree: [ { path: 'deployments/mainnet/usdc/roots.json', type: 'blob', sha: 'd'.repeat(40), size: 100 } ],
-      }));
-    }
-    throw new TypeError('fetch failed');
-  }) as unknown as typeof globalThis.fetch;
-  t.teardown(() => { globalThis.fetch = fetchBefore; });
+    },
+  }));
   const env = makeTestEnv({ DEBUG: '', APP_DB: db });
   // the run that won the slot finishes, or is gone, before the next case races for it again
   const another = () => db.prepare(`DELETE FROM sync_runs WHERE id = ?1`).bind(started).run();
@@ -500,7 +494,7 @@ t.test('a Cron that loses the running slot to an administrative sync has nothing
     'its answer names the run that is importing, as one found before discovery does');
 
   await another();
-  const asked = await runRegistrySync(env, { requestedBy: 'test-admin' });
-  t.equal(asked.kind === 'failed' && asked.error?.code, 'SYNC_ALREADY_RUNNING', 'a person who asked is told a sync is running');
-  t.equal(asked.kind === 'failed' && asApiError(syncFailure(asked))?.status, 409, 'with a 409');
+  const asked = await runRegistrySync(env, { requestedBy: 'test-admin' }).catch((error: unknown) => error);
+  t.match(asked, { code: 'SYNC_ALREADY_RUNNING' }, 'a person who asked is told a sync is running');
+  t.equal(asApiError(asked)?.status, 409, 'with a 409');
 });

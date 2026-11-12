@@ -34,10 +34,7 @@ import { describeContractCallForHumans, contractForLocation } from '../../../lib
 import { defaultAbiCoder } from '@ethersproject/abi';
 import { rewardGroups } from '../../../src/account-handlers/rewards.js';
 import type { MarketRouteData } from '../../../src/router.js';
-import {
-  streamEventsOf,
-  streamKeyOf,
-} from '../../../src/transaction-history-handler/transaction-history-items-handler.js';
+import { streamEventsOf, streamKeyOf } from '../../../src/transaction-history-handler/cursor.js';
 
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
 import { fakeNode } from '../../util/fake-node.js';

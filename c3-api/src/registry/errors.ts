@@ -1,3 +1,5 @@
+import { ApiError } from '../http/errors.js';
+
 /*
  * Registry ingestion errors. A code classifies the failure for validation
  * results and sync diagnostics; the message is safe to persist and to return
@@ -105,5 +107,30 @@ function isTransportFailure(error: unknown): boolean {
   return error instanceof Error && INFRASTRUCTURE.test(error.message);
 }
 
+/*
+ * The conflicts an administrative command tells apart. `CONFLICT` says only
+ * that the request no longer fits what is stored; which conflict it met goes
+ * in `details.code`, as a registry error's code does, so a script matches the
+ * code and the message stays free to change.
+ */
+type ConflictCode = (
+  // validating a candidate
+  | 'IMPORT_STILL_RUNNING'
+  | 'CANDIDATE_CHANGED'
+  // writing overlays
+  | 'VERSION_NOT_IMPORTING'
+  | 'OVERLAY_CHANGED'
+  | 'SLUG_TAKEN'
+  | 'DEFAULT_TAKEN'
+  | 'REWARD_FEED_WITHOUT_REWARD'
+  // cancelling a sync run
+  | 'SYNC_RUN_HELD'
+  | 'SYNC_RUN_ENDED'
+);
+
+function conflict(code: ConflictCode, message: string, details: Record<string, unknown> = {}): ApiError {
+  return new ApiError('CONFLICT', message, { code, ...details });
+}
+
 export type { RegistryErrorCode };
-export { RegistryError, isRegistryError, isTransportFailure };
+export { RegistryError, conflict, isRegistryError, isTransportFailure };

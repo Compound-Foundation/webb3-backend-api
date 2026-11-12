@@ -1,5 +1,5 @@
 import type { Env } from '../../entrypoint.js';
-import { sha256Hex } from '../../lib/hash.js';
+import { sha256 } from '../../lib/hash.js';
 
 import { ApiError } from './errors.js';
 
@@ -220,7 +220,7 @@ async function authenticateAdmin(request: Request, settings: AdminSettings, now:
   if (tokens.length === 0) {
     throw new ApiError('FORBIDDEN', `the administrative API is not configured in this environment`);
   }
-  const presented = await sha256Hex(bearerToken(request));
+  const presented = await sha256(bearerToken(request));
   // every entry is compared, a match or not, so the time taken says nothing of which one matched
   let matched: Token | null = null;
   for (const token of tokens) {
@@ -258,4 +258,4 @@ function refuseRole(credential: Credential, required: Role): ApiError {
 }
 
 export type { Credential, Role };
-export { ROLES, allows, authenticateAdmin, refuseRole, sha256Hex };
+export { ROLES, allows, authenticateAdmin, refuseRole };

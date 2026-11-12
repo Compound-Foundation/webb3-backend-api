@@ -489,8 +489,9 @@ npm test dist/tests/lib/computations/market/historical-market-day-summaries.test
 ```
 
 Tests that need real Workers bindings run the worker in workerd with local
-D1, KV, and rate-limit bindings through Wrangler's test harness, applying
-the migrations to fresh storage for every test. They need no Cloudflare
+D1, KV, and rate-limit bindings through Wrangler's test harness
+([`registryHarness`](./tests/util/registry-harness.ts)), applying the
+migrations to fresh storage for every test. They need no Cloudflare
 account or network access:
 
 ```sh
@@ -500,7 +501,10 @@ npm run test:worker
 Node-side tests build their worker environment with
 [`makeTestEnv`](./tests/util/test-env.ts). Its D1 and rate-limit bindings
 throw when used, so code that needs them must be tested through the
-harness.
+harness, or be handed them: a database from
+[`activeRegistryDatabase`](./tests/util/registry-database.ts), and, for
+the administrative routes, the token and limiters of `adminTestEnv`,
+which let every request through.
 
 Every test that needs neither a node provider nor the R2 dumps runs with one
 command, which is what CI runs: the registry suites above, and the unit tests

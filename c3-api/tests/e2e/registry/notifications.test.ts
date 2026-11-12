@@ -3,8 +3,8 @@ import t, { Test } from 'tap';
 import { randomUUID } from 'node:crypto';
 
 import C3Api, { Env } from '../../../entrypoint.js';
+import { sha256 } from '../../../lib/hash.js';
 import type { ActivationResultV1 } from '../../../lib/model/comet-registry.js';
-import { sha256Hex } from '../../../src/http/bearer-auth.js';
 import type { FieldChange, VersionChanges } from '../../../src/registry/changes.js';
 import type { WebhookBody } from '../../../src/registry/notifications.js';
 import type { RegistryStatus } from '../../../src/registry/status.js';
@@ -39,8 +39,8 @@ async function envWith(registry: RegistryDatabase, overrides: Partial<Env> = {})
     ENVIRONMENT:                      'stage',
     APP_DB:                           registry.db,
     COMET_REGISTRY_ADMIN_TOKENS:      JSON.stringify([
-      { name: 'alice', sha256: await sha256Hex(ADMIN_TOKEN), role: 'admin', notAfter: null },
-      { name: 'bob',   sha256: await sha256Hex(APPROVER),    role: 'admin', notAfter: null },
+      { name: 'alice', sha256: await sha256(ADMIN_TOKEN), role: 'admin', notAfter: null },
+      { name: 'bob',   sha256: await sha256(APPROVER),    role: 'admin', notAfter: null },
     ]),
     COMET_REGISTRY_WEBHOOK_URL:       WEBHOOK,
     REGISTRY_ADMIN_RATE_LIMITER:      { limit: async () => ({ success: true }) },

@@ -7,6 +7,7 @@ import { assertImportable, registryConfig, webhookUrlOf } from '../../../src/reg
 import { isRegistryError } from '../../../src/registry/errors.js';
 import { importerDeps } from '../../../src/registry/scheduled.js';
 
+import { quietLog } from '../../util/quiet-log.js';
 import { makeTestEnv } from '../../util/test-env.js';
 
 /*
@@ -135,13 +136,13 @@ t.test('anything else is named, and the default stands in for it', async t => {
 t.test('the cache reads what the importer and the status read', async t => {
   const env = makeTestEnv({ REGISTRY_SNAPSHOT_CACHE_TTL_S: '120', REGISTRY_STALE_FALLBACK_MAX_S: '' });
   t.same(
-    [ cacheDepsOf(env).ttlSeconds, cacheDepsOf(env).staleSeconds ],
+    [ cacheDepsOf(env, quietLog).ttlSeconds, cacheDepsOf(env, quietLog).staleSeconds ],
     [ 120, 3600 ],
     'a blank fallback window keeps the fallback, as a blank import setting keeps its default',
   );
-  t.equal(cacheDepsOf(makeTestEnv({ REGISTRY_STALE_FALLBACK_MAX_S: 'off' })).staleSeconds, 3600,
+  t.equal(cacheDepsOf(makeTestEnv({ REGISTRY_STALE_FALLBACK_MAX_S: 'off' }), quietLog).staleSeconds, 3600,
     'and a window that is no number is answered with the default, as the status says');
-  t.equal(cacheDepsOf(makeTestEnv({ REGISTRY_STALE_FALLBACK_MAX_S: '0' })).staleSeconds, 0,
+  t.equal(cacheDepsOf(makeTestEnv({ REGISTRY_STALE_FALLBACK_MAX_S: '0' }), quietLog).staleSeconds, 0,
     'while zero switches it off');
 });
 
@@ -153,7 +154,7 @@ t.test('the cache reads what the importer and the status read', async t => {
 t.test('the import refuses its own invalid settings, all of them at once', async t => {
   const env = makeTestEnv({ COMET_UPSTREAM_CHECK_INTERVAL_S: '24h', COMET_SYNC_LEASE_SECONDS: '-1' });
   try {
-    importerDeps(env);
+    importerDeps(env, quietLog);
     t.fail('the import starts');
   } catch (error) {
     t.ok(isRegistryError(error) && error.code === 'SOURCE_CONFIGURATION_INVALID', 'the import is refused');
@@ -166,7 +167,7 @@ t.test('the import refuses its own invalid settings, all of them at once', async
 
   t.doesNotThrow(() => assertImportable(configOf({ REGISTRY_STALE_FALLBACK_MAX_S: 'off' })),
     'a setting only reads take is answered with its default, and the import runs');
-  t.same(importerDeps(envOf({ COMET_SYNC_MARKETS_PER_INVOCATION: 7 })).config, {
+  t.same(importerDeps(envOf({ COMET_SYNC_MARKETS_PER_INVOCATION: 7 }), quietLog).config, {
     leaseSeconds:            900,
     marketsPerInvocation:    7,
     upstreamIntervalSeconds: 86400,

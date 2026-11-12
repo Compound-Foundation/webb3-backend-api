@@ -2,16 +2,13 @@ import t from 'tap';
 
 import { randomUUID } from 'node:crypto';
 
-import { createTestHarness } from 'wrangler';
-
-import type { Env } from '../../../entrypoint.js';
-import { sha256Hex } from '../../../src/http/bearer-auth.js';
 import { overlayOfMarket } from '../../../src/registry/overlay.js';
-import { recordValidationResults } from '../../../src/registry/repository.js';
 
-import { applyMigrations } from '../../util/d1.js';
+import { seedValidated } from '../../util/registry-admin.js';
 import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
-import { registryWorker } from '../../util/registry-worker.js';
+import { registryHarness } from '../../util/registry-harness.js';
+import { recordValidationResults } from '../../util/registry-repository.js';
+import { ADMIN_TOKEN } from '../../util/test-env.js';
 
 /*
  * The registry HTTP API, served by the real worker in workerd over local D1.
@@ -22,52 +19,22 @@ import { registryWorker } from '../../util/registry-worker.js';
  * CORS headers the router sets and the security headers the entrypoint adds,
  * authentication, and the error envelope.
  */
-// the token most cases send, test-admin's
-const ADMIN_TOKEN = 'registry-admin-token-for-tests';
-
 // three more tokens of the list, each recorded under its holder's name: two admins and an operator
 const ALICE = 'registry-alice-token-for-tests';
 const BOB   = 'registry-bob-token-for-tests';
 const OLGA  = 'registry-olga-token-for-tests';
 
 /*
- * The worker stores only the hashes of the admin tokens, so the harness is
- * given the hashes as secrets and the tests present the tokens themselves.
+ * The worker lists the tokens of test-admin, which most cases send, and of
+ * test-approver (registryHarness), and these three beside them.
  */
-const server = createTestHarness({
-  workers: [ registryWorker({
-    COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([
-      { name: 'test-admin', sha256: await sha256Hex(ADMIN_TOKEN), role: 'admin',    notAfter: null },
-      { name: 'alice',      sha256: await sha256Hex(ALICE),       role: 'admin',    notAfter: null },
-      { name: 'bob',        sha256: await sha256Hex(BOB),         role: 'admin',    notAfter: null },
-      { name: 'olga',       sha256: await sha256Hex(OLGA),        role: 'operator', notAfter: null },
-    ]),
-  }) ],
-});
-
-t.before(async () => {
-  await server.listen();
-});
-t.teardown(() => server.close());
+const { server, freshDatabase } = await registryHarness({ admin: true, tokens: [
+  { name: 'alice', token: ALICE, role: 'admin' },
+  { name: 'bob',   token: BOB,   role: 'admin' },
+  { name: 'olga',  token: OLGA,  role: 'operator' },
+] });
 
 const snapshot = loadRegistrySnapshotFixture();
-
-async function freshDatabase(): Promise<D1Database> {
-  await server.reset();
-  const { APP_DB } = await server.getWorker<Env>().getEnv();
-  await applyMigrations(APP_DB);
-  return APP_DB;
-}
-
-/*
- * Seeds the fixture as a validated version. Activation goes through the API
- * itself wherever a test is about activation.
- */
-async function seedValidated(db: D1Database, versionId?: string): Promise<string> {
-  const { versionId: id } = await seedCandidate(db, snapshot, versionId === undefined ? {} : { versionId, attempt: 2 });
-  await validateSeeded(db, id);
-  return id;
-}
 
 type AdminRequest = { method: string, headers: Record<string, string>, body: string };
 
@@ -428,7 +395,7 @@ t.test('a retained version can be refetched by id', async t => {
   const db      = await freshDatabase();
   const first   = await seedValidated(db);
   await switchOn(first, 'activate');
-  const second  = await seedValidated(db, randomUUID());
+  const second  = await seedValidated(db, { versionId: randomUUID() });
   await switchOn(second, 'activate the second', first);
 
   const pinned = await server.fetch(`/registry/v1/versions/${first}`);
@@ -492,7 +459,7 @@ t.test('administrative routes are authenticated and closed to browsers', async t
 t.test('activation and rollback are idempotent and audited', async t => {
   const db     = await freshDatabase();
   const first  = await seedValidated(db);
-  const second = await seedValidated(db, randomUUID());
+  const second = await seedValidated(db, { versionId: randomUUID() });
 
   const activated = await switchOn(first, 'first');
   t.equal(activated.status, 200);
@@ -558,8 +525,8 @@ t.test('activation and rollback are idempotent and audited', async t => {
 t.test('a move decided against a version someone has since replaced is refused', async t => {
   const db    = await freshDatabase();
   const first = await seedValidated(db);
-  const second = await seedValidated(db, randomUUID());
-  const third  = await seedValidated(db, randomUUID());
+  const second = await seedValidated(db, { versionId: randomUUID() });
+  const third  = await seedValidated(db, { versionId: randomUUID() });
   // an activation is approved first, by another admin than the one who switches it on
   const move = async (action: string, versionId: string, expected: string | null) => {
     if (action === 'activate') {
@@ -580,8 +547,11 @@ t.test('a move decided against a version someone has since replaced is refused',
   t.equal((await move('activate', third, second)).status, 200);
   const rollback = await move('rollback', first, second);
   t.equal(rollback.status, 409, 'the rollback decided against the second version is refused');
-  t.match((await rollback.json() as { error: { message: string } }).error.message, new RegExp(`active version is ${third}`),
-    'and says what is on now');
+  t.match(
+    (await rollback.json() as { error: unknown }).error,
+    { message: new RegExp(`active version is ${third}`), details: { code: 'CANDIDATE_STATE_CONFLICT' } },
+    'and says what is on now',
+  );
 
   const active = await (await server.fetch('/registry/v1/active')).json() as typeof snapshot;
   t.equal(active.registryVersion.id, third, 'so the activation it raced is what the registry serves');
@@ -630,6 +600,18 @@ t.test('administrative commands validate their bodies', async t => {
   const { versionId: importing } = await seedCandidate(await freshDatabase(), snapshot);
   const conflict = await server.fetch(...admin(`/registry/v1/admin/versions/${importing}/activate`, { reason: 'x' }));
   t.equal(conflict.status, 409, 'while one that exists but is not validated is a conflict');
+  t.match(
+    (await conflict.json() as { error: unknown }).error,
+    { message: /only a validated version can be activated/, details: { code: 'CANDIDATE_STATE_CONFLICT' } },
+    'named as the state of the version',
+  );
+  const unrestorable = await server.fetch(...admin(`/registry/v1/admin/versions/${importing}/rollback`, { reason: 'x' }));
+  t.equal(unrestorable.status, 409, 'and restoring it is the same conflict');
+  t.match(
+    (await unrestorable.json() as { error: unknown }).error,
+    { message: /only a validated version can be restored/, details: { code: 'CANDIDATE_STATE_CONFLICT' } },
+    'under the same code',
+  );
 
   /*
    * A held import leaves the commit unimported until somebody acts on the
@@ -824,9 +806,9 @@ t.test('a market overlay read and sent back says what it was decided against', a
     reason: 'rename it differently', overlay: { ...read.overlay, displayName: 'USDC market' }, expectedDigest: read.digest,
   }));
   t.equal(stale.status, 409, 'a change decided against the overlay it replaced is refused');
-  t.equal(
-    (await stale.json() as { error: { details: { current: Record<string, string> } } }).error.details.current['market 1/usdc'],
-    written.digest,
+  t.same(
+    (await stale.json() as { error: { details: unknown } }).error.details,
+    { code: 'OVERLAY_CHANGED', current: { 'market 1/usdc': written.digest } },
     'naming the overlay the market holds now',
   );
 
@@ -905,9 +887,9 @@ t.test('a network overlay reads back as the draft holds it, and says what a chan
     reason: 'rename it differently', overlay: { ...held.overlay, displayName: 'Mainnet' }, expectedDigest: held.digest,
   }));
   t.equal(stale.status, 409, 'a change decided against the overlay it replaced is refused');
-  t.equal(
-    (await stale.json() as { error: { details: { current: Record<string, string> } } }).error.details.current['network 1'],
-    written.digest,
+  t.same(
+    (await stale.json() as { error: { details: unknown } }).error.details,
+    { code: 'OVERLAY_CHANGED', current: { 'network 1': written.digest } },
     'naming the overlay the network holds now',
   );
 
@@ -1089,6 +1071,7 @@ t.test('a market overlay carries the reviewed decisions', async t => {
     { reason: 'too late', overlay },
   ));
   t.equal(terminal.status, 409, 'a validated version can no longer be changed');
+  t.equal((await terminal.json() as { error: { details: { code: string } } }).error.details.code, 'VERSION_NOT_IMPORTING');
 });
 
 /*
@@ -1256,7 +1239,8 @@ t.test('a sync run nobody holds can be cancelled, with a reason', async t => {
     .bind(new Date(Date.now() + 900_000).toISOString(), runId).run();
   const held = await cancel(runId, { reason: 'x' });
   t.equal(held.status, 409, 'a run an invocation holds is left to it');
-  t.match(await messageOf(held), /holds the sync run until/, 'until its lease runs out');
+  t.match(await held.json(), { error: { message: /holds the sync run until/, details: { code: 'SYNC_RUN_HELD' } } },
+    'until its lease runs out');
   t.equal(
     await db.prepare(`SELECT status FROM sync_run_items WHERE sync_run_id = ?1 AND deployment_key = 'usdc'`)
       .bind(runId).first<string>('status'),
@@ -1286,7 +1270,7 @@ t.test('a sync run nobody holds can be cancelled, with a reason', async t => {
 
   const ended = await cancel(runId, { reason: 'x' });
   t.equal(ended.status, 409, 'a run that has ended is not cancelled again');
-  t.match(await messageOf(ended), /already ended/);
+  t.match(await ended.json(), { error: { message: /already ended/, details: { code: 'SYNC_RUN_ENDED' } } });
 });
 
 /*
@@ -1363,6 +1347,33 @@ t.test('validating a candidate again decides it over its rows alone', async t =>
   t.notOk(
     result.summary.checks.some(check => check.name === 'market-contracts-deployed'),
     'which carries nothing over from the attempt before it',
+  );
+});
+
+/*
+ * A candidate whose import is still running is missing markets it will have
+ * in a minute: validated now, it would be frozen as invalid. The answer is to
+ * wait, and nothing is recorded.
+ */
+t.test('a candidate whose import is still running is not validated yet', async t => {
+  const db = await freshDatabase();
+  const { versionId } = await seedCandidate(db, snapshot);
+  await db.prepare(
+    `INSERT INTO sync_runs (
+       id, source_commit_sha, tracked_ref, registry_version_id, trigger_kind, requested_by, status,
+       lease_owner, lease_expires_at, expected_count, started_at
+     ) VALUES (?1, ?2, 'main', ?3, 'scheduled', 'registry-cron', 'running', ?4, ?5, 1, ?6)`
+  ).bind(randomUUID(), 'a'.repeat(40), versionId, randomUUID(), new Date(Date.now() + 900_000).toISOString(), new Date().toISOString()).run();
+
+  const response = await server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/validate`, {}));
+  t.equal(response.status, 409, 'it is refused while the import runs');
+  t.equal((await response.json() as { error: { details: { code: string } } }).error.details.code, 'IMPORT_STILL_RUNNING');
+  t.equal(await db.prepare(`SELECT status FROM registry_versions WHERE id = ?1`).bind(versionId).first<string>('status'), 'importing',
+    'and the candidate is left as it is');
+  t.equal(
+    await db.prepare(`SELECT COUNT(*) AS n FROM validation_results WHERE registry_version_id = ?1`).bind(versionId).first<number>('n'),
+    0,
+    'with no checks recorded',
   );
 });
 

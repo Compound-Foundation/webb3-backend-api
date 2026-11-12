@@ -4,15 +4,13 @@ import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { format } from 'node:util';
 
-import { createTestHarness } from 'wrangler';
-
 import * as Debug from '../../../lib/debug-log.js';
 
 import type { Env } from '../../../entrypoint.js';
 import type * as jsonRpc from '../../../lib/json-rpc.js';
 import type { RegistrySnapshotV1 } from '../../../lib/model/comet-registry.js';
 
-import { cacheDepsOf } from '../../../src/registry/cache.js';
+import { cacheDepsOf, isUnreachable } from '../../../src/registry/cache.js';
 import { proxyTransport } from '../../../src/registry/enrichment.js';
 import { runInvocation } from '../../../src/registry/importer.js';
 import {
@@ -26,19 +24,20 @@ import { overlayOfMarket } from '../../../src/registry/overlay.js';
 import { gitBlobSha } from '../../../src/registry/source/github.js';
 import {
   SUPERSEDED_CHECK,
-  createCandidate,
   readSnapshot,
   readUnreviewed,
-  readValidationSummary,
-  recordValidationResults,
   snapshotChecksum,
   supersedeEarlierAttempts,
 } from '../../../src/registry/repository.js';
 import { registryStatus } from '../../../src/registry/status.js';
 import { cancelRun } from '../../../src/registry/sync.js';
+import { readValidationSummary } from '../../../src/registry/validation-store.js';
 
-import { applyMigrations } from '../../util/d1.js';
+import { fakeSource } from '../../util/fake-source.js';
+import type { Faults } from '../../util/fake-source.js';
 import { interleaved } from '../../util/interleave.js';
+import { quietLog } from '../../util/quiet-log.js';
+import { recordedChain } from '../../util/recorded-chain.js';
 import {
   activateSeeded,
   loadRegistrySnapshotFixture,
@@ -46,7 +45,9 @@ import {
   seedCandidate,
   validateSeeded,
 } from '../../util/registry-fixture.js';
-import { registryWorker } from '../../util/registry-worker.js';
+import { registryHarness } from '../../util/registry-harness.js';
+import { createCandidate, recordValidationResults } from '../../util/registry-repository.js';
+import { failingStatements } from '../../util/test-env.js';
 
 /*
  * The whole import, end to end against real local D1: discovery, the fenced
@@ -54,19 +55,7 @@ import { registryWorker } from '../../util/registry-worker.js';
  * validation. GitHub and the chain are stubbed from recorded fixtures, so the
  * test exercises the orchestration rather than the network.
  */
-const server = createTestHarness({ workers: [ registryWorker() ] });
-
-t.before(async () => {
-  await server.listen();
-});
-t.teardown(() => server.close());
-
-async function freshDatabase(): Promise<D1Database> {
-  await server.reset();
-  const { APP_DB } = await server.getWorker<Env>().getEnv();
-  await applyMigrations(APP_DB);
-  return APP_DB;
-}
+const { server, freshDatabase } = await registryHarness();
 
 const COMMIT     = 'a34d9b571c833b5d77f052ab8e2dbdbe10df726d';
 const REPOSITORY = 'Compound-Foundation/comet';
@@ -80,8 +69,6 @@ const wethContent = JSON.stringify({
   configurator: '0x316f9708bB98af7dA9c68C1C3b5e79039cD336E3',
   rewards:      '0x1B0e765F6224C21223AeA2af16c1C46E38885a40',
 });
-const recording: { responses: Record<string, string> } =
-  JSON.parse(readFileSync('./tests/fixtures/registry/chain/ethereum-mainnet-usdc.json', 'utf8'));
 
 // the reward feed the reviewed overlay names is not one enrichment reads by
 // itself, so its decimals are answered here
@@ -96,50 +83,15 @@ function word(value: number): string {
   return `0x${value.toString(16).padStart(64, '0')}`;
 }
 
-// what GitHub gets wrong: the status it answers the ref with, and a tree it says it truncated
-type Faults = { commits?: number, truncated?: boolean };
-
-function githubStub(roots: Array<{ path: string, content: string, sha: string }>, faults: Faults = {}) {
-  const requests: string[] = [];
-  const fetch = async (url: string) => {
-    requests.push(url);
-    if (url.endsWith(`/commits/main`)) {
-      return faults.commits === undefined ? new Response(COMMIT) : new Response('bad gateway', { status: faults.commits });
-    }
-    if (url.includes('/git/trees/')) {
-      return new Response(JSON.stringify({
-        truncated: faults.truncated === true,
-        tree: roots.map(root => ({ path: root.path, type: 'blob', sha: root.sha, size: root.content.length })),
-      }));
-    }
-    const root = roots.find(candidate => url.endsWith(candidate.path));
-    return root === undefined ? new Response('not found', { status: 404 }) : new Response(root.content);
-  };
-  return { fetch, requests };
-}
-
 /*
- * Answers from the recorded mainnet responses. Anything the recording does
- * not cover throws, which is how a market the chain cannot answer for is
- * exercised.
+ * Answers from the recorded mainnet responses, and decimals() of the reward
+ * feed named by the overlay. Anything the recording does not cover throws,
+ * which is how a market the chain cannot answer for is exercised.
  */
 function chainStub() {
-  const transport = async (calls: jsonRpc.Call[]) => calls.map(call => {
-    const key = call.method === 'eth_chainId' ? 'eth_chainId'
-      : call.method === 'eth_getCode' ? `eth_getCode:${call.params[0]}`
-      : `eth_call:${call.params[0].to}:${call.params[0].data}`;
-
-    // decimals() of the reward feed named by the overlay
-    if (key === `eth_call:${REWARD_FEED.address}:0x313ce567`) {
-      return { result: word(REWARD_FEED.decimals) };
-    }
-    const result = recording.responses[key];
-    if (result === undefined) {
-      throw new Error(`the chain has no recorded answer for ${key}`);
-    }
-    return { result };
-  });
-  return transport;
+  return recordedChain('./tests/fixtures/registry/chain/ethereum-mainnet-usdc.json', {
+    overrides: { [`eth_call:${REWARD_FEED.address}:0x313ce567`]: word(REWARD_FEED.decimals) },
+  }).transport;
 }
 
 function deps(
@@ -148,10 +100,10 @@ function deps(
   marketsPerInvocation = 2,
   faults: Faults = {},
 ) {
-  const github = githubStub(roots, faults);
   return {
     db,
-    source: { repository: REPOSITORY, ref: 'main', fetch: github.fetch },
+    debug: quietLog,
+    source: { repository: REPOSITORY, ref: 'main', fetch: fakeSource({ commit: COMMIT, roots, faults }).fetch },
     transportFor: () => chainStub(),
     config: {
       leaseSeconds:            900,
@@ -273,7 +225,7 @@ t.test('a deployment key the source gives another Comet does not hand it the rev
    * says so before anybody does.
    */
   const env    = await server.getWorker<Env>().getEnv();
-  const status = await registryStatus(env, cacheDepsOf(env));
+  const status = await registryStatus(env, cacheDepsOf(env, quietLog));
   t.same(status.candidates.validated.map(({ versionId, unserved }) => ({ versionId, unserved })), [ {
     versionId: result.versionId,
     unserved:  [ '1/usdt', '1/wbtc', '1/weth', '8453/aero', '534352/usdc' ],
@@ -376,7 +328,7 @@ t.test('a root that never imports cannot produce a validated version', async t =
 
   // an attempt that gave a root up is tried again, so its commit is not one discovery rejects
   const env    = await server.getWorker<Env>().getEnv();
-  const status = await registryStatus(env, cacheDepsOf(env));
+  const status = await registryStatus(env, cacheDepsOf(env, quietLog));
   t.match(status.sync.lastRun, { status: 'failed', registryVersionId: result.versionId },
     'the status names the failed run, with its version');
   t.ok(status.alerts.includes('last-sync-failed'), 'and raises it');
@@ -566,13 +518,8 @@ t.test('a candidate another invocation is importing is not one held for review',
    * for a commit only for the one running slot to refuse it: the run that
    * holds the lease is what decides the answer.
    */
-  const asked    = deps(db, roots);
-  const requests: string[] = [];
-  const fetch    = asked.source.fetch;
-  asked.source.fetch = async (url: string) => {
-    requests.push(url);
-    return fetch(url);
-  };
+  const source = fakeSource({ commit: COMMIT, roots });
+  const asked  = { ...deps(db, roots), source: { repository: REPOSITORY, ref: 'main', fetch: source.fetch } };
 
   await t.rejects(
     runInvocation(asked, { requestedBy: 'test-admin' }),
@@ -582,7 +529,7 @@ t.test('a candidate another invocation is importing is not one held for review',
   const scheduled = await runInvocation(asked);
   t.same([ scheduled.kind, scheduled.runId, scheduled.versionId ], [ 'idle', runId, versionId ],
     'the schedule has nothing to do this hour, and names the run that is importing');
-  t.same(requests, [], 'and neither of them asked the source anything');
+  t.same(source.requests, [], 'and neither of them asked the source anything');
 });
 
 /*
@@ -860,9 +807,9 @@ const statusOf = async (db: D1Database, versionId: string) => db.prepare(
 ).bind(versionId).first<string>('status');
 
 const supersededCheckOf = async (db: D1Database, versionId: string) => db.prepare(
-  `SELECT check_name, passed, details FROM validation_results
+  `SELECT check_name, passed, details, created_at FROM validation_results
    WHERE registry_version_id = ?1 AND check_name = ?2`
-).bind(versionId, SUPERSEDED_CHECK).first<{ check_name: string, passed: number, details: string }>();
+).bind(versionId, SUPERSEDED_CHECK).first<{ check_name: string, passed: number, details: string, created_at: string }>();
 
 t.test('a new attempt closes the draft it replaces', async t => {
   const db    = await freshDatabase();
@@ -913,6 +860,33 @@ t.test('discovery closes the drafts a validated attempt replaced', async t => {
     t.same(JSON.parse((await supersededCheckOf(db, draft.id))!.details), { supersededBy: current.id, attempt: 3 });
   }
   t.equal(await statusOf(db, current.id), 'validated', 'and the attempt that replaced them is untouched');
+});
+
+/*
+ * The check that closes a draft is written at the time of the clock the
+ * import runs on, as the candidate and the run are, whether the attempt that
+ * replaced the draft closes it or discovery does.
+ */
+t.test('a draft is closed at the time of the clock the import runs on', async t => {
+  const roots   = [ { path: USDC_ROOT, content: usdcContent, sha: await gitBlobSha(usdcContent) } ];
+  const time    = new Date('2026-01-02T03:04:05.678Z');
+  const clocked = (db: D1Database) => ({ ...deps(db, roots), now: () => time });
+
+  const replacedDb = await freshDatabase();
+  const draft      = await runInvocation(clocked(replacedDb));
+  await runInvocation(clocked(replacedDb), { forceNewAttempt: true, reason: 'rebuild' });
+  t.equal((await supersededCheckOf(replacedDb, draft.versionId!))?.created_at, time.toISOString(),
+    'the attempt that replaced the draft closes it at the time of its clock');
+
+  const discoveredDb = await freshDatabase();
+  const make = (attempt: number) => createCandidate(discoveredDb, {
+    repository: REPOSITORY, commitSha: COMMIT, sourceChecksum: 'a'.repeat(64), attempt, createdBy: 'test-seed',
+  });
+  const stale = await make(1);
+  await validateSeeded(discoveredDb, (await make(2)).id);
+  t.equal((await runInvocation(clocked(discoveredDb))).kind, 'unchanged', 'discovery finds the commit imported');
+  t.equal((await supersededCheckOf(discoveredDb, stale.id))?.created_at, time.toISOString(),
+    'and closes the draft a validated attempt replaced at the time of its clock');
 });
 
 /*
@@ -1063,7 +1037,7 @@ t.test('a first import that gives a root up is held all the same, and the status
   const draft = result.versionId!;
 
   const env    = await server.getWorker<Env>().getEnv();
-  const status = await registryStatus(env, cacheDepsOf(env));
+  const status = await registryStatus(env, cacheDepsOf(env, quietLog));
   t.same(status.candidates.importing.map(candidate => candidate.versionId), [ draft ], 'the status lists the draft');
   t.match(status.sync.lastRun, {
     status:         'completed',
@@ -1206,7 +1180,7 @@ t.test('a root whose invocations keep stopping on it is failed, retried and give
     `SELECT status, attempts, last_error FROM sync_run_items WHERE root_path = ?1`
   ).bind(WETH_ROOT).first<{ status: string, attempts: number, last_error: string | null }>();
   // the status half an hour after the last invocation, once its lease has run out
-  const alerts = async () => (await registryStatus(env, { ...cacheDepsOf(env), now: () => new Date(hour - 1_800_000) })).alerts;
+  const alerts = async () => (await registryStatus(env, { ...cacheDepsOf(env, quietLog), now: () => new Date(hour - 1_800_000) })).alerts;
 
   t.equal(await invocation(), null, 'the first invocation imports usdc, and is stopped on weth');
   t.same(await wethRoot(), { status: 'processing', attempts: 1, last_error: null }, 'which it leaves in progress');
@@ -1246,7 +1220,7 @@ t.test('an attempt stopped after a root that imported is a failure once its leas
   ];
   const env    = await server.getWorker<Env>().getEnv();
   const hour   = Date.now();
-  const alerts = async (at: number) => (await registryStatus(env, { ...cacheDepsOf(env), now: () => new Date(at) })).alerts;
+  const alerts = async (at: number) => (await registryStatus(env, { ...cacheDepsOf(env, quietLog), now: () => new Date(at) })).alerts;
 
   // the invocations of the first two hours reach no node provider, and each spends an attempt of both roots
   for (const at of [ hour, hour + 3_600_000 ]) {
@@ -1375,24 +1349,6 @@ t.test('an invocation that loses its lease before the candidate ends writes noth
   );
 });
 
-// a database that fails as `message` says on each statement `pattern` matches, and answers every other
-function failingOn(db: D1Database, pattern: RegExp, message: string): D1Database {
-  return new Proxy(db, {
-    get(target, property, receiver) {
-      const value = Reflect.get(target, property, receiver);
-      if (property === 'prepare') {
-        return (sql: string) => {
-          if (pattern.test(sql)) {
-            throw new Error(message);
-          }
-          return target.prepare(sql);
-        };
-      }
-      return typeof(value) === 'function' ? (value as () => unknown).bind(target) : value;
-    },
-  }) as D1Database;
-}
-
 /*
  * Once the run is closed, the import has happened. A database that stops
  * answering right after that does not turn it into a failure, which would
@@ -1452,7 +1408,7 @@ t.test('an invocation that fails gives the run back at once', async t => {
   const roots = [ { path: USDC_ROOT, content: usdcContent, sha: await gitBlobSha(usdcContent) } ];
 
   await t.rejects(
-    runInvocation({ ...deps(db, roots), db: failingOn(db, /SET status = 'processing'/, 'D1_ERROR: Network connection lost.') }),
+    runInvocation({ ...deps(db, roots), db: failingStatements(db, /SET status = 'processing'/) }),
     { message: /Network connection lost/ },
     'the database does not answer the claim of a root',
   );
@@ -1480,7 +1436,7 @@ t.test('an invocation that fails after losing the run leaves it to the one that 
      BEGIN UPDATE sync_runs SET lease_owner = 'another-invocation' WHERE id = NEW.id; END`
   ).run();
   await t.rejects(
-    runInvocation({ ...deps(db, roots), db: failingOn(db, /AS outstanding/, 'D1_ERROR: no such column: outstanding') }),
+    runInvocation({ ...deps(db, roots), db: failingStatements(db, /AS outstanding/, { message: 'D1_ERROR: no such column: outstanding' }) }),
     { message: /no such column/ },
   );
   await db.prepare(`DROP TRIGGER test_taken_over`).run();
@@ -1555,7 +1511,7 @@ t.test('a run that fails the same way every time says why, and an operator can e
     'and having spent no attempt, so the run never ends by itself',
   );
 
-  const status = await registryStatus(env, { ...cacheDepsOf(env), now: () => new Date(start + 2 * HOUR + 300_000) });
+  const status = await registryStatus(env, { ...cacheDepsOf(env, quietLog), now: () => new Date(start + 2 * HOUR + 300_000) });
   t.ok(status.alerts.includes('sync-stalled'), 'minutes after the latest failure, the status calls the run stalled');
   t.match(status.sync.lastRun?.lastError, /^OVERLAY_INVALID: /, 'and says why');
 
@@ -1572,7 +1528,7 @@ t.test('a run that fails the same way every time says why, and an operator can e
     { status: 'failed', outcome: null, last_error: 'cancelled by test-admin: a stored name no longer parses', lease_owner: null },
     'saying who did, and why',
   );
-  const cancelled = await registryStatus(env, cacheDepsOf(env));
+  const cancelled = await registryStatus(env, cacheDepsOf(env, quietLog));
   t.ok(cancelled.alerts.includes('last-sync-failed'), 'which the status raises as a failed run');
   t.match(cancelled.sync.lastRun?.lastError, /^cancelled by test-admin: /, 'with who ended it');
 
@@ -1581,6 +1537,41 @@ t.test('a run that fails the same way every time says why, and an operator can e
     forceNewAttempt: true, reason: 'the name is fixed', requestedBy: 'test-admin',
   });
   t.equal(forced.kind, 'imported', 'and once the cause is fixed, the attempt the operator forces imports');
+});
+
+/*
+ * A parser quotes what it refused, so a registry error can carry a word a
+ * database that did not answer uses too. The run keeps the failure as its
+ * error all the same: a registry error is told apart by its code, not by
+ * its text.
+ */
+t.test('a stored decision refused over a key named "timeout" is kept as the run\'s error', async t => {
+  const db     = await freshDatabase();
+  const active = await activateFixture(db);
+  const roots  = [ { path: USDC_ROOT, content: usdcContent, sha: await gitBlobSha(usdcContent) } ];
+  const usdc   = snapshot.networks.find(network => network.chainId === 1)!.markets
+    .find(market => market.deploymentKey === 'usdc')!.baseAsset.token.address;
+
+  // a display override with one key more than the parser takes
+  await db.prepare(`DROP TRIGGER registry_networks_update_requires_importing`).run();
+  const metadata = await db.prepare(`SELECT metadata FROM registry_networks WHERE registry_version_id = ?1 AND chain_id = 1`)
+    .bind(active).first<string>('metadata');
+  await db.prepare(`UPDATE registry_networks SET metadata = ?1 WHERE registry_version_id = ?2 AND chain_id = 1`).bind(
+    JSON.stringify({
+      ...JSON.parse(metadata!),
+      assetDisplayOverrides: [ { tokenAddress: usdc, displayAddress: usdc, symbol: 'USDC', name: 'USD Coin', timeout: 30 } ],
+    }),
+    active,
+  ).run();
+
+  const failure = await runInvocation(deps(db, roots)).then(() => null, (error: unknown) => error);
+  t.match(failure, { code: 'OVERLAY_INVALID', message: /has unexpected keys: timeout$/ },
+    'the import fails on the stored decision');
+  t.ok(isUnreachable(failure), 'with a message that, by its text alone, is a database that did not answer');
+
+  const run = await leaseOf(db);
+  t.equal(run?.lease_owner, null, 'the run is given back');
+  t.match(run?.last_error, /^OVERLAY_INVALID: .*has unexpected keys: timeout$/, 'with the failure as its error');
 });
 
 const usdcFixture = snapshot.networks.find(network => network.chainId === 1)!.markets
@@ -1677,7 +1668,7 @@ t.test('a commit that imported completely and did not validate is not attempted 
   const failed = await runInvocation(deps(db, roots));
   t.equal(failed.kind, 'invalid', 'the attempt imported its root, and did not validate');
   const env    = await server.getWorker<Env>().getEnv();
-  const status = await registryStatus(env, cacheDepsOf(env));
+  const status = await registryStatus(env, cacheDepsOf(env, quietLog));
   t.same(status.alerts.filter(alert => alert === 'commit-rejected' || alert === 'last-sync-failed'),
     [ 'commit-rejected', 'last-sync-failed' ], 'the status raises the failed run and the rejected commit together');
   t.match(status.sync, {
@@ -1933,9 +1924,7 @@ t.test('a root the node proxy did not answer for is logged by its status and net
   // what is written to the console, as the console would write it
   const written: string[] = [];
   for (const level of [ 'log', 'warn', 'error' ] as const) {
-    const write = console[level];
-    console[level] = (...parameters: unknown[]) => { written.push(format(...parameters)); };
-    t.teardown(() => { console[level] = write; });
+    t.capture(console, level, (...parameters: unknown[]) => { written.push(format(...parameters)); });
   }
   const result = await runInvocation({
     ...deps(db, roots),

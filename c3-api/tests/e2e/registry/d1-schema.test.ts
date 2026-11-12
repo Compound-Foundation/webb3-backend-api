@@ -2,8 +2,6 @@ import t from 'tap';
 
 import { randomUUID } from 'node:crypto';
 
-import { createTestHarness } from 'wrangler';
-
 import { registryConfig } from '../../../src/registry/config.js';
 import { activationStatements } from '../../../src/registry/repository.js';
 import type { Env } from '../../../entrypoint.js';
@@ -16,12 +14,13 @@ import {
   insertRow,
   insertStatement,
 } from '../../util/d1.js';
+import { count } from '../../util/registry-admin.js';
 import {
   loadRegistrySnapshotFixture,
   seedCandidate,
   sha256Hex,
 } from '../../util/registry-fixture.js';
-import { registryWorker } from '../../util/registry-worker.js';
+import { registryHarness } from '../../util/registry-harness.js';
 
 /*
  * Runs the worker from wrangler.toml in real workerd with local D1, KV, and
@@ -29,21 +28,8 @@ import { registryWorker } from '../../util/registry-worker.js';
  * migrations, then checks that migration 0001 enforces the registry
  * invariants in the database itself rather than in application code.
  */
-const server = createTestHarness({ workers: [ registryWorker() ] });
-
-t.before(async () => {
-  await server.listen();
-});
-t.teardown(() => server.close());
-
-async function freshEnv(): Promise<Env> {
-  await server.reset();
-  const env = await server.getWorker<Env>().getEnv();
-  await applyMigrations(env.APP_DB);
-  return env;
-}
-
 const NOW = '2026-09-17T00:00:00.000Z';
+const { server, freshEnv } = await registryHarness();
 
 const APPLICATION_TABLES = [
   'registry_versions',
@@ -249,11 +235,6 @@ async function activate(db: D1Database, versionId: string, action: 'activate' | 
 
 async function activeVersionId(db: D1Database): Promise<string | null> {
   return db.prepare('SELECT active_version_id FROM registry_state').first<string | null>('active_version_id');
-}
-
-async function count(db: D1Database, table: string, where: string = '1 = 1', ...bindings: unknown[]): Promise<number> {
-  const value = await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${where}`).bind(...bindings).first<number>('n');
-  return value ?? 0;
 }
 
 async function run(db: D1Database, sql: string, ...bindings: unknown[]): Promise<D1Result> {

@@ -10,14 +10,13 @@ import { orderNetworks, overlayOfException } from '../../src/registry/overlay.js
 import {
   activateVersion,
   approveVersion,
-  createCandidate,
-  markValidated,
   marketWrites,
   readActiveVersionId,
   readSnapshot,
-  recordValidationResults,
   snapshotChecksum,
 } from '../../src/registry/repository.js';
+
+import { createCandidate, markValidated, recordValidationResults } from './registry-repository.js';
 
 /*
  * Loads the frozen RegistrySnapshotV1 fixture and seeds it into D1 as an

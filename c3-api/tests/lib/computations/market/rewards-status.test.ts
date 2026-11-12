@@ -5,7 +5,6 @@ import * as Flags    from '../../../../lib/flags.js';
 import { BigNumber } from '../../../../lib/bignumber.js';
 import { BigFixnum } from '../../../../lib/bigfixnum.js';
 
-import * as Compute    from '../../../../lib/symbolic/computation.js';
 import * as Evaluator  from '../../../../lib/symbolic/evaluator.js';
 import { MemoryCache } from '../../../../lib/symbolic/cache.js';
 
@@ -13,6 +12,7 @@ import * as market  from '../../../../lib/computations/market.js';
 import * as rewards from '../../../../lib/computations/rewards.js';
 import * as account from '../../../../lib/computations/account.js';
 
+import { stub } from '../../../util/evaluator.js';
 import { fixtureCatalog } from '../../../util/registry-fixture.js';
 
 import '../../../../shim/node-self.js';
@@ -41,10 +41,6 @@ const read     = (value: number) => ({ status: 'success' as const, price: BigFix
 const reverted = { status: 'error' as const, message: 'execution reverted' };
 const apr      = (value: number) => ({ status: 'success' as const, apr: BigFixnum.from({ decimals: 2, value }) });
 const failed   = { chainId: 1, comet: { address: usdt.address }, ...reverted };
-
-function stub(answer: (context: any) => unknown) {
-  return Compute.Functor<any>({}).implement({ version: 0, compute: context => answer(context) });
-}
 
 function evaluator(computations: Record<string, unknown>) {
   const cache = new MemoryCache({}, [ BigFixnum.JsonReviver, BigNumber.JsonReviver ]);

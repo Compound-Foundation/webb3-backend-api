@@ -2,15 +2,14 @@ import t from 'tap';
 
 import { randomUUID } from 'node:crypto';
 
-import { createTestHarness } from 'wrangler';
-
-import type { Env } from '../../../entrypoint.js';
-import { ROLES, sha256Hex } from '../../../src/http/bearer-auth.js';
+import { sha256 } from '../../../lib/hash.js';
+import { ROLES } from '../../../src/http/bearer-auth.js';
 import type { Role } from '../../../src/http/bearer-auth.js';
 import { ROUTES } from '../../../src/registry/admin-router.js';
 
-import { applyMigrations } from '../../util/d1.js';
+import { registryHarness } from '../../util/registry-harness.js';
 import { registryWorker } from '../../util/registry-worker.js';
+import { ADMIN_TOKEN } from '../../util/test-env.js';
 
 /*
  * What protects the administrative API, exercised through the worker: the
@@ -22,9 +21,6 @@ import { registryWorker } from '../../util/registry-worker.js';
  * an answer that is refused cheaply, refused before it says anything about
  * the registry, and refused the same way whatever the caller guessed.
  */
-// the token most cases send: alice's, an admin's
-const ADMIN_TOKEN = 'registry-admin-token-for-tests';
-
 // a token of the list for each role, held by somebody of that role's name
 const ROLE_TOKENS: Record<Role, string> = {
   monitor:  'registry-monitor-token-for-tests',
@@ -37,37 +33,22 @@ const ROLE_TOKENS: Record<Role, string> = {
 const ROTATED_OUT = 'registry-rotated-out-token-for-tests';
 const ROTATED_IN  = 'registry-rotated-in-token-for-tests';
 
+// an entry of a list a test gives the worker in place of the harness's, which holds the token's digest
 const listed = async (name: string, token: string, role: Role, notAfter: string | null = null) =>
-  ({ name, sha256: await sha256Hex(token), role, notAfter });
+  ({ name, sha256: await sha256(token), role, notAfter });
 
 /*
- * The worker stores only the hashes of the tokens it lists, so the harness is
- * given the hashes and the tests present the tokens themselves.
+ * The worker lists test-admin's token, which most cases send, and
+ * test-approver's (registryHarness), and beside them a token for each role,
+ * under the role's name, and the two tokens of a holder rotating one.
  */
-const SECRETS = {
-  COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([
-    await listed('alice', ADMIN_TOKEN, 'admin'),
-    ...await Promise.all(ROLES.map(role => listed(role, ROLE_TOKENS[role], role))),
-    await listed('rotating', ROTATED_OUT, 'operator', '2026-01-01T00:00:00Z'),
-    await listed('rotating', ROTATED_IN, 'operator'),
-  ]),
-};
-
-const server = createTestHarness({ workers: [ registryWorker(SECRETS) ] });
-
-t.before(async () => {
-  await server.listen();
-});
-t.teardown(() => server.close());
+const { server, freshDatabase } = await registryHarness({ admin: true, tokens: [
+  ...ROLES.map(role => ({ name: role, token: ROLE_TOKENS[role], role })),
+  { name: 'rotating', token: ROTATED_OUT, role: 'operator', notAfter: '2026-01-01T00:00:00Z' },
+  { name: 'rotating', token: ROTATED_IN,  role: 'operator' },
+] });
 
 const auth = { 'Authorization': `Bearer ${ADMIN_TOKEN}` };
-
-async function freshDatabase(): Promise<D1Database> {
-  await server.reset();
-  const { APP_DB } = await server.getWorker<Env>().getEnv();
-  await applyMigrations(APP_DB);
-  return APP_DB;
-}
 
 t.test('the token is what the routes are behind, and nothing else', async t => {
   await freshDatabase();
@@ -76,7 +57,7 @@ t.test('the token is what the routes are behind, and nothing else', async t => {
     [ 'no header',        undefined ],
     [ 'another scheme',   { 'Authorization': `Basic ${ADMIN_TOKEN}` } ],
     [ 'an empty token',   { 'Authorization': 'Bearer ' } ],
-    [ 'the token hash',   { 'Authorization': `Bearer ${await sha256Hex(ADMIN_TOKEN)}` } ],
+    [ 'the token hash',   { 'Authorization': `Bearer ${await sha256(ADMIN_TOKEN)}` } ],
     [ 'a prefix of it',   { 'Authorization': `Bearer ${ADMIN_TOKEN.slice(0, -1)}` } ],
     [ 'more after it',    { 'Authorization': `Bearer ${ADMIN_TOKEN} garbage` } ],
   ];
@@ -369,7 +350,7 @@ t.test('a refused token is logged by its name, and never by itself', async t => 
   t.match(logged, /requiredRole: 'reader'/, 'and the role the route needs');
   t.match(logged, /name: 'rotating'/, 'and the name of the token that has expired');
   for (const token of [ ROLE_TOKENS.monitor, ROTATED_OUT ]) {
-    const digest = await sha256Hex(token);
+    const digest = await sha256(token);
     t.notOk(logged.includes(token) || logged.includes(digest.slice(0, 16)), 'never the token, nor any of its digest');
   }
 });
@@ -418,7 +399,7 @@ t.test('a list the worker cannot read closes the administrative API to every tok
   await freshDatabase();
   await server.update({ workers: [ registryWorker({
     COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([
-      await listed('alice', ADMIN_TOKEN, 'admin'),
+      await listed('test-admin', ADMIN_TOKEN, 'admin'),
       await listed('monitor', ROLE_TOKENS.monitor, 'monitor'),
       { ...await listed('somebody', ROLE_TOKENS.admin, 'admin'), name: 'Somebody' },
     ]),

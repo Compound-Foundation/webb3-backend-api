@@ -4,6 +4,7 @@ import { marketKey } from '../../lib/model/comet-registry.js';
 
 import { cacheStatus } from './cache.js';
 import type { CacheDeps } from './cache.js';
+import { nowOf } from './clock.js';
 import { registryConfig } from './config.js';
 import type { RegistryConfig } from './config.js';
 import { readChainCheck } from './drift.js';
@@ -11,6 +12,7 @@ import type { ChainCheck, ChainDrift, UnreadNetwork } from './drift.js';
 import { readNotificationFailure } from './notifications.js';
 import type { NotificationFailure } from './notifications.js';
 import { approvalUsable } from './repository.js';
+import type { SyncOutcome, SyncRunRow, SyncRunStatus } from './rows.js';
 import { ALL_ROOTS_CHECK } from './validation.js';
 
 /*
@@ -67,8 +69,8 @@ type RegistryStatus = {
       id:                string,
       // the version the run imports into, null until it has created one
       registryVersionId: string | null,
-      status:            string,
-      outcome:           string | null,
+      status:            SyncRunStatus,
+      outcome:           SyncOutcome | null,
       startedAt:         string,
       completedAt:       string | null,
       ageSeconds:        number,
@@ -152,11 +154,10 @@ type ActiveRow = {
 
 type ApprovalRow = { version_id: string, id: string, actor: string, expires_at: string };
 
-type RunRow = {
-  id: string, registry_version_id: string | null, status: string, outcome: string | null,
-  started_at: string, completed_at: string | null, failed_count: number, expected_count: number,
-  completed_count: number, last_error: string | null, lease_expires_at: string | null,
-};
+type RunRow = Pick<SyncRunRow,
+  | 'id' | 'registry_version_id' | 'status' | 'outcome' | 'started_at' | 'completed_at'
+  | 'failed_count' | 'expected_count' | 'completed_count' | 'last_error' | 'lease_expires_at'
+>;
 
 type CandidateRow = { id: string, attempt: number, created_at: string, status: string };
 
@@ -259,6 +260,42 @@ function failing(run: RunRow | null, failedAttempts: number, stopped: boolean): 
 }
 
 /*
+ * A run as an operator is told about it: the status's last run, which adds
+ * its age, and the run both sync run routes answer with, which adds what
+ * started it (handlers.ts). Each field is named, so the lease owner a row
+ * carries never leaves the worker. Neither answer spreads it: each lists the
+ * fields in the order it always has, and the two orders differ.
+ */
+function syncRunSummary(run: RunRow): Omit<NonNullable<RegistryStatus['sync']['lastRun']>, 'ageSeconds'> {
+  return {
+    id:                run.id,
+    registryVersionId: run.registry_version_id,
+    status:            run.status,
+    outcome:           run.outcome,
+    startedAt:         run.started_at,
+    completedAt:       run.completed_at,
+    failedCount:       run.failed_count,
+    expectedCount:     run.expected_count,
+    completedCount:    run.completed_count,
+    lastError:         run.last_error,
+    leaseExpiresAt:    run.lease_expires_at,
+  };
+}
+
+// the status's last run, with its age right after when it completed
+function lastRunOf(row: RunRow, now: Date): NonNullable<RegistryStatus['sync']['lastRun']> {
+  const {
+    id, registryVersionId, status, outcome, startedAt, completedAt,
+    failedCount, expectedCount, completedCount, lastError, leaseExpiresAt,
+  } = syncRunSummary(row);
+  return {
+    id, registryVersionId, status, outcome, startedAt, completedAt,
+    ageSeconds: ageOf(row.completed_at ?? row.started_at, now) ?? 0,
+    failedCount, expectedCount, completedCount, lastError, leaseExpiresAt,
+  };
+}
+
+/*
  * The last chain check. Right after another version is switched on it is
  * still the check of the version before, until the next hourly invocation
  * checks the one on; it is answered all the same, under the version it is
@@ -270,7 +307,7 @@ async function chainCheckOf(deps: CacheDeps, now: Date): Promise<RegistryStatus[
   try {
     check = await readChainCheck(deps.kv);
   } catch (error) {
-    deps.debug?.warn(`registry chain check unreadable`, { error });
+    deps.debug.warn(`registry chain check unreadable`, { error });
     return null;
   }
   if (check === null) {
@@ -297,13 +334,13 @@ async function notificationFailureOf(deps: CacheDeps, webhook: RegistryConfig['w
   try {
     return await readNotificationFailure(deps.kv);
   } catch (error) {
-    deps.debug?.warn(`registry notification failure unreadable`, { error });
+    deps.debug.warn(`registry notification failure unreadable`, { error });
     return null;
   }
 }
 
 async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus> {
-  const now = deps.now?.() ?? new Date();
+  const now = nowOf(deps.now);
   const db  = deps.db;
 
   const [
@@ -593,20 +630,7 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
     },
     cache,
     sync: {
-      lastRun: runRow === null ? null : {
-        id:                runRow.id,
-        registryVersionId: runRow.registry_version_id,
-        status:            runRow.status,
-        outcome:           runRow.outcome,
-        startedAt:         runRow.started_at,
-        completedAt:       runRow.completed_at,
-        ageSeconds:        ageOf(runRow.completed_at ?? runRow.started_at, now) ?? 0,
-        failedCount:       runRow.failed_count,
-        expectedCount:     runRow.expected_count,
-        completedCount:    runRow.completed_count,
-        lastError:         runRow.last_error,
-        leaseExpiresAt:    runRow.lease_expires_at,
-      },
+      lastRun:            runRow === null ? null : lastRunOf(runRow, now),
       upstreamCheckedAt:  stateRow?.last_upstream_checked_at ?? null,
       upstreamAgeSeconds: upstreamAge,
       intervalSeconds:    interval,
@@ -625,4 +649,4 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
 }
 
 export type { Alert, RegistryStatus };
-export { registryStatus };
+export { registryStatus, syncRunSummary };

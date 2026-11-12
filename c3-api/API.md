@@ -993,6 +993,26 @@ read, an overlay, a move of the active version — carries its own code in
 and a database that could not be reached, are a `503`, here as on every
 endpoint ([Errors](#errors)): those are the answers worth trying again.
 
+Every `CONFLICT` names in `details.code` the conflict it met, which is what a
+script matches; the message says the same to a person, and may change. An
+overlay write below is any of `PUT …/overlay` and `PUT …/overlays`:
+
+| `details.code` | Answered by | Means |
+|---|---|---|
+| `SYNC_ALREADY_RUNNING` | `POST …/admin/sync` | an import is running: another invocation holds its run right now, or the request carries what only a new run takes — `sourceCommitSha`, `forceNewAttempt` or `holdForReview` |
+| `SYNC_RUN_HELD` | `POST …/sync-runs/{sync_run_id}/cancel` | an invocation holds the run until the time the message names |
+| `SYNC_RUN_ENDED` | `POST …/sync-runs/{sync_run_id}/cancel` | the run has already ended |
+| `IMPORT_STILL_RUNNING` | `POST …/validate` | the candidate's import is still running |
+| `CANDIDATE_CHANGED` | `POST …/validate` | an overlay was written to the candidate while it was being checked |
+| `CANDIDATE_STATE_CONFLICT` | `POST …/approve`, `POST …/activate`, `POST …/rollback` | the version is not validated, `expectedActiveVersionId` no longer names the version that is on, another move landed while the request was deciding, or an approval names the version that is on |
+| `APPROVAL_REQUIRED` | `POST …/activate` | no approval the activating token may use: one by another name, in force, given while the version now on was on, and neither used nor overtaken by a move since; or the one it was to use was used up while it was decided |
+| `ROLLBACK_TARGET_INVALID` | `POST …/rollback` | the version is not the one a rollback may restore now — the version the one on replaced when it was last activated, if that is older — which the message names, or says there is none |
+| `VERSION_NOT_IMPORTING` | an overlay write | the version is no longer importing, so it cannot be changed |
+| `OVERLAY_CHANGED` | an overlay write | a scope holds another overlay than the digest it was decided against, and `details.current` names the one it holds; or another write to the candidate landed in the middle of this one |
+| `SLUG_TAKEN` | an overlay write | another market of the network keeps the slug a market's document names |
+| `DEFAULT_TAKEN` | an overlay write | a market's document says `isDefault: true` while another market of the version is the default |
+| `REWARD_FEED_WITHOUT_REWARD` | an overlay write | a market's document names a `rewardPriceFeed`, and its rewards contract names no reward token |
+
 Public reads are cacheable and carry `ETag`, `X-Registry-Version` and
 `X-Registry-Checksum`, which a browser can read, and answer `304` to an
 `If-None-Match` that names what they would send. The tags are compared
@@ -1554,10 +1574,10 @@ again, and a sync with `forceNewAttempt` is refused while it is running. Its
 
 Takes `{"reason": "…"}` and nothing else, and spends from the same budget
 as `POST /registry/v1/admin/sync`. Only a run nobody holds is cancelled: a
-run whose lease is live is `409` until the lease has run out — the message
-says when — since the invocation that holds it may be importing into it, and
-so is a run that has already ended. An unknown id is `404`, and a missing
-`reason` is `400`.
+run whose lease is live is `409` with `SYNC_RUN_HELD` until the lease has run
+out — the message says when — since the invocation that holds it may be
+importing into it, and a run that has already ended is `409` with
+`SYNC_RUN_ENDED`. An unknown id is `404`, and a missing `reason` is `400`.
 
 Answers with the run as `GET /registry/v1/admin/sync-runs/{sync_run_id}`
 does: `failed`, with `lastError` `cancelled by <actor>: <reason>` and
@@ -1704,10 +1724,11 @@ that ran answers `200` with what it decided: `version.status` is `validated`,
 or `invalid` with the checks that decided it in `summary`. A version that is
 already decided, either way, answers the same again with `changed: false`.
 
-It answers `409` only when it could not run: while the candidate's import is
-still running, or when an overlay was written to the candidate while it was
-being checked — the checks would describe rows it no longer holds, so none of
-them is recorded; validate it again.
+It answers `409` only when it could not run: with `IMPORT_STILL_RUNNING`
+while the candidate's import is still running, and with `CANDIDATE_CHANGED`
+when an overlay was written to the candidate while it was being checked — the
+checks would describe rows it no longer holds, so none of them is recorded;
+validate it again.
 
 ```json
 { "version": { "id": "c0d77dad-…", "status": "invalid", "checksum": null }, "changed": true, "summary": { "attempt": 1, "passed": 41, "failed": 1, "checks": [ … ] } }
@@ -1777,9 +1798,10 @@ that is no longer what is on are `409` with `details.code`
 ### description:
 
 Makes a validated version the one the API serves, once an admin of another
-name has approved it. Requires a `reason`, which is stored with the audit
-event. Activating the version that is already active changes nothing, and
-needs no approval.
+name has approved it; a version that is not validated is refused with `409`
+and `CANDIDATE_STATE_CONFLICT`. Requires a `reason`, which is stored with the
+audit event. Activating the version that is already active changes nothing,
+and needs no approval.
 
 The activation uses the newest approval of the version that is in force, was
 given by another name than the activating token's, was given while the
@@ -1791,12 +1813,13 @@ on.
 
 `expectedActiveVersionId` — [optional] — the version the move is decided
 against, or `null` when nothing is on yet. When it is no longer the version
-that is on, the move is refused with `409` naming the one that is, instead of
-silently undoing a move somebody else made in the meantime. A move whose
-target is already on changes nothing, whatever it expected. A move made by
-somebody else between the activation's reading of what is on and its write is
-refused the same way, `409` with `details.code` `CANDIDATE_STATE_CONFLICT`,
-and records nothing: read the status and decide again.
+that is on, the move is refused with `409` and `CANDIDATE_STATE_CONFLICT`,
+naming the one that is, instead of silently undoing a move somebody else made
+in the meantime. A move whose target is already on changes nothing, whatever
+it expected. A move made by somebody else between the activation's reading of
+what is on and its write is refused the same way, `409` with `details.code`
+`CANDIDATE_STATE_CONFLICT`, and records nothing: read the status and decide
+again.
 
 ```json
 { "reason": "switch on the new commit", "expectedActiveVersionId": "d9698ddd-ab86-46bc-a412-c71df7d20414" }
@@ -1875,7 +1898,8 @@ property is refused with `400`:
 The overlay is applied to the rows the import wrote, and a network reviewed
 this way stops being listed as unreviewed. A chain the candidate has not
 imported yet answers `404`: the import writes every network it reaches, so
-the answer is to let it continue.
+the answer is to let it continue. Only an importing candidate is writable:
+any other version answers `409` with `VERSION_NOT_IMPORTING`.
 
 A feed the overlay introduces — a remap's replacement feed — is read on the
 chain for its decimals, unless the version already knows it on that chain.
@@ -1897,9 +1921,9 @@ The answer names the overlay the scope now holds by its `digest`.
 `expectedDigest` — [optional] — is the digest of the overlay the document was
 decided against, as the `GET` below answers it, or `null` for a scope nobody
 has reviewed: when the scope holds another one, the document is refused with
-`409` rather than silently undoing a change made since. A write that another
-write to the same candidate lands in the middle of is refused with `409` too;
-read again and resend.
+`409` and `OVERLAY_CHANGED` rather than silently undoing a change made since.
+A write that another write to the same candidate lands in the middle of is
+refused with `OVERLAY_CHANGED` too; read again and resend.
 
 ```json
 { "versionId": "d9698ddd-ab86-46bc-a412-c71df7d20414", "changed": true, "overlayEventId": "0d0f3f7e-...", "digest": "5f0c...", "snapshotChecksum": null }
@@ -1912,7 +1936,7 @@ after the type is the `scope` the scope's `GET` answers: read the scope again
 there, redo the change on what it answers, and send that with its `digest`.
 
 ```json
-{ "error": { "code": "CONFLICT", "message": "the overlay of network 1 is no longer the one this was decided against; read it again", "requestId": "8419...", "details": { "current": { "network 1": "1cd5..." } } } }
+{ "error": { "code": "CONFLICT", "message": "the overlay of network 1 is no longer the one this was decided against; read it again", "requestId": "8419...", "details": { "code": "OVERLAY_CHANGED", "current": { "network 1": "1cd5..." } } } }
 ```
 
 ## `GET /registry/v1/admin/versions/{version_id}/networks/{chain_id}/overlay`
@@ -1958,7 +1982,8 @@ unreviewed. It takes the same body, with the market's document as
 `overlay`, answers the market's `digest` and takes `expectedDigest` exactly
 as the network route does, and reads the feeds it introduces — the USD feed
 and the reward feed — the same way. A `rewardPriceFeed` on a market whose
-rewards contract names no reward token is refused with `409`.
+rewards contract names no reward token is refused with `409` and
+`REWARD_FEED_WITHOUT_REWARD`.
 
 A `creationBlock` the document changes is held against the chain, unless it
 is `0`: it must be the block the market's Comet was deployed in — the Comet
@@ -1984,10 +2009,10 @@ the same network, and `isInstitutional` lists it in the institutional section.
 Within a network, no two markets that are not disabled may answer to the same
 `slug`, or to the same label where they have none; validation refuses a
 version where they do, and a slug another market of the network keeps is
-refused with `409`. So is `isDefault: true` while another market of the
-version is the default: the default moves with both markets in one
-`PUT …/overlays`, each decided against the `digest` its `GET` answered
-(`expectedDigests`).
+refused with `409` and `SLUG_TAKEN`. So is `isDefault: true` while another
+market of the version is the default, with `DEFAULT_TAKEN`: the default moves
+with both markets in one `PUT …/overlays`, each decided against the `digest`
+its `GET` answered (`expectedDigests`).
 
 ## `GET /registry/v1/admin/versions/{version_id}/markets/{chain_id}/{deployment_key}/overlay`
 ### description:
@@ -2046,9 +2071,10 @@ and the writes are one D1 transaction: a document the parser refuses answers
 naming all of them, with nothing written in either case. A request may move
 the default market or a slug between the markets it names, or swap two slugs,
 in whatever order it names them. Only an importing candidate is
-writable (`409` otherwise), and a request that another write to the
-candidate lands in the middle of is refused with `409`, with nothing
-written: what it decided was decided against what it read.
+writable (`409` with `VERSION_NOT_IMPORTING` otherwise), and a request that
+another write to the candidate lands in the middle of is refused with `409`
+and `OVERLAY_CHANGED`, with nothing written: what it decided was decided
+against what it read.
 
 ```json
 {
@@ -2062,15 +2088,15 @@ written: what it decided was decided against what it read.
 the documents are, by chain id for a network and by `chainId/deploymentKey`
 for a market, the digest of the overlay each was decided against, as the
 `GET` of its scope answers it, or `null` for a scope nobody has reviewed. A
-request where any scope holds another overlay is refused with `409`, and
-nothing is written. Its `details.current` names each such scope as the
-one-document routes do, with the digest it holds now: the scope's type, then
-the key the request names it by (`"market 1/usdc"`). Read each of them again
-through its `GET`, redo the change, and send the digests read. A document it
-names nothing for is written whatever its scope holds; a key that names no
-document of the request, or a value that is not a digest, is refused with
-`400`. The default or a slug moving between two markets is read from both and
-sent back this way:
+request where any scope holds another overlay is refused with `409` and
+`OVERLAY_CHANGED`, and nothing is written. Its `details.current` names each
+such scope as the one-document routes do, with the digest it holds now: the
+scope's type, then the key the request names it by (`"market 1/usdc"`). Read
+each of them again through its `GET`, redo the change, and send the digests
+read. A document it names nothing for is written whatever its scope holds; a
+key that names no document of the request, or a value that is not a digest,
+is refused with `400`. The default or a slug moving between two markets is
+read from both and sent back this way:
 
 ```json
 {

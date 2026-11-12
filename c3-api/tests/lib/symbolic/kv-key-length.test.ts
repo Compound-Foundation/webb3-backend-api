@@ -21,7 +21,7 @@ import type { MarketV1, RegistrySnapshotV1 } from '../../../lib/model/comet-regi
 import { catalogOf } from '../../../src/registry/catalog.js';
 import type { Catalog } from '../../../src/registry/catalog.js';
 import { rewardGroups } from '../../../src/account-handlers/rewards.js';
-import { streamEventsOf } from '../../../src/transaction-history-handler/transaction-history-items-handler.js';
+import { streamEventsOf } from '../../../src/transaction-history-handler/cursor.js';
 
 import { MemoryKv } from '../../util/kv.js';
 import { loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
