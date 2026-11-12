@@ -8,7 +8,6 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
-    "@compound-finance/sleuth": "^1.0.1-alpha4",
     "@ethersproject/abi": "5.6",
     "js-sha3": "0.8.0"
   },
@@ -31,7 +30,6 @@
     "lodash": "^4.17.23",
     "minimatch": "^9.0.7",
     "picomatch": "^2.3.2",
-    "tmp": "^0.2.6",
     "braces": "^3.0.3",
     "cross-spawn": "^7.0.5",
     "path-to-regexp": "^8.2.0",
@@ -41,7 +39,6 @@
     "@babel/helpers": "^7.26.10",
     "@babel/core": "^7.29.6",
     "esbuild": "^0.25.0",
-    "follow-redirects": "^1.15.6",
     "nanoid": "^3.3.8",
     "uuid": "^11.1.1",
     "yaml": "^2.4.2",

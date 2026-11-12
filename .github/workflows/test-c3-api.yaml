@@ -63,5 +63,16 @@ jobs:
       - name: Dry-run stage bundle
         run: npx wrangler deploy --dry-run --env stage --outdir "$RUNNER_TEMP/bundle-stage"
 
+      # fails when the gzip size wrangler reports for the production bundle
+      # is over the budget; with the Solidity compiler in it, the bundle was
+      # about 6,900 KiB, and it is about 200 KiB without it
       - name: Dry-run production bundle
-        run: npx wrangler deploy --dry-run --env production --outdir "$RUNNER_TEMP/bundle-production"
+        env:
+          GZIP_BUDGET_KIB: '1024'
+        run: |
+          output="$(npx wrangler deploy --dry-run --env production --outdir "$RUNNER_TEMP/bundle-production")"
+          echo "$output"
+          gzip_kib="$(sed -nE 's/.*Total Upload: .* gzip: ([0-9]+(\.[0-9]+)?) KiB.*/\1/p' <<< "$output" | head -n 1)"
+          echo "gzip size: $gzip_kib KiB, budget: $GZIP_BUDGET_KIB KiB"
+          test -n "$gzip_kib"
+          awk -v size="$gzip_kib" -v budget="$GZIP_BUDGET_KIB" 'BEGIN { exit !(size + 0 <= budget + 0) }'
