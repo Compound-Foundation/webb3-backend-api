@@ -214,7 +214,71 @@ type RegistryTables = {
   registry_overlay_events:  RegistryOverlayEventRow,
 };
 
+/*
+ * Token policies, from migrations/0005_token_policies.sql: the decisions an
+ * administrator makes about a token, kept by chain id and address rather than
+ * on a versioned row, so that they outlive every activation.
+ */
+type TokenPolicyRow = {
+  chain_id:      number,
+  token_address: Address,
+  is_strategic:  number,
+  updated_at:    string,
+  updated_by:    string,
+};
+
+type TokenPolicyEventRow = {
+  id:                    string,
+  chain_id:              number,
+  token_address:         Address,
+  previous_is_strategic: number | null,
+  is_strategic:          number,
+  actor:                 string,
+  reason:                string,
+  created_at:            string,
+};
+
+/*
+ * The decisions about a collateral of a Comet, a table a kind, which differ in
+ * the name of the flag alone (`Flag`): deprecated collaterals, from
+ * migrations/0006_legacy_collaterals.sql under the names
+ * 0007_deprecated_collaterals.sql gave them, and hidden collaterals, from
+ * migrations/0008_hidden_collaterals.sql. They are kept by chain id, Comet
+ * address and token address rather than on a versioned row, so that they
+ * outlive every activation as token policies do.
+ */
+type CollateralDecisionRow<Flag extends string> = {
+  chain_id:      number,
+  comet_address: Address,
+  token_address: Address,
+} & Record<Flag, number> & {
+  updated_at:    string,
+  updated_by:    string,
+};
+
+type CollateralDecisionEventRow<Flag extends string> = {
+  id:            string,
+  chain_id:      number,
+  comet_address: Address,
+  token_address: Address,
+} & Record<`previous_${Flag}`, number | null> & Record<Flag, number> & {
+  actor:         string,
+  reason:        string,
+  created_at:    string,
+};
+
+type DeprecatedCollateralRow      = CollateralDecisionRow<'is_deprecated'>;
+type DeprecatedCollateralEventRow = CollateralDecisionEventRow<'is_deprecated'>;
+type HiddenCollateralRow          = CollateralDecisionRow<'is_hidden'>;
+type HiddenCollateralEventRow     = CollateralDecisionEventRow<'is_hidden'>;
+
 export type {
+  CollateralDecisionEventRow,
+  CollateralDecisionRow,
+  DeprecatedCollateralEventRow,
+  DeprecatedCollateralRow,
+  HiddenCollateralEventRow,
+  HiddenCollateralRow,
   MarketAssetRow,
   MarketContractRow,
   MarketRow,
@@ -230,6 +294,8 @@ export type {
   SyncRunRow,
   SyncRunStatus,
   SyncTriggerKind,
+  TokenPolicyEventRow,
+  TokenPolicyRow,
   ValidationResultRow,
   VersionStatus,
 };

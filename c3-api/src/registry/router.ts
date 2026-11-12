@@ -7,6 +7,8 @@ import type * as Evaluator from '../evaluator.js';
 import { routeAdmin } from './admin-router.js';
 import type { CachedSnapshot } from './cache.js';
 import { activeSnapshot, cacheDepsOf, isUnreachable, versionSnapshot, warmSnapshot } from './cache.js';
+import { readMarks } from './collateral-decisions.js';
+import { recordDecisions } from './decision-records.js';
 import { RegistryErrorCode, isRegistryError } from './errors.js';
 import { RegistryContext } from './handlers.js';
 import { notifyRegistryEvent } from './notifications.js';
@@ -98,6 +100,17 @@ const ERROR_STATUS: Record<RegistryErrorCode, ApiErrorCode> = {
 };
 
 /*
+ * A release that reached an environment before its token policy, deprecated
+ * collateral or hidden collateral migration finds those tables missing. The
+ * remedy is known and is an operator's, so it is said, rather than answered
+ * as an internal error only the logs explain. Any other table missing is a
+ * fault like the rest, and stays a 500.
+ */
+function missingSchema(error: unknown): boolean {
+  return /no such table: (token_polic|deprecated_collateral|hidden_collateral)/i.test(String(error));
+}
+
+/*
  * What a failure means to a client, or null for a fault the client is told
  * nothing about: what it means on every route (knownFailure), and what only
  * the registry's routes read into it. A registry error keeps its own code in
@@ -124,6 +137,12 @@ function asApiError(error: unknown): ApiError | null {
    */
   if (isUnreachable(error)) {
     return new ApiError('UPSTREAM_UNAVAILABLE', `a service the registry depends on did not answer`);
+  }
+  if (missingSchema(error)) {
+    return new ApiError(
+      'UPSTREAM_UNAVAILABLE',
+      `the database is missing tables this release needs: apply the D1 migrations to this environment`,
+    );
   }
   return null;
 }
@@ -171,6 +190,8 @@ async function routeRegistry(
         debug.warn(`registry snapshot not warmed`, { versionId, error });
       }
     },
+    marks:   () => readMarks(deps),
+    record:  kind => recordDecisions(kind, deps),
     // a task the runtime sees through after the answer: the command never waits on the webhook
     notify:  event => waitUntil(notifyRegistryEvent(env, event, { debug, requestId })),
   };

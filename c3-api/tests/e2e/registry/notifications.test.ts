@@ -14,6 +14,8 @@ import type { RegistryDatabase } from '../../util/registry-database.js';
 import { approveSeeded, loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
 import { makeTestEnv } from '../../util/test-env.js';
 
+import { DEPRECATED_COLLATERALS, HIDDEN_COLLATERALS, TOKEN_POLICIES } from './decision-scenarios.js';
+
 import '../../../shim/node-self.js';
 
 /*
@@ -499,4 +501,39 @@ t.test('an approval refused is not announced', async t => {
     t.equal(tasks.length, 0, 'and leaves nothing to announce');
   }
   t.same(all, [], 'and no request leaves the worker');
+});
+
+/*
+ * A decision about a token or a collateral takes effect at once and is one
+ * admin's (decision-handlers.ts): nothing announces it, whether it is set on
+ * its own or a list that changes it is applied.
+ */
+t.test('a decision about a token or a collateral is not announced', async t => {
+  const registry = await activeRegistryDatabase();
+  t.teardown(() => registry.dispose());
+  const env = await envWith(registry);
+  const { posted } = webhook(t);
+
+  for (const kind of [ TOKEN_POLICIES, DEPRECATED_COLLATERALS, HIDDEN_COLLATERALS ]) {
+    const set = invocation();
+    const decided = await C3Api.fetch(new Request(`https://api.test.local${kind.path(1, kind.subject)}`, {
+      method:  'PATCH',
+      headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ [kind.flag]: true, reason: 'decided on its own' }),
+    }), env, set.execution);
+    t.equal(decided.status, 200, `a ${kind.label} decision is set`);
+
+    // the list as exported, with the decision just set reversed
+    const exported = await (await get(env, kind.list.export)).json() as Record<string, unknown>;
+    const rows     = exported[kind.list.key] as Array<Record<string, unknown>>;
+    const reversed = { ...exported, reason: 'reversed by a list', [kind.list.key]: rows.map(row => (
+      Object.entries(kind.subject).every(([ name, address ]) => String(row[name]).toLowerCase() === address) ? { ...row, [kind.flag]: false } : row
+    )) };
+    const applied = invocation();
+    const answer  = await post(env, kind.list.apply, reversed, applied.execution);
+    t.equal(answer.status, 200, 'and reversed by a list applied');
+    t.match(await answer.json(), { summary: { changed: 1 } }, 'which changes it');
+    await Promise.allSettled([ ...set.tasks, ...applied.tasks ]);
+  }
+  t.same(posted, [], 'and nothing of either is posted to the webhook');
 });

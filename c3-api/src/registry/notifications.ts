@@ -18,7 +18,8 @@ import { webhookUrlOf } from './config.js';
  * change no answer the API gives, and what the overlay writes changed reaches
  * the channel with the approval and the move that switches it on, in their
  * summaries; bringing an environment up writes a hundred documents, which
- * would drown it.
+ * would drown it. A decision about a token or a collateral is not announced
+ * either: it takes effect at once, one admin's alone (decision-handlers.ts).
  *
  * The webhook is COMET_REGISTRY_WEBHOOK_URL, a Slack incoming webhook, whose
  * URL is its credential: whoever holds it can post to the channel. It is read

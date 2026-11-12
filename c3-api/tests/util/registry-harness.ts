@@ -5,7 +5,7 @@ import type { TestHarness } from 'wrangler';
 
 import type { Env } from '../../entrypoint.js';
 
-import { applyMigrations } from './d1.js';
+import { RELEASED_BEFORE, applyMigrations } from './d1.js';
 import { registryWorker } from './registry-worker.js';
 import { ADMIN_TOKENS, tokenList } from './test-env.js';
 import type { ListedToken } from './test-env.js';
@@ -29,11 +29,18 @@ type HarnessOptions = {
   vars?:   Record<string, string>,
 };
 
+/*
+ * The migrations a fresh database is given: all of them, or those up to and
+ * including `through`, as a release deployed before its own migrations finds
+ * them, with the migrations of the release before (RELEASED_BEFORE).
+ */
+type Migrated = { through?: string | undefined };
+
 type RegistryHarness = {
   server:        TestHarness,
   // the worker's environment over new storage, migrated
-  freshEnv:      () => Promise<Env>,
-  freshDatabase: () => Promise<D1Database>,
+  freshEnv:      (migrated?: Migrated) => Promise<Env>,
+  freshDatabase: (migrated?: Migrated) => Promise<D1Database>,
   // the worker again, with `vars` set over the harness's own, until the next fresh environment
   withVars:      (vars: Record<string, string>) => Promise<void>,
   // the worker again, with secrets set beside its token list, until the next fresh environment
@@ -54,16 +61,16 @@ async function registryHarness({ admin = false, tokens = [], vars }: HarnessOpti
   });
   t.teardown(() => server.close());
 
-  const freshEnv = async (): Promise<Env> => {
+  const freshEnv = async ({ through }: Migrated = {}): Promise<Env> => {
     await server.reset();
     const env = await server.getWorker<Env>().getEnv();
-    await applyMigrations(env.APP_DB);
+    await applyMigrations(env.APP_DB, undefined, through === undefined ? {} : { through, besides: RELEASED_BEFORE });
     return env;
   };
   return {
     server,
     freshEnv,
-    freshDatabase: async () => (await freshEnv()).APP_DB,
+    freshDatabase: async migrated => (await freshEnv(migrated)).APP_DB,
     withVars:      async more => { await server.update({ workers: [ worker({ more }) ] }); },
     withSecrets:   async beside => { await server.update({ workers: [ worker({ beside }) ] }); },
   };
