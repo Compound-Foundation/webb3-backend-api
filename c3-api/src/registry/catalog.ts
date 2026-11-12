@@ -7,6 +7,8 @@ import { keccak256 } from '../../lib/hash.js';
 import {
   Comet,
   Contract,
+  ERC20,
+  PriceFeed,
   StandaloneContract,
   UntypedContract,
 } from '../../lib/well-known/contracts/types.js';
@@ -45,6 +47,17 @@ type CatalogMarket = {
   deploymentKey: string,
   market:        ServedMarket,
   comet:         RegistryComet,
+};
+
+/*
+ * A market the version holds without serving it, as governance names it: a
+ * contract at its Comet that only names it, and the tokens it names and the
+ * feeds it reads, at the scale the version read for each.
+ */
+type UnservedMarket = {
+  comet:  Contract,
+  tokens: Contract<StandaloneContract<ERC20>>[],
+  feeds:  Contract<StandaloneContract<PriceFeed>>[],
 };
 
 type Catalog = {
@@ -96,12 +109,14 @@ type Catalog = {
   renamedSymbolAt(network: KnownNetwork.Name, address: Address): string | null,
   /*
    * The markets of the version that markets() leaves out, disabled ones, as
-   * contracts that only name them, by the name a served market has. A
-   * proposal names a market whatever the version says of it — it sets one up
-   * before it is served, and retires one no longer served — so governance
-   * names these too. Nothing else may resolve a market through them.
+   * contracts that only name them, by the name a served market has, each with
+   * the tokens it names and the feeds it reads. A proposal names a market
+   * whatever the version says of it — it sets one up before it is served, and
+   * retires one no longer served — so governance names these too, and their
+   * tokens and feeds as it names a served market's. Nothing else may resolve
+   * a market through them.
    */
-  unservedMarkets(): Contract[],
+  unservedMarkets(): UnservedMarket[],
 };
 
 function networkName(network: NetworkV1): KnownNetwork.Name | null {
@@ -245,6 +260,38 @@ function cometOf(
 }
 
 /*
+ * A market the version holds without serving it, at its Comet, as governance
+ * names it: by its contract name, or its label where it has none, beside
+ * what a served market's Comet carries (cometOf) — its base, reward and
+ * collateral tokens and every feed it reads, the reward token only where the
+ * market pays one and its feed only where the version prices it.
+ */
+function unservedMarketOf(network: KnownNetwork.Name, market: MarketV1, comet: Address): UnservedMarket {
+  const block      = market.creationBlock;
+  const reward     = market.contracts.rewards === null ? null : market.rewardAsset;
+  const rewardFeed = reward?.priceFeed ?? null;
+  return {
+    comet: UntypedContract('Comet', {
+      network,
+      address:     shown(comet),
+      displayName: contractNameOf(market),
+      block:       { number: block },
+    }),
+    tokens: [
+      market.baseAsset.token,
+      ...(reward === null ? [] : [ reward.token ]),
+      ...market.collateralAssets.map(asset => asset.token),
+    ].map(token => tokenContract(network, token, block)),
+    feeds: [
+      market.baseAsset.priceFeed,
+      ...(market.baseAsset.usdPriceFeed === null ? [] : [ market.baseAsset.usdPriceFeed ]),
+      ...(rewardFeed === null ? [] : [ rewardFeed ]),
+      ...market.collateralAssets.map(asset => asset.priceFeed),
+    ].map(feed => feedContract(network, feed, block)),
+  };
+}
+
+/*
  * The exceptions of a network that still apply.
  *
  * An exception may carry an expiry, and an expired one must stop applying
@@ -380,15 +427,10 @@ function catalogOf(snapshot: RegistrySnapshotV1, now: Date = new Date()): Catalo
    * A network this API cannot name has no contracts to name a market among,
    * and a market without a Comet has no address to name, so neither is here.
    */
-  const unserved: Contract[] = snapshot.networks.flatMap(network => {
+  const unserved: UnservedMarket[] = snapshot.networks.flatMap(network => {
     const name = networkName(network);
     return name === null ? [] : network.markets.flatMap(market => (
-      isServed(market) || market.contracts.comet === null ? [] : [ UntypedContract('Comet', {
-        network:     name,
-        address:     shown(market.contracts.comet),
-        displayName: contractNameOf(market),
-        block:       { number: market.creationBlock },
-      }) ]
+      isServed(market) || market.contracts.comet === null ? [] : [ unservedMarketOf(name, market, market.contracts.comet) ]
     ));
   });
 
@@ -408,5 +450,5 @@ function catalogOf(snapshot: RegistrySnapshotV1, now: Date = new Date()): Catalo
   };
 }
 
-export type { Catalog, CatalogMarket, RegistryComet, ServedMarket };
+export type { Catalog, CatalogMarket, RegistryComet, ServedMarket, UnservedMarket };
 export { catalogOf, isServed, servedNetworks };

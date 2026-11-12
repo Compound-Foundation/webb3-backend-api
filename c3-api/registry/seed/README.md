@@ -118,8 +118,10 @@ request's.
 
 Every value is one the API acted on before the registry, taken from where it
 was decided then. The static constants below are `lib/well-known/contracts`
-as the file was frozen from them, at `56d75ff`: their Comets, and the feeds
-only those named, have been removed since.
+as the file was frozen from them, at `56d75ff`: their Comets, their price
+feeds and their tokens have been removed since, but for COMP, WETH on
+Ethereum, Optimism and Base, V2's tokens, Arbitrum's USDC.e, and the tokens
+and the two feeds of Ethereum they write in lowercase.
 
 | Field | Where it comes from |
 |---|---|

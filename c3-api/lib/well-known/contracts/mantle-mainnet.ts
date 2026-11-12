@@ -1,51 +1,9 @@
 import {
   ERC20,
-  PriceFeed,
   UntypedContract,
   StaticWellKnownContracts,
 } from './utils.js';
 
-const USDe = ERC20('USDe', <const>{
-  aliases: [ 'default' ],
-  description: 'USDe',
-  decimals: 18,
-  network: 'mantle-mainnet',
-  address: '0x5d3a1Ff2b6BAb83b63cd9AD0787074081a52ef34',
-  block: {
-    number: 59988676,
-    timestamp: 1709926643
-  },
-});
-const mETH = ERC20('mETH', <const>{
-  description: 'mETH',
-  decimals: 18,
-  network: 'mantle-mainnet',
-  address: '0xcDA86A272531e8640cD7F1a92c01839911B90bb0',
-  block: {
-    number: 22293073,
-    timestamp: 1700538657
-  },
-});
-const WETH = ERC20('WETH', <const>{
-  description: 'Wrapped Ether',
-  decimals: 18,
-  network: 'mantle-mainnet',
-  address: '0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111',
-  block: {
-    number: 0,
-    timestamp: 1688314886
-  },
-});
-const FBTC = ERC20('FBTC', <const>{
-  description: 'FunctionBTC',
-  decimals: 8,
-  network: 'mantle-mainnet',
-  address: '0xC96dE26018A54D51c097160568752c4E3BD6C364',
-  block: {
-    number: 64456136,
-    timestamp: 1717042584
-  },
-});
 const COMP = ERC20('COMP', <const>{
   description: 'Compound Governance Token',
   decimals: 18,
@@ -57,7 +15,7 @@ const COMP = ERC20('COMP', <const>{
   },
 });
 
-const erc20s = <const>([ USDe, mETH, COMP, FBTC, WETH ]);
+const erc20s = [ COMP ] as const;
 
 const CometAdmin = UntypedContract('CometAdmin', <const>{
   network: 'mantle-mainnet',
@@ -87,28 +45,6 @@ const Comet_01usde_Rewards = UntypedContract('cUSDev3Rewards', <const>{
   },
 });
 
-const USDe_USD_priceFeed = PriceFeed(<const>{
-  aliases: ['cUSDev3-USD'],
-  decimals: 18,
-  network: 'mantle-mainnet',
-  address: '0xc49E06B50FCA57751155DA78803DCa691AfcDB22',
-  block: {
-    number: 70142928,
-    timestamp: 1728416168
-  },
-});
-
-const COMP_USD_priceFeed = PriceFeed(<const>{
-  aliases: ['COMP-USD'],
-  decimals: 8,
-  network: 'mantle-mainnet',
-  address: '0x0cd478875450BcdC75E16FF6084aF3a4782610b9',
-  block: {
-    number: 73249502,
-    timestamp: 1734629647
-  },
-});
-
 const Bulker_01usde = UntypedContract('Bulker', <const>{
   aliases: ['01-usde', 'cUSDev3'],
   network: 'mantle-mainnet',
@@ -121,7 +57,6 @@ const Bulker_01usde = UntypedContract('Bulker', <const>{
 
 const market01usde = <const>([
   CometAdmin, Comet_01usde_Rewards, CometFactory, Bulker_01usde,
-  USDe_USD_priceFeed, COMP_USD_priceFeed,
 ]);
 
 const Configurator = UntypedContract('Configurator', <const>{

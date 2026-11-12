@@ -1,21 +1,8 @@
 import {
   ERC20,
-  PriceFeed,
   UntypedContract,
   StaticWellKnownContracts,
 } from './utils.js';
-
-const OP = ERC20('OP', <const>{
-  description: 'OP',
-  decimals: 18,
-  // location
-  network: 'optimism-mainnet',
-  address: '0x4200000000000000000000000000000000000042',
-  block: {
-    number: 6490467,
-    timestamp: 1650979836,
-  },
-});
 
 const COMP = ERC20('COMP', <const>{
   aliases: ['default'],
@@ -27,18 +14,6 @@ const COMP = ERC20('COMP', <const>{
   block: {
     number: 116849392,
     timestamp: 1709297561,
-  },
-});
-
-const WBTC = ERC20('WBTC', <const>{
-  description: 'Wrapped BTC',
-  decimals: 8,
-  // location
-  network: 'optimism-mainnet',
-  address: '0x68f180fcCe6836688e9084f035309E29Bf0A2095',
-  block: {
-    number: 0,
-    timestamp: 1610639500,
   },
 });
 
@@ -55,54 +30,8 @@ const WETH = ERC20('WETH', <const>{
   },
 });
 
-const USDC = ERC20('USDC', <const>{
-  description: 'USD Coin',
-  decimals: 6,
-  // location
-  network: 'optimism-mainnet',
-  address: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
-  block: {
-    number: 38198364,
-    timestamp: 1668453318,
-  },
-});
-
-const USDT = ERC20('USDT', <const>{
-  description: 'Tether',
-  decimals: 6,
-  // location
-  network: 'optimism-mainnet',
-  address: '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58',
-  block: {
-    number: 0,
-    timestamp: 1610639500,
-  },
-});
-
-const wstETH = ERC20('wstETH', <const>{
-  description: 'Lido Wrapped Staked ETH',
-  decimals: 18,
-  network: 'optimism-mainnet',
-  address: '0x1F32b1c2345538c0c6f582fCB022739c4A194Ebb',
-  block: {
-    number: 17831118,
-    timestamp: 1659687832,
-  },
-});
-
-const rETH = ERC20('rETH', <const>{
-  description: 'Rocket Pool ETH',
-  decimals: 18,
-  network: 'optimism-mainnet',
-  address: '0x9Bcef72be871e61ED4fBbc7630889beE758eb81D',
-  block: {
-    number: 113681,
-    timestamp: 1637032878,
-  },
-});
-
 const erc20s = <const>([
-  WETH, COMP, WBTC, USDC, USDT, OP, wstETH, rETH
+  WETH, COMP
 ]);
 
 const CometAdmin = UntypedContract('CometAdmin', <const>{
@@ -132,58 +61,6 @@ const Comet_Rewards = UntypedContract('CometRewards', <const>{
   },
 });
 
-const USDC_USD_priceFeed = PriceFeed(<const>{
-  decimals: 8,
-  network: 'optimism-mainnet',
-  address: '0x16a9FA2FDa030272Ce99B29CF780dFA30361E0f3',
-  block: {
-    number: 2771613,
-    timestamp: 1643059882
-  },
-});
-
-const USDT_USD_priceFeed = PriceFeed(<const>{
-  decimals: 8,
-  network: 'optimism-mainnet',
-  address: '0xECef79E109e997bCA29c1c0897ec9d7b03647F5E',
-  block: {
-    number: 2771389,
-    timestamp: 1643059494
-  },
-});
-
-const COMP_USD_priceFeed = PriceFeed(<const>{
-  aliases: ['COMP-USD'],
-  decimals: 8,
-  network: 'optimism-mainnet',
-  address: '0xe1011160d78a80E2eEBD60C228EEf7af4Dfcd4d7',
-  block: {
-    number: 106877497,
-    timestamp: 1689353771
-  },
-});
-
-const WETH_ETH_priceFeedConstant = PriceFeed(<const>{
-  decimals: 8,
-  network: 'optimism-mainnet',
-  address: '0x0be923b1716115d742E35Fa359d415598c50510F',
-  block: {
-    number: 122730199,
-    timestamp: 1721059175,
-  },
-});
-
-const WETH_USD_priceFeed = PriceFeed(<const>{
-  aliases: ['WETH-USD'],
-  decimals: 8,
-  network: 'optimism-mainnet',
-  address: '0x13e3Ee699D1909E989722E753853AE30b17e08c5',
-  block: {
-    number: 2014119,
-    timestamp: 1641488614,
-  },
-});
-
 const Bulker = UntypedContract('Bulker', <const>{
   aliases: ['01-usdc', 'cUSDCv3', '01-usdt', 'cUSDTv3', '01-weth', 'cWETHv3'],
   network: 'optimism-mainnet',
@@ -196,9 +73,6 @@ const Bulker = UntypedContract('Bulker', <const>{
 
 const markets = <const>([
   CometAdmin, Comet_Rewards, CometFactory, Bulker,
-  USDC_USD_priceFeed, USDT_USD_priceFeed,
-  COMP_USD_priceFeed,
-  WETH_ETH_priceFeedConstant, WETH_USD_priceFeed
 ]);
 
 const Configurator = UntypedContract('Configurator', <const>{
