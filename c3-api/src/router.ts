@@ -145,7 +145,8 @@ async function route(
   } catch (e: unknown) {
     context.debug.clearDanglingGroups();
     context.debug.error(e, (e as any).cause);
-    Sentry.captureException(e);
+    // The 500 below is unexpected, so report it as unhandled.
+    Sentry.captureException(e, { mechanism: { handled: false, type: 'c3-api.router' } });
     return new Response((e as Error).message, { status: 500 });
   }
 }

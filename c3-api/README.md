@@ -114,7 +114,8 @@ The worker reports errors and traces to the Sentry project
 [`lib/sentry.ts`](./lib/sentry.ts) holds the SDK options. It samples every trace
 locally and 10% in `stage` and `production`, leaves out client IP addresses and
 HTTP bodies, and replaces the node-proxy, Tally and Blocknative keys with
-`[Filtered]` in everything it sends.
+`[Filtered]` in everything it sends. Only requests to the node-provider proxy
+carry Sentry trace headers, so traces continue into the proxy.
 
 `npm run deploy:stage` and `npm run deploy:production` deploy through
 [`../scripts/deploy-with-sentry.sh`](../scripts/deploy-with-sentry.sh), which

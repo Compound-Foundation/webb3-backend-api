@@ -61,7 +61,8 @@ const handler = {
         defer:    context.waitUntil,
       });
     } catch (error) {
-      Sentry.captureException(error);
+      // The 500 below is unexpected, so report it as unhandled.
+      Sentry.captureException(error, { mechanism: { handled: false, type: 'node-provider-proxy.fetch' } });
       return cors(origin, new Response(`unexpected error`, { status: 500 }));
     }
     // Always respond with proper CORS headers.

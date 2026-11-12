@@ -36,7 +36,8 @@ The proxy reports errors and traces to the Sentry project
 each environment, and [`src/sentry.ts`](./src/sentry.ts) holds the SDK options.
 It samples every trace locally and 10% in production, leaves out client IP
 addresses and HTTP bodies, and replaces the app key and every provider secret
-with `[Filtered]` in everything it sends.
+with `[Filtered]` in everything it sends. Requests to node providers carry no
+Sentry trace headers.
 
 The `npm run deploy:*` scripts deploy through
 [`../scripts/deploy-with-sentry.sh`](../scripts/deploy-with-sentry.sh), which

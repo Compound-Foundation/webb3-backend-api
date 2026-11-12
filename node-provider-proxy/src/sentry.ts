@@ -2,40 +2,77 @@ import { rewriteFramesIntegration } from '@sentry/cloudflare';
 import type { CloudflareOptions } from '@sentry/cloudflare';
 
 /*
- * The app key and node-provider API keys travel inside URL paths (for example
- * https://node-provider-v3-api.compound.xyz/<network>/<app key> and
- * https://<subdomain>.g.alchemy.com/v2/<key>), which the SDK's key-name
- * denylist does not cover. Every payload the SDK sends passes through
- * `redact`, which replaces each occurrence of a secret value with "[Filtered]".
+ * Secret redaction. The app key and node-provider API keys travel inside URL
+ * paths, such as https://<proxy host>/<network>/<app key> and
+ * https://<subdomain>.g.alchemy.com/v2/<key>, which the SDK's key-name
+ * denylist does not cover. The beforeSend, beforeSendSpan, beforeSendLog and
+ * beforeBreadcrumb hooks replace each occurrence of a secret value with
+ * "[Filtered]". They build redacted copies, so objects the worker still holds
+ * (such as arguments passed to console.*) are left unchanged.
  */
 const FILTERED = '[Filtered]';
 
 // Shorter values (empty strings, placeholders) would match ordinary text.
 const MIN_SECRET_LENGTH = 8;
 
-function redactValues(
-  payload: unknown,
-  secrets: string[],
-  seen: WeakSet<object>,
-): unknown {
-  if (typeof payload === 'string') {
-    let redacted = payload;
-    for (const secret of secrets) {
-      if (redacted.includes(secret)) {
-        redacted = redacted.split(secret).join(FILTERED);
-      }
+function redactString(text: string, secrets: string[]): string {
+  let redacted = text;
+  for (const secret of secrets) {
+    if (redacted.includes(secret)) {
+      redacted = redacted.split(secret).join(FILTERED);
     }
-    return redacted;
   }
-  if (payload === null || typeof payload !== 'object' || seen.has(payload)) {
-    return payload;
+  return redacted;
+}
+
+function redactValue(
+  value: unknown,
+  secrets: string[],
+  copies: Map<object, unknown>,
+): unknown {
+  if (typeof value === 'string') {
+    return redactString(value, secrets);
   }
-  seen.add(payload);
-  const record = payload as Record<string, unknown>;
-  for (const key of Object.keys(record)) {
-    record[key] = redactValues(record[key], secrets, seen);
+  if (value === null || typeof value !== 'object') {
+    return value;
   }
-  return payload;
+  if (copies.has(value)) {
+    return copies.get(value);
+  }
+  if (Array.isArray(value)) {
+    const copy: unknown[] = [];
+    copies.set(value, copy);
+    for (const item of value) {
+      copy.push(redactValue(item, secrets, copies));
+    }
+    return copy;
+  }
+  if (value instanceof Error) {
+    // An error's name, message and stack are not enumerable.
+    const copy: Record<string, unknown> = {
+      name: value.name,
+      message: redactString(value.message, secrets),
+    };
+    if (value.stack !== undefined) {
+      copy.stack = redactString(value.stack, secrets);
+    }
+    copies.set(value, copy);
+    return copy;
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    // Class instances such as URL or Headers: keep their serialised form.
+    const toJSON = (value as { toJSON?: () => unknown }).toJSON;
+    return typeof toJSON === 'function'
+      ? redactValue(toJSON.call(value), secrets, copies)
+      : redactString(String(value), secrets);
+  }
+  const copy: Record<string, unknown> = {};
+  copies.set(value, copy);
+  for (const [key, item] of Object.entries(value)) {
+    copy[key] = redactValue(item, secrets, copies);
+  }
+  return copy;
 }
 
 function makeRedactor(secretValues: unknown[]) {
@@ -43,28 +80,49 @@ function makeRedactor(secretValues: unknown[]) {
     (value): value is string =>
       typeof value === 'string' && value.length >= MIN_SECRET_LENGTH,
   );
-  return <T>(payload: T): T =>
+  const redact = <T>(payload: T): T =>
     secrets.length === 0
       ? payload
-      : redactValues(payload, secrets, new WeakSet()) as T;
+      : redactValue(payload, secrets, new Map()) as T;
+  /*
+   * An event's sdkProcessingMetadata holds SDK objects (scopes, the request)
+   * that the SDK reads after beforeSend and that are never sent as they are.
+   * Only its dynamic sampling context, which becomes the envelope's trace
+   * header, is redacted.
+   */
+  const redactEvent = <T extends { sdkProcessingMetadata?: Record<string, unknown> }>(
+    event: T,
+  ): T => {
+    const { sdkProcessingMetadata, ...rest } = event;
+    const redacted = redact(rest) as T;
+    if (sdkProcessingMetadata !== undefined) {
+      const { dynamicSamplingContext } = sdkProcessingMetadata;
+      redacted.sdkProcessingMetadata = dynamicSamplingContext === undefined
+        ? sdkProcessingMetadata
+        : { ...sdkProcessingMetadata, dynamicSamplingContext: redact(dynamicSamplingContext) };
+    }
+    return redacted;
+  };
+  return { redact, redactEvent };
 }
 
 /*
- * Wrangler bundles the worker into a single index.js. Its frames are renamed to
- * app:///index.js, the name scripts/deploy-with-sentry.sh uploads the source map
- * under, so Sentry can map them back to the TypeScript source wherever the
- * runtime reports the bundle from.
+ * Wrangler bundles the worker into a single index.js. Its frames are renamed
+ * to app:///index.js, the name scripts/deploy-with-sentry.sh
+ * uploads the source map under, so Sentry can map them back to the TypeScript
+ * source wherever the runtime reports the bundle from. Sentry looks the map up
+ * by abs_path, so both fields are set.
  */
 const BUNDLE_FILE = 'index.js';
+const BUNDLE_PATH = `app:///${BUNDLE_FILE}`;
 
-const rewriteBundleFrames = rewriteFramesIntegration({
-  iteratee: (frame) => {
-    if (frame.filename?.split('/').pop() === BUNDLE_FILE) {
-      frame.filename = `app:///${BUNDLE_FILE}`;
-    }
-    return frame;
-  },
-});
+function rewriteBundleFrame<T extends { filename?: string; abs_path?: string }>(frame: T): T {
+  if (frame.filename?.split('/').pop() === BUNDLE_FILE) {
+    frame.filename = BUNDLE_PATH;
+    frame.abs_path = BUNDLE_PATH;
+  }
+  return frame;
+}
 
 interface SentryEnv {
   SENTRY_DSN?: string;
@@ -83,7 +141,7 @@ interface SentryEnv {
  */
 function sentryOptions(env: SentryEnv): CloudflareOptions {
   const environment = env.SENTRY_ENVIRONMENT ?? 'local';
-  const redact = makeRedactor(
+  const { redact, redactEvent } = makeRedactor(
     Object.entries(env)
       .filter(([name]) => !name.startsWith('SENTRY_'))
       .map(([, value]) => value),
@@ -93,18 +151,24 @@ function sentryOptions(env: SentryEnv): CloudflareOptions {
     environment,
     // Sample every trace locally; 10% of traces in deployed environments.
     tracesSampleRate: environment === 'local' ? 1.0 : 0.1,
+    // beforeSendSpan only runs for streamed spans, so SENTRY_TRACE_LIFECYCLE
+    // must not switch to static transactions.
+    traceLifecycle: 'stream',
+    // Never send trace headers to node providers: the baggage header carries
+    // the DSN public key.
+    tracePropagationTargets: [],
     dataCollection: {
       // Do not attach client IP addresses to events.
       userInfo: false,
       // RPC request and response bodies are large and add little to errors.
       httpBodies: [],
     },
-    integrations: [rewriteBundleFrames],
-    beforeSend: (event) => redact(event),
+    integrations: [rewriteFramesIntegration({ iteratee: rewriteBundleFrame })],
+    beforeSend: (event) => redactEvent(event),
     beforeSendSpan: (span) => redact(span),
     beforeSendLog: (log) => redact(log),
     beforeBreadcrumb: (breadcrumb) => redact(breadcrumb),
   };
 }
 
-export { sentryOptions, makeRedactor };
+export { sentryOptions, makeRedactor, rewriteBundleFrame };
