@@ -11,6 +11,7 @@ import { recordValidationResults } from '../../../src/registry/repository.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * The registry HTTP API, served by the real worker in workerd over local D1.
@@ -21,17 +22,27 @@ import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate, validateS
  * CORS headers the router sets and the security headers the entrypoint adds,
  * authentication, and the error envelope.
  */
+// the token most cases send, test-admin's
 const ADMIN_TOKEN = 'registry-admin-token-for-tests';
 
+// three more tokens of the list, each recorded under its holder's name: two admins and an operator
+const ALICE = 'registry-alice-token-for-tests';
+const BOB   = 'registry-bob-token-for-tests';
+const OLGA  = 'registry-olga-token-for-tests';
+
 /*
- * The worker stores only the hash of the admin token, so the harness is given
- * the hash as a secret and the tests present the token itself.
+ * The worker stores only the hashes of the admin tokens, so the harness is
+ * given the hashes as secrets and the tests present the tokens themselves.
  */
 const server = createTestHarness({
-  workers: [ {
-    configPath: './wrangler.toml',
-    secrets:    { COMET_REGISTRY_ADMIN_TOKEN_HASH: await sha256Hex(ADMIN_TOKEN) },
-  } ],
+  workers: [ registryWorker({
+    COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([
+      { name: 'test-admin', sha256: await sha256Hex(ADMIN_TOKEN), role: 'admin',    notAfter: null },
+      { name: 'alice',      sha256: await sha256Hex(ALICE),       role: 'admin',    notAfter: null },
+      { name: 'bob',        sha256: await sha256Hex(BOB),         role: 'admin',    notAfter: null },
+      { name: 'olga',       sha256: await sha256Hex(OLGA),        role: 'operator', notAfter: null },
+    ]),
+  }) ],
 });
 
 t.before(async () => {
@@ -68,6 +79,18 @@ function admin(path: string, body: unknown = {}, token: string = ADMIN_TOKEN): [
   } ];
 }
 
+/*
+ * Switches a validated version on as the registry has it done: bob approves
+ * it against the version it replaces, `replacing`, and alice, another admin,
+ * activates it.
+ */
+async function switchOn(versionId: string, reason: string, replacing: string | null = null): ReturnType<typeof server.fetch> {
+  await server.fetch(...admin(
+    `/registry/v1/admin/versions/${versionId}/approve`, { reason: `approved: ${reason}`, expectedActiveVersionId: replacing }, BOB,
+  ));
+  return server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/activate`, { reason }, ALICE));
+}
+
 t.test('the bootstrap read serves the active snapshot, or says there is none', async t => {
   const db = await freshDatabase();
 
@@ -79,7 +102,7 @@ t.test('the bootstrap read serves the active snapshot, or says there is none', a
   t.equal(missing.headers.get('x-registry-version'), null, 'and no version headers: there is no version');
 
   const versionId = await seedValidated(db);
-  await server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'first activation' }));
+  await switchOn(versionId, 'first activation');
 
   const response = await server.fetch('/registry/v1/active');
   t.equal(response.status, 200);
@@ -101,7 +124,7 @@ t.test('the bootstrap read serves the active snapshot, or says there is none', a
 t.test('a snapshot is cacheable by version and checksum', async t => {
   const db        = await freshDatabase();
   const versionId = await seedValidated(db);
-  await server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'activate' }));
+  await switchOn(versionId, 'activate');
 
   const first = await server.fetch('/registry/v1/active');
   const etag  = first.headers.get('etag');
@@ -150,7 +173,7 @@ t.test('a snapshot is cacheable by version and checksum', async t => {
 t.test('a conditional read is answered 304 by the weak tag, by a star, and by a list that holds the tag', async t => {
   const db        = await freshDatabase();
   const versionId = await seedValidated(db);
-  await server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'activate' }));
+  await switchOn(versionId, 'activate');
 
   const etag     = (await server.fetch('/registry/v1/active')).headers.get('etag')!;
   const answered = async (header: string) => (await server.fetch('/registry/v1/active', { headers: { 'If-None-Match': header } })).status;
@@ -181,7 +204,7 @@ t.test('a conditional read is answered 304 by the weak tag, by a star, and by a 
 t.test('a chain id in a path is read in its one spelling only', async t => {
   const db        = await freshDatabase();
   const versionId = await seedValidated(db);
-  await server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'activate' }));
+  await switchOn(versionId, 'activate');
   const { versionId: draft } = await seedCandidate(db, snapshot, { versionId: randomUUID(), attempt: 2 });
 
   const comet = snapshot.networks.find(network => network.chainId === 1)!.markets[0]!.contracts.comet!;
@@ -210,7 +233,7 @@ t.test('a chain id in a path is read in its one spelling only', async t => {
 t.test('the convenience reads serve the same objects as the snapshot', async t => {
   const db        = await freshDatabase();
   const versionId = await seedValidated(db);
-  await server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'activate' }));
+  await switchOn(versionId, 'activate');
 
   const networks = await (await server.fetch('/registry/v1/networks')).json() as {
     registryVersion: { id: string, checksum: string },
@@ -263,7 +286,7 @@ t.test('the convenience reads serve the same objects as the snapshot', async t =
 t.test('a public read that fails after the version was read names the version', async t => {
   const db        = await freshDatabase();
   const versionId = await seedValidated(db);
-  await server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'activate' }));
+  await switchOn(versionId, 'activate');
 
   for (const [ path, status ] of [
     [ '/registry/v1/networks/999/markets', 404 ],
@@ -308,7 +331,7 @@ t.test('a disabled market is not served by any public read', async t => {
      WHERE registry_version_id = ?1 AND deployment_key = 'weth'`
   ).bind(versionId).run();
   await validateSeeded(db, versionId);
-  await server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'activate' }));
+  await switchOn(versionId, 'activate');
 
   const weth = '0xa17581a9e3356d9a858b789d68b4d866e593ae94';
   const active = await (await server.fetch('/registry/v1/active')).json() as typeof snapshot;
@@ -347,7 +370,7 @@ t.test('a network that serves no market is not listed by any public read', async
   const validated = await server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/validate`, {}));
   t.equal((await validated.json() as { version: { status: string } }).version.status, 'validated',
     'a network nobody reviewed that serves nothing does not hold the version back');
-  await server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'activate' }));
+  await switchOn(versionId, 'activate');
 
   const listed = async (path: string) => ((await (await server.fetch(path)).json()) as { networks: Array<{ chainId: number }> })
     .networks.map(network => network.chainId);
@@ -404,9 +427,9 @@ t.test('a network nobody reviewed may not serve a market', async t => {
 t.test('a retained version can be refetched by id', async t => {
   const db      = await freshDatabase();
   const first   = await seedValidated(db);
-  await server.fetch(...admin(`/registry/v1/admin/versions/${first}/activate`, { reason: 'activate' }));
+  await switchOn(first, 'activate');
   const second  = await seedValidated(db, randomUUID());
-  await server.fetch(...admin(`/registry/v1/admin/versions/${second}/activate`, { reason: 'activate the second' }));
+  await switchOn(second, 'activate the second', first);
 
   const pinned = await server.fetch(`/registry/v1/versions/${first}`);
   t.equal(pinned.status, 200, 'the version a session pinned is still served');
@@ -471,26 +494,30 @@ t.test('activation and rollback are idempotent and audited', async t => {
   const first  = await seedValidated(db);
   const second = await seedValidated(db, randomUUID());
 
-  const activated = await server.fetch(...admin(`/registry/v1/admin/versions/${first}/activate`, { reason: 'first' }));
+  const activated = await switchOn(first, 'first');
   t.equal(activated.status, 200);
   const result = await activated.json() as {
     action: string, changed: boolean, activationId: string | null,
-    previousVersionId: string | null, targetVersionId: string,
+    previousVersionId: string | null, targetVersionId: string, approvalId: string | null,
   };
   t.equal(result.changed, true);
   t.equal(result.action, 'activate');
   t.equal(result.previousVersionId, null, 'the first activation has no predecessor');
   t.ok(result.activationId, 'and writes an audit row');
+  t.ok(result.approvalId, 'naming the approval it used');
 
   const again = await server.fetch(...admin(`/registry/v1/admin/versions/${first}/activate`, { reason: 'again' }));
-  const repeat = await again.json() as { changed: boolean, activationId: string | null };
-  t.equal(repeat.changed, false, 'activating the active version changes nothing');
+  const repeat = await again.json() as { changed: boolean, activationId: string | null, approvalId: string | null };
+  t.equal(repeat.changed, false, 'activating the active version changes nothing, and needs no approval');
   t.equal(repeat.activationId, null, 'and writes no audit row');
+  t.equal(repeat.approvalId, null, 'nor uses an approval');
 
-  await server.fetch(...admin(`/registry/v1/admin/versions/${second}/activate`, { reason: 'second' }));
+  await switchOn(second, 'second', first);
+  // test-admin rolls back alone, which needs nobody's approval
   const rolledBack = await server.fetch(...admin(`/registry/v1/admin/versions/${first}/rollback`, { reason: 'restore' }));
-  const rollback = await rolledBack.json() as { action: string, previousVersionId: string | null, changed: boolean };
+  const rollback = await rolledBack.json() as { action: string, previousVersionId: string | null, changed: boolean, approvalId: string | null };
   t.equal(rollback.action, 'rollback');
+  t.equal(rollback.approvalId, null, 'a rollback uses no approval');
   t.equal(rollback.previousVersionId, second, 'rollback records what it replaced');
   t.equal(rollback.changed, true);
 
@@ -533,10 +560,18 @@ t.test('a move decided against a version someone has since replaced is refused',
   const first = await seedValidated(db);
   const second = await seedValidated(db, randomUUID());
   const third  = await seedValidated(db, randomUUID());
-  const move = async (action: string, versionId: string, expected: string | null) => server.fetch(...admin(
-    `/registry/v1/admin/versions/${versionId}/${action}`,
-    { reason: `${action} against ${expected}`, expectedActiveVersionId: expected },
-  ));
+  // an activation is approved first, by another admin than the one who switches it on
+  const move = async (action: string, versionId: string, expected: string | null) => {
+    if (action === 'activate') {
+      await server.fetch(...admin(
+        `/registry/v1/admin/versions/${versionId}/approve`, { reason: `approved against ${expected}`, expectedActiveVersionId: expected }, BOB,
+      ));
+    }
+    return server.fetch(...admin(
+      `/registry/v1/admin/versions/${versionId}/${action}`,
+      { reason: `${action} against ${expected}`, expectedActiveVersionId: expected },
+    ));
+  };
 
   t.equal((await move('activate', first, null)).status, 200, 'the first activation expects nothing to be on');
   t.equal((await move('activate', second, first)).status, 200, 'and the next one the version it replaces');
@@ -622,10 +657,10 @@ t.test('administrative commands validate their bodies', async t => {
   t.equal(long.status, 400, 'a reason is at most 1,000 characters here too');
 });
 
-function put(path: string, body: unknown): [ string, AdminRequest ] {
+function put(path: string, body: unknown, token: string = ADMIN_TOKEN): [ string, AdminRequest ] {
   return [ path, {
     method:  'PUT',
-    headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
     body:    JSON.stringify(body),
   } ];
 }
@@ -1069,7 +1104,7 @@ t.test('the versions there are can be listed, newest first', async t => {
   t.same(empty, { activeVersionId: null, next: null, versions: [] }, 'an environment with no versions lists none');
 
   const active = await seedValidated(db);
-  await server.fetch(...admin(`/registry/v1/admin/versions/${active}/activate`, { reason: 'bringing it up' }));
+  await switchOn(active, 'bringing it up');
 
   const candidate = await seedCandidate(db, snapshot, { versionId: randomUUID(), attempt: 2 });
 
@@ -1185,11 +1220,10 @@ t.test('a sync run reports its checkpoints without its lease owner', async t => 
  * history.
  */
 t.test('a sync run nobody holds can be cancelled, with a reason', async t => {
-  const db              = await freshDatabase();
-  const { ENVIRONMENT } = await server.getWorker<Env>().getEnv();
-  const runId           = randomUUID();
-  const now             = new Date().toISOString();
-  const past            = new Date(Date.now() - 60_000).toISOString();
+  const db    = await freshDatabase();
+  const runId = randomUUID();
+  const now   = new Date().toISOString();
+  const past  = new Date(Date.now() - 60_000).toISOString();
 
   // a run whose invocation was stopped in the middle of usdc's last attempt, and whose lease has run out; weth was never reached
   await db.prepare(
@@ -1239,7 +1273,7 @@ t.test('a sync run nobody holds can be cancelled, with a reason', async t => {
   };
   t.same(
     [ syncRun.status, syncRun.outcome, syncRun.lastError, syncRun.leaseExpiresAt ],
-    [ 'failed', null, `cancelled by registry-admin:${ENVIRONMENT}: a stored overlay no longer parses`, null ],
+    [ 'failed', null, 'cancelled by test-admin: a stored overlay no longer parses', null ],
     'answered with the run, failed, saying who cancelled it and why',
   );
   t.ok(syncRun.completedAt, 'and when');
@@ -1253,6 +1287,55 @@ t.test('a sync run nobody holds can be cancelled, with a reason', async t => {
   const ended = await cancel(runId, { reason: 'x' });
   t.equal(ended.status, 409, 'a run that has ended is not cancelled again');
   t.match(await messageOf(ended), /already ended/);
+});
+
+/*
+ * Who made a change is the name of the token it was sent with, wherever the
+ * audit keeps one: the move that switched a version on, and the status that
+ * reports it; a cancelled run; an overlay event.
+ */
+t.test('a command records the name of the token it was sent with', async t => {
+  const db = await freshDatabase();
+
+  const versionId = await seedValidated(db);
+  const activated = await switchOn(versionId, 'first');
+  t.equal(activated.status, 200, 'an admin switches a version on, once another has approved it');
+  t.equal(
+    await db.prepare(`SELECT actor FROM registry_activations WHERE registry_version_id = ?1`).bind(versionId).first<string>('actor'),
+    'alice',
+    'and the move is recorded under the token\'s name',
+  );
+  const status = await server.fetch('/registry/v1/admin/status', { headers: { 'Authorization': `Bearer ${OLGA}` } });
+  const { active } = await status.json() as { active: { activatedBy: string, approvedBy: string } };
+  t.same([ active.activatedBy, active.approvedBy ], [ 'alice', 'bob' ], 'which the status reports, with who approved it');
+
+  // a run whose lease has run out, which nobody can finish
+  const runId = randomUUID();
+  const past  = new Date(Date.now() - 60_000).toISOString();
+  await db.prepare(
+    `INSERT INTO sync_runs (
+       id, source_commit_sha, tracked_ref, trigger_kind, requested_by, status,
+       lease_owner, lease_expires_at, expected_count, started_at
+     ) VALUES (?1, ?2, 'main', 'scheduled', 'registry-cron', 'running', 'stopped-invocation', ?3, 1, ?3)`
+  ).bind(runId, 'a'.repeat(40), past).run();
+  const cancelled = await server.fetch(...admin(`/registry/v1/admin/sync-runs/${runId}/cancel`, { reason: 'it is stuck' }, OLGA));
+  t.equal(cancelled.status, 200, 'an operator cancels a run');
+  t.equal((await cancelled.json() as { syncRun: { lastError: string } }).syncRun.lastError, 'cancelled by olga: it is stuck',
+    'which says who did');
+
+  const { versionId: draft } = await seedCandidate(db, snapshot, { versionId: randomUUID(), attempt: 2 });
+  const network = overlayOfNetwork(snapshot.networks.find(candidate => candidate.chainId === 1)!);
+  const written = await server.fetch(...put(
+    `/registry/v1/admin/versions/${draft}/networks/1/overlay`,
+    { reason: 'rename the network', overlay: { ...network, displayName: 'Ethereum Mainnet' } },
+    OLGA,
+  ));
+  t.equal(written.status, 200, 'an operator reviews a draft');
+  t.equal(
+    await db.prepare(`SELECT actor FROM registry_overlay_events WHERE registry_version_id = ?1`).bind(draft).first<string>('actor'),
+    'olga',
+    'and the overlay event is recorded under the token\'s name',
+  );
 });
 
 /*
@@ -1374,7 +1457,7 @@ t.test('what a candidate changes against the active version is served while it i
   const auth = { headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` } };
 
   const activeId = await seedValidated(db);
-  await server.fetch(...admin(`/registry/v1/admin/versions/${activeId}/activate`, { reason: 'activate' }));
+  await switchOn(activeId, 'activate');
 
   const next    = structuredClone(snapshot);
   const mainnet = next.networks.find(network => network.chainId === 1)!;

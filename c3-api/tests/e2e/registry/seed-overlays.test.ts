@@ -11,6 +11,7 @@ import { readSnapshot, readUnreviewed } from '../../../src/registry/repository.j
 import { applyMigrations } from '../../util/d1.js';
 import { loadRegistrySnapshotFixture, seedCandidate, sha256Hex } from '../../util/registry-fixture.js';
 import { bodyFor, readSeed, readSeedComets, readSeedText } from '../../util/registry-seed.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * An environment's first review as an operator sends it: the seed file, to
@@ -22,11 +23,16 @@ import { bodyFor, readSeed, readSeedComets, readSeedText } from '../../util/regi
  */
 const ADMIN_TOKEN = 'registry-admin-token-for-tests';
 
+// bob's, an admin of another name, the second person a version is switched on by
+const BOB = 'registry-bob-token-for-tests';
+
 const server = createTestHarness({
-  workers: [ {
-    configPath: './wrangler.toml',
-    secrets:    { COMET_REGISTRY_ADMIN_TOKEN_HASH: sha256Hex(ADMIN_TOKEN) },
-  } ],
+  workers: [ registryWorker({
+    COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([
+      { name: 'test-admin', sha256: sha256Hex(ADMIN_TOKEN), role: 'admin', notAfter: null },
+      { name: 'bob',        sha256: sha256Hex(BOB),         role: 'admin', notAfter: null },
+    ]),
+  }) ],
 });
 
 t.before(async () => {
@@ -69,10 +75,10 @@ async function unreviewedCandidate(): Promise<{ db: D1Database, versionId: strin
 
 const auth = { 'Authorization': `Bearer ${ADMIN_TOKEN}` };
 
-function post(path: string, body?: unknown): Promise<Response> {
+function post(path: string, body?: unknown, token: string = ADMIN_TOKEN): Promise<Response> {
   return server.fetch(path, {
     method:  'POST',
-    headers: { ...auth, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
+    headers: { 'Authorization': `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   }) as unknown as Promise<Response>;
 }
@@ -145,8 +151,10 @@ t.test('the seed, cut to what the draft holds, reviews a first import once', asy
   t.equal(closed.status, 409, 'and takes no overlay from then on');
   t.match((await closed.json() as Refused).error.message, /validated registry version cannot be changed/, 'since it is no draft any more');
 
+  const approved = await post(`/registry/v1/admin/versions/${versionId}/approve`, { reason: 'read the seed', expectedActiveVersionId: null }, BOB);
+  t.equal(approved.status, 200, 'one admin approves it');
   const activated = await post(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'first registry version', expectedActiveVersionId: null });
-  t.equal(activated.status, 200, 'it is switched on');
+  t.equal(activated.status, 200, 'and another switches it on');
   const active = await (await server.fetch('/registry/v1/active')).json() as RegistrySnapshotV1;
   const served = active.networks.flatMap(network => network.markets.map(market => ({ key: marketKey(network.chainId, market.deploymentKey), market })));
   t.same(served.map(({ key }) => key).sort(), Object.keys(body.markets).sort(), 'serving the markets the seed describes, and not the other one');

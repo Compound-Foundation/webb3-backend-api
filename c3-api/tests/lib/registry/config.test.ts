@@ -3,7 +3,7 @@ import t from 'tap';
 import type { Env } from '../../../entrypoint.js';
 
 import { cacheDepsOf } from '../../../src/registry/cache.js';
-import { assertImportable, registryConfig } from '../../../src/registry/config.js';
+import { assertImportable, registryConfig, webhookUrlOf } from '../../../src/registry/config.js';
 import { isRegistryError } from '../../../src/registry/errors.js';
 import { importerDeps } from '../../../src/registry/scheduled.js';
 
@@ -22,6 +22,8 @@ const DEFAULTS = {
   upstreamIntervalSeconds: 86400,
   snapshotTtlSeconds:      300,
   staleFallbackSeconds:    3600,
+  approvalTtlSeconds:      86400,
+  webhook:                 'off',
 };
 
 // an environment as wrangler gives it, where an unquoted value arrives as a number
@@ -42,6 +44,7 @@ t.test('unset and blank settings take their defaults', async t => {
     COMET_UPSTREAM_CHECK_INTERVAL_S:   '  ',
     REGISTRY_SNAPSHOT_CACHE_TTL_S:     '',
     REGISTRY_STALE_FALLBACK_MAX_S:     '',
+    COMET_REGISTRY_APPROVAL_TTL_S:     undefined,
   });
   t.same(blank, { ...DEFAULTS, invalid: [] }, 'blank is unset, for every setting alike');
   t.equal(blank.staleFallbackSeconds, 3600, 'so a blank fallback window does not switch the fallback off');
@@ -54,14 +57,63 @@ t.test('a whole number is read as written, quoted or not', async t => {
     COMET_UPSTREAM_CHECK_INTERVAL_S:   ' 3600 ',
     REGISTRY_SNAPSHOT_CACHE_TTL_S:     60,
     REGISTRY_STALE_FALLBACK_MAX_S:     '0',
+    COMET_REGISTRY_APPROVAL_TTL_S:     7200,
   }), {
     leaseSeconds:            600,
     marketsPerInvocation:    5,
     upstreamIntervalSeconds: 3600,
     snapshotTtlSeconds:      60,
     staleFallbackSeconds:    0,
+    approvalTtlSeconds:      7200,
+    webhook:                 'off',
     invalid:                 [],
   }, 'a number wrangler passes unquoted counts as the same number, and zero switches the fallback off');
+});
+
+/*
+ * An approval lets its version be switched on by somebody else for a second
+ * up to a week. A value past that is a typo — one zero too many leaves an
+ * approval good for months — and stands for nothing but the default.
+ */
+t.test('an approval lasts a second up to a week, and anything else is named', async t => {
+  t.equal(configOf({ COMET_REGISTRY_APPROVAL_TTL_S: '1' }).approvalTtlSeconds, 1, 'a second is the least');
+  t.equal(configOf({ COMET_REGISTRY_APPROVAL_TTL_S: '604800' }).approvalTtlSeconds, 604800, 'and a week the most');
+  for (const value of [ '0', '604801', '8640000', '99999999999999999999' ]) {
+    const config = configOf({ COMET_REGISTRY_APPROVAL_TTL_S: value });
+    t.same(config.invalid, [ 'COMET_REGISTRY_APPROVAL_TTL_S' ], `${value} is out of its range, and named`);
+    t.equal(config.approvalTtlSeconds, 86400, 'and a day, the default, stands in for it');
+  }
+  t.doesNotThrow(() => assertImportable(configOf({ COMET_REGISTRY_APPROVAL_TTL_S: '0' })),
+    'the import, which approves nothing, runs whatever it is set to');
+});
+
+/*
+ * The webhook a move or an approval is announced to is an https URL, whose
+ * path is its credential. The configuration says whether one is set, and
+ * never holds it: the importer, the cache and the status all build it.
+ */
+t.test('the webhook is on, off or invalid, and the configuration never holds it', async t => {
+  const url = 'https://hooks.example.test/services/T0SECRET/B0SECRET/webhook-secret';
+
+  for (const value of [ undefined, '', '   ' ]) {
+    t.same(configOf({ COMET_REGISTRY_WEBHOOK_URL: value }), { ...DEFAULTS, invalid: [] }, `${JSON.stringify(value)} is no webhook`);
+  }
+
+  const on = configOf({ COMET_REGISTRY_WEBHOOK_URL: ` ${url}\n` });
+  t.same(on, { ...DEFAULTS, webhook: 'on', invalid: [] }, 'an https URL is one, around whatever whitespace it was put with');
+  t.notOk(JSON.stringify(on).includes('T0SECRET'), 'and the configuration says no more than that');
+  t.equal(webhookUrlOf(makeTestEnv({ COMET_REGISTRY_WEBHOOK_URL: url })), url, 'the notifier alone reads the URL');
+  t.equal(webhookUrlOf(makeTestEnv({ COMET_REGISTRY_WEBHOOK_URL: 'https://HOOKS.Example.TEST:443/services/T0' })),
+    'https://hooks.example.test/services/T0', 'as the runtime parses it');
+
+  for (const value of [ 'http://hooks.example.test/services/T0', 'hooks.example.test/services/T0', 'not a url', 'ftp://hooks.example.test/x' ]) {
+    const config = configOf({ COMET_REGISTRY_WEBHOOK_URL: value });
+    t.equal(config.webhook, 'invalid', `${JSON.stringify(value)} is no webhook a message can go to`);
+    t.same(config.invalid, [ 'COMET_REGISTRY_WEBHOOK_URL' ], 'and is named, by the secret it is set under');
+    t.equal(webhookUrlOf(makeTestEnv({ COMET_REGISTRY_WEBHOOK_URL: value })), null, 'so nothing is sent to it');
+  }
+  t.doesNotThrow(() => assertImportable(configOf({ COMET_REGISTRY_WEBHOOK_URL: 'not a url' })),
+    'the import, which announces nothing, runs whatever it is set to');
 });
 
 t.test('anything else is named, and the default stands in for it', async t => {

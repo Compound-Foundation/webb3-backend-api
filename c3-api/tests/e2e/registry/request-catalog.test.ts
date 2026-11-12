@@ -14,6 +14,7 @@ import { requestCatalog } from '../../../src/registry/request-catalog.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { activateSeeded, loadRegistrySnapshotFixture, seedCandidate } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * What a request pays for the registry, against real local D1.
@@ -22,7 +23,7 @@ import { activateSeeded, loadRegistrySnapshotFixture, seedCandidate } from '../.
  * served from the catalog the first one built: only the pointer to the active
  * version can move, and that is the one read a request cannot skip.
  */
-const server = createTestHarness({ workers: [ { configPath: './wrangler.toml' } ] });
+const server = createTestHarness({ workers: [ registryWorker() ] });
 
 t.before(async () => {
   await server.listen();

@@ -274,6 +274,17 @@ type RegistryOverlayEventRow = {
   created_at:          string,
 };
 
+type RegistryApprovalRow = {
+  id:                  string,
+  registry_version_id: string,
+  snapshot_checksum:   string,
+  active_version_id:   string | null,
+  actor:               string,
+  reason:              string,
+  created_at:          string,
+  expires_at:          string,
+};
+
 type SyncRunRow = {
   id:                  string,
   source_commit_sha:   string,
@@ -473,6 +484,8 @@ type ActivationResultV1 = {
   previousVersionId: string | null,
   targetVersionId:   string,
   changed:           boolean,
+  // the approval an activation used; null for a rollback, and for a move that changed nothing
+  approvalId:        string | null,
   registryVersion:   VersionRefV1,
 };
 
@@ -489,6 +502,29 @@ type ActivationRecordV1 = {
   actor:             string,
   reason:            string,
   createdAt:         string,
+  // null for a rollback, and for a move made before approvals existed
+  approvalId:        string | null,
+};
+
+/*
+ * One approval of a validated version, by the token that gave it. It is made
+ * against the version on at that moment, `activeVersionId`, which the
+ * activation it lets through must replace, and `activationId` names that
+ * activation once there is one. `usable` says whether an activation by
+ * another name could use it now: in force, made against the version on now,
+ * and neither used nor overtaken by a move that switched its version on.
+ */
+type ApprovalV1 = {
+  id:               string,
+  versionId:        string,
+  snapshotChecksum: string,
+  activeVersionId:  string | null,
+  actor:            string,
+  reason:           string,
+  createdAt:        string,
+  expiresAt:        string,
+  activationId:     string | null,
+  usable:           boolean,
 };
 
 type ValidationCheckV1 = {
@@ -545,6 +581,7 @@ export type {
   ActivationRecordV1,
   ActivationResultV1,
   Address,
+  ApprovalV1,
   AssetDisplayOverrideV1,
   AssetRole,
   BaseAssetV1,
@@ -565,6 +602,7 @@ export type {
   PriceExceptionV1,
   PriceFeedV1,
   PriceQuote,
+  RegistryApprovalRow,
   RegistryNetworkRow,
   RegistryOverlayEventRow,
   RegistrySnapshotV1,

@@ -22,14 +22,27 @@
 # Optional Blocknative API key for /legacy/mainnet/gas-price
 # BLOCK_NATIVE_API_KEY=
 
-# Comet registry admin API: the SHA-256 of the admin bearer token, as 64 hex
-# digits, never the token itself
-# COMET_REGISTRY_ADMIN_TOKEN_HASH=
+# Comet registry admin API: its tokens, as a JSON list on one line, in single
+# quotes. Each entry names who holds the token, the SHA-256 of the token as
+# 64 hex digits (never the token itself), its role — monitor, reader,
+# operator or admin — and the last instant in UTC it is taken at, or null.
+# The name is the actor the registry records for what the token changes:
+# approvals, activations and rollbacks, overlay events, and the syncs it
+# asks for. Unset, blank or [], the admin API refuses every request. A
+# version is switched on by two admins of two names, one approving it and
+# the other activating it, so a local bring-up lists two admin tokens of
+# your own, under two names. A deployed environment's list is one secret,
+# which Cloudflare keeps to 5 KB: a few dozen tokens (REGISTRY_RUNBOOK.md,
+# The admin tokens), and one name for each person
+# COMET_REGISTRY_ADMIN_TOKENS='[{"name":"local-admin","sha256":"<64 hex digits>","role":"admin","notAfter":null},{"name":"local-approver","sha256":"<64 hex digits>","role":"admin","notAfter":null}]'
 
-# Optional name the registry records as the actor of every administrative
-# change: activations and rollbacks, overlay events, and the syncs it asks
-# for. Unset, it is registry-admin:<ENVIRONMENT>
-# COMET_REGISTRY_ADMIN_ACTOR=
+# Optional webhook every version switched on, rolled back to or approved is
+# announced to: the https URL of a Slack incoming webhook, which is itself the
+# credential (REGISTRY_RUNBOOK.md, Announcing changes). Unset, nothing is
+# announced. Set here, a local activation posts to it, so name a channel of
+# your own. `npm test` reads this file too; the registry's tests set this to
+# nothing over it, so they announce nothing
+# COMET_REGISTRY_WEBHOOK_URL=
 
 # GitHub token the registry import reads the Comet repository with: optional
 # here, required in stage and production. Without one GitHub allows 60 API

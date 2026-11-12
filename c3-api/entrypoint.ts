@@ -76,11 +76,16 @@ interface Env extends Flags.Env, ServiceBindings {
   COMET_SYNC_LEASE_SECONDS: string,
   REGISTRY_SNAPSHOT_CACHE_TTL_S: string,
   REGISTRY_STALE_FALLBACK_MAX_S: string,
-  // the operator identity recorded in audit rows, never taken from a request
-  COMET_REGISTRY_ADMIN_ACTOR?: string,
-  // comet registry secrets, never set in wrangler.toml
-  COMET_REGISTRY_ADMIN_TOKEN_HASH?: string,
+  // how long an approval lets its version be switched on, in seconds (src/registry/config.ts)
+  COMET_REGISTRY_APPROVAL_TTL_S: string,
+  /*
+   * comet registry secrets, never set in wrangler.toml: the admin tokens, a
+   * JSON list of { name, sha256, role, notAfter } (src/http/bearer-auth.ts)
+   */
+  COMET_REGISTRY_ADMIN_TOKENS?: string,
   COMET_GITHUB_TOKEN?: string,
+  // the https webhook every version switched on or approved is announced to, whose URL is its credential (src/registry/notifications.ts)
+  COMET_REGISTRY_WEBHOOK_URL?: string,
 
   /*
    * for worker-to-worker requests we need to override fetch() requests to
@@ -179,7 +184,12 @@ function prepare(env: Env) {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  /*
+   * The runtime always passes the invocation's context; a test that calls the
+   * worker with the request and the environment alone leaves what the
+   * registry defers to run on, unawaited.
+   */
+  async fetch(request: Request, env: Env, execution?: ExecutionContext): Promise<Response> {
     const { pathname } = new URL(request.url);
     /*
      * The path decides which router answers, here and nowhere else. The
@@ -189,7 +199,12 @@ export default {
      */
     if (isRegistryPath(pathname)) {
       const { context, requestId } = prepare(env);
-      return secured(await routeRegistry(request, { ...context, requestId }));
+      return secured(await routeRegistry(request, {
+        ...context,
+        requestId,
+        // what a command leaves to finish after its answer, such as announcing what it switched on
+        defer: task => execution?.waitUntil(task),
+      }));
     }
     /*
      * Every other path is a legacy route's. Its preflight reads nothing, so

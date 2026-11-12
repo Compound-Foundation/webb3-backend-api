@@ -25,12 +25,18 @@ const ADMIN_TOKEN = 'registry-admin-token-for-tests';
 const MAINNET     = 'ethereum-mainnet';
 const UNKNOWN     = '0x1111111111111111111111111111111111111111';
 
+// bob's, an admin of another name, who approves what test-admin switches on
+const BOB = 'registry-bob-token-for-tests';
+
 type Envelope = { error: { code: string, message: string, requestId: string } };
 
 async function envWith(overrides: Partial<Env>): Promise<Env> {
   return makeTestEnv({
     MEMORY_CACHE_SEED:                'registry-kv-outage',
-    COMET_REGISTRY_ADMIN_TOKEN_HASH:  await sha256(ADMIN_TOKEN),
+    COMET_REGISTRY_ADMIN_TOKENS:      JSON.stringify([
+      { name: 'test-admin', sha256: await sha256(ADMIN_TOKEN), role: 'admin', notAfter: null },
+      { name: 'bob',        sha256: await sha256(BOB),         role: 'admin', notAfter: null },
+    ]),
     REGISTRY_ADMIN_RATE_LIMITER:      { limit: async () => ({ success: true }) },
     REGISTRY_ADMIN_AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
     kv_registry:                      refusingKv(),
@@ -42,10 +48,10 @@ async function get(env: Env, path: string, headers: Record<string, string> = {})
   return C3Api.fetch(new Request(`https://api.test.local${path}`, { headers }), env);
 }
 
-async function post(env: Env, path: string, body: unknown): Promise<Response> {
+async function post(env: Env, path: string, body: unknown, token: string = ADMIN_TOKEN): Promise<Response> {
   return C3Api.fetch(new Request(`https://api.test.local${path}`, {
     method:  'POST',
-    headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
     body:    JSON.stringify(body),
   }), env);
 }
@@ -101,6 +107,10 @@ t.test('a validation, an activation and a rollback answer as committed, though n
   t.match(await validated.json(), { version: { id: next, status: 'validated' } }, 'with the version it validated');
   t.ok(logs.includes('warn: registry snapshot not warmed'), 'its warm-up, which could not list the namespace, a warning');
 
+  const approved = await post(env, `/registry/v1/admin/versions/${next}/approve`, {
+    reason: 'the namespace does not answer', expectedActiveVersionId: registry.versionId,
+  }, BOB);
+  t.equal(approved.status, 200, 'an approval answers 200');
   const activated = await post(env, `/registry/v1/admin/versions/${next}/activate`, {
     reason: 'the namespace does not answer', expectedActiveVersionId: registry.versionId,
   });

@@ -163,7 +163,7 @@ t.test('a refusal a person is answered with is a warning, under the id of the an
   // a configuration the import refuses before it asks anything of anyone
   const env = makeTestEnv({ DEBUG: '', COMET_SYNC_LEASE_SECONDS: 'a while' });
 
-  const asked = await runRegistrySync(env, { requestedBy: 'registry-admin:test' }, { requestId });
+  const asked = await runRegistrySync(env, { requestedBy: 'test-admin' }, { requestId });
   t.equal(asked.kind === 'failed' && asked.error?.code, 'SOURCE_CONFIGURATION_INVALID', 'the request is refused');
   t.ok(warnings.some(line => line.includes('registry sync refused')), 'and the log has it as a warning');
   t.ok(warnings.some(line => line.includes(requestId)), 'under the id of the answer');
@@ -174,7 +174,7 @@ t.test('a refusal a person is answered with is a warning, under the id of the an
 
   errors.length = 0;
   const down = makeTestEnv({ DEBUG: '', APP_DB: failingDatabase('D1_ERROR: Network connection lost.') });
-  await runRegistrySync(down, { requestedBy: 'registry-admin:test' }, { requestId });
+  await runRegistrySync(down, { requestedBy: 'test-admin' }, { requestId });
   t.ok(errors.some(line => line.includes('registry sync failed')), 'and so is a service that did not answer, whoever asked');
   t.ok(errors.some(line => line.includes(requestId)), 'under the id of the answer');
 });
@@ -201,7 +201,9 @@ t.test('an administrative sync refused while another imports is logged under its
     DEBUG:                            '',
     MEMORY_CACHE_SEED:                'registry-sync-failure',
     APP_DB:                           registry.db,
-    COMET_REGISTRY_ADMIN_TOKEN_HASH:  await sha256Hex('registry-admin-token-for-tests'),
+    COMET_REGISTRY_ADMIN_TOKENS:      JSON.stringify([
+      { name: 'test-admin', sha256: await sha256Hex('registry-admin-token-for-tests'), role: 'admin', notAfter: null },
+    ]),
     REGISTRY_ADMIN_RATE_LIMITER:      { limit: async () => ({ success: true }) },
     REGISTRY_ADMIN_AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
   });
@@ -223,7 +225,8 @@ t.test('an administrative sync refused while another imports is logged under its
  * and a request that names no number of markets attempts the whole source
  * rather than the Cron's batch. GitHub lists two roots and answers for
  * neither, so every attempt fails before a chain is asked anything, and the
- * counts say how many each request attempted.
+ * counts say how many each request attempted. The import is an operator's,
+ * whose token's name the run and its draft record as who asked for them.
  */
 t.test('an administrative sync with work left answers 202, and attempts up to fifty markets by default', async t => {
   captureErrors(t);
@@ -253,7 +256,9 @@ t.test('an administrative sync with work left answers 202, and attempts up to fi
     DEBUG:                             '',
     MEMORY_CACHE_SEED:                 'registry-sync-default',
     APP_DB:                            registry.db,
-    COMET_REGISTRY_ADMIN_TOKEN_HASH:   await sha256Hex('registry-admin-token-for-tests'),
+    COMET_REGISTRY_ADMIN_TOKENS:       JSON.stringify([
+      { name: 'olga', sha256: await sha256Hex('registry-operator-token-for-tests'), role: 'operator', notAfter: null },
+    ]),
     REGISTRY_ADMIN_RATE_LIMITER:       { limit: async () => ({ success: true }) },
     REGISTRY_ADMIN_AUTH_RATE_LIMITER:  { limit: async () => ({ success: true }) },
     // the Cron's batch, which an administrative sync does not keep to
@@ -261,14 +266,25 @@ t.test('an administrative sync with work left answers 202, and attempts up to fi
   });
   const sync = (body: unknown) => C3Api.fetch(new Request('https://api.test.local/registry/v1/admin/sync', {
     method:  'POST',
-    headers: { 'Authorization': 'Bearer registry-admin-token-for-tests', 'Content-Type': 'application/json' },
+    headers: { 'Authorization': 'Bearer registry-operator-token-for-tests', 'Content-Type': 'application/json' },
     body:    JSON.stringify(body),
   }), env);
 
   const one = await sync({ markets: 1 });
   t.equal(one.status, 202, 'an import with work left is accepted, for a later request to continue');
-  t.match(await one.json(), { status: 'running', processed: 1, expected: 2, outstanding: 2 },
+  const started = await one.json() as { syncRunId: string, registryVersionId: string };
+  t.match(started, { status: 'running', processed: 1, expected: 2, outstanding: 2 },
     'having attempted the one market it was asked for');
+  t.equal(
+    await registry.db.prepare(`SELECT requested_by FROM sync_runs WHERE id = ?1`).bind(started.syncRunId).first<string>('requested_by'),
+    'olga',
+    'the run is recorded as asked for by the token\'s holder',
+  );
+  t.equal(
+    await registry.db.prepare(`SELECT created_by FROM registry_versions WHERE id = ?1`).bind(started.registryVersionId).first<string>('created_by'),
+    'olga',
+    'and so is its draft',
+  );
 
   const all = await sync({});
   t.equal(all.status, 202);
@@ -344,7 +360,9 @@ t.test('a cancel is answered with what it found or did, whatever happens to the 
     DEBUG:                            '',
     MEMORY_CACHE_SEED:                'registry-sync-cancel',
     APP_DB:                           db,
-    COMET_REGISTRY_ADMIN_TOKEN_HASH:  await sha256Hex('registry-admin-token-for-tests'),
+    COMET_REGISTRY_ADMIN_TOKENS:      JSON.stringify([
+      { name: 'test-admin', sha256: await sha256Hex('registry-admin-token-for-tests'), role: 'admin', notAfter: null },
+    ]),
     REGISTRY_ADMIN_RATE_LIMITER:      { limit: async () => ({ success: true }) },
     REGISTRY_ADMIN_AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
   });
@@ -367,7 +385,7 @@ t.test('a cancel is answered with what it found or did, whatever happens to the 
   t.ok(down, 'the database stops answering once the cancel has been made');
   t.equal(cancelled.status, 200, 'the cancel sent again, to the run now free, is answered as made');
   t.match(await cancelled.json(), {
-    syncRun: { id: runId, status: 'failed', lastError: /^cancelled by registry-admin:[^:]+: a stored overlay no longer parses$/ },
+    syncRun: { id: runId, status: 'failed', lastError: /^cancelled by test-admin: a stored overlay no longer parses$/ },
     items:   [ { deploymentKey: 'usdc', status: 'pending', attempts: 0 } ],
   }, 'with the run and its roots as the cancel left them');
 });
@@ -455,7 +473,7 @@ t.test('a Cron that loses the running slot to an administrative sync has nothing
         `INSERT INTO sync_runs (
            id, source_commit_sha, tracked_ref, trigger_kind, requested_by, status,
            lease_owner, lease_expires_at, expected_count, started_at
-         ) VALUES (?1, ?2, 'main', 'manual', 'registry-admin:operator', 'running', ?3, ?4, 1, ?5)`
+         ) VALUES (?1, ?2, 'main', 'manual', 'test-admin', 'running', ?3, ?4, 1, ?5)`
       ).bind(started, commit, randomUUID(), new Date(Date.now() + 900_000).toISOString(), new Date().toISOString()).run();
       return new Response(commit);
     }
@@ -482,7 +500,7 @@ t.test('a Cron that loses the running slot to an administrative sync has nothing
     'its answer names the run that is importing, as one found before discovery does');
 
   await another();
-  const asked = await runRegistrySync(env, { requestedBy: 'registry-admin:test' });
+  const asked = await runRegistrySync(env, { requestedBy: 'test-admin' });
   t.equal(asked.kind === 'failed' && asked.error?.code, 'SYNC_ALREADY_RUNNING', 'a person who asked is told a sync is running');
   t.equal(asked.kind === 'failed' && asApiError(syncFailure(asked))?.status, 409, 'with a 409');
 });

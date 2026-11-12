@@ -54,12 +54,19 @@ class ApiError extends Error {
    * is right, which is half an answer.
    */
   readonly headers: Record<string, string>;
+  /*
+   * What the line logged about this answer says besides, and the client is
+   * never told: which entry of a setting is wrong, or whose token was
+   * refused. Never a token, its digest or a secret.
+   */
+  readonly logged:  Record<string, unknown> | undefined;
 
   constructor(
     code: ApiErrorCode,
     message: string,
     details?: Record<string, unknown>,
     headers: Record<string, string> = {},
+    logged?: Record<string, unknown>,
   ) {
     super(message);
     this.name    = 'ApiError';
@@ -67,6 +74,7 @@ class ApiError extends Error {
     this.status  = STATUS[code];
     this.details = details;
     this.headers = headers;
+    this.logged  = logged;
   }
 }
 
@@ -152,9 +160,9 @@ function failureResponse(
 ): Response {
   const error = answer ?? new ApiError('INTERNAL', `the request could not be completed`);
   if (error.status >= 500) {
-    debug.error(`${label} failed`, { requestId, pathname, status: error.status, code: error.code, error: failure });
+    debug.error(`${label} failed`, { requestId, pathname, status: error.status, code: error.code, ...error.logged, error: failure });
   } else if (error.status === 401 || error.status === 403) {
-    debug.warn(`${label} refused`, { requestId, pathname, status: error.status, code: error.code });
+    debug.warn(`${label} refused`, { requestId, pathname, status: error.status, code: error.code, ...error.logged });
   }
   return errorResponse(error, requestId, headers);
 }

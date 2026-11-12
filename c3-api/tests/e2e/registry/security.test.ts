@@ -1,29 +1,59 @@
 import t from 'tap';
 
+import { randomUUID } from 'node:crypto';
+
 import { createTestHarness } from 'wrangler';
 
 import type { Env } from '../../../entrypoint.js';
-import { sha256Hex } from '../../../src/http/bearer-auth.js';
+import { ROLES, sha256Hex } from '../../../src/http/bearer-auth.js';
+import type { Role } from '../../../src/http/bearer-auth.js';
+import { ROUTES } from '../../../src/registry/admin-router.js';
 
 import { applyMigrations } from '../../util/d1.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * What protects the administrative API, exercised through the worker: the
- * token, the two limiters, and the size of what a caller may send.
+ * tokens and their roles, the two limiters, and the size of what a caller may
+ * send.
  *
  * The registry's admin routes can rebuild and switch what every market route
  * serves, so the interesting cases are the ones where something is refused:
  * an answer that is refused cheaply, refused before it says anything about
  * the registry, and refused the same way whatever the caller guessed.
  */
+// the token most cases send: alice's, an admin's
 const ADMIN_TOKEN = 'registry-admin-token-for-tests';
 
-const server = createTestHarness({
-  workers: [ {
-    configPath: './wrangler.toml',
-    secrets:    { COMET_REGISTRY_ADMIN_TOKEN_HASH: await sha256Hex(ADMIN_TOKEN) },
-  } ],
-});
+// a token of the list for each role, held by somebody of that role's name
+const ROLE_TOKENS: Record<Role, string> = {
+  monitor:  'registry-monitor-token-for-tests',
+  reader:   'registry-reader-token-for-tests',
+  operator: 'registry-operator-token-for-tests',
+  admin:    'registry-admin-role-token-for-tests',
+};
+
+// a holder rotating a token: the one rotated out has expired, the one rotated in has not
+const ROTATED_OUT = 'registry-rotated-out-token-for-tests';
+const ROTATED_IN  = 'registry-rotated-in-token-for-tests';
+
+const listed = async (name: string, token: string, role: Role, notAfter: string | null = null) =>
+  ({ name, sha256: await sha256Hex(token), role, notAfter });
+
+/*
+ * The worker stores only the hashes of the tokens it lists, so the harness is
+ * given the hashes and the tests present the tokens themselves.
+ */
+const SECRETS = {
+  COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([
+    await listed('alice', ADMIN_TOKEN, 'admin'),
+    ...await Promise.all(ROLES.map(role => listed(role, ROLE_TOKENS[role], role))),
+    await listed('rotating', ROTATED_OUT, 'operator', '2026-01-01T00:00:00Z'),
+    await listed('rotating', ROTATED_IN, 'operator'),
+  ]),
+};
+
+const server = createTestHarness({ workers: [ registryWorker(SECRETS) ] });
 
 t.before(async () => {
   await server.listen();
@@ -142,6 +172,7 @@ t.test('administrative requests are rate limited per route family', async t => {
   }
   // every read route is one family, so the reads the status spent are another read's too
   const versions = await server.fetch('/registry/v1/admin/versions', { headers: auth });
+  const monitor  = await server.fetch('/registry/v1/admin/status', { headers: { 'Authorization': `Bearer ${ROLE_TOKENS.monitor}` } });
   t.equal(windowOf(Date.now()), window, 'the requests were counted in one window of the limiter');
 
   t.not(refused, null, 'the limiter refuses a caller that keeps going');
@@ -153,6 +184,7 @@ t.test('administrative requests are rate limited per route family', async t => {
   t.equal(body.error.code, 'RATE_LIMITED', 'with the code a script backs off on');
   t.equal(refused.headers.get('retry-after'), '60', 'and how long to back off for: the period the limiter counts in');
   t.equal(versions.status, 429, 'every read shares one budget: another read route is refused as well');
+  t.equal(monitor.status, 200, 'and the budget is the token\'s: a monitor polling with a token of its own reads on');
 
   /*
    * Reads and activations are counted separately, so a monitor polling the
@@ -242,4 +274,193 @@ t.test('the addresses of one IPv6 /64 share one budget', async t => {
 
   t.equal((await server.fetch('/registry/v1/admin/status', from('2001:db8:1:3::1', ADMIN_TOKEN))).status, 200,
     'while another /64 is served');
+});
+
+/*
+ * Every administrative route, with a request a token allowed on it is
+ * answered for on its own merits without changing anything: an unknown id, or
+ * a body refused as malformed. `role` is the least role the route takes.
+ */
+const UNKNOWN = '00000000-0000-4000-8000-000000000000';
+
+// unlike a move, an approval always names the version on it was read against
+const APPROVAL = { reason: 'not this one', expectedActiveVersionId: null };
+
+const ROUTE_TABLE: Array<{ method: string, path: string, body?: unknown, role: Role }> = [
+  { method: 'POST', path: '/registry/v1/admin/sync',                                         body: { markets: 0 },                  role: 'operator' },
+  { method: 'GET',  path: `/registry/v1/admin/sync-runs/${UNKNOWN}`,                                                                role: 'reader' },
+  { method: 'POST', path: `/registry/v1/admin/sync-runs/${UNKNOWN}/cancel`,                  body: { reason: 'not this one' },      role: 'operator' },
+  { method: 'GET',  path: '/registry/v1/admin/status',                                                                              role: 'monitor' },
+  { method: 'GET',  path: '/registry/v1/admin/versions',                                                                            role: 'reader' },
+  { method: 'GET',  path: `/registry/v1/admin/versions/${UNKNOWN}`,                                                                 role: 'reader' },
+  { method: 'GET',  path: `/registry/v1/admin/versions/${UNKNOWN}/changes`,                                                         role: 'reader' },
+  { method: 'POST', path: `/registry/v1/admin/versions/${UNKNOWN}/validate`,                 body: {},                              role: 'admin' },
+  { method: 'POST', path: `/registry/v1/admin/versions/${UNKNOWN}/approve`,                  body: APPROVAL,                        role: 'admin' },
+  { method: 'POST', path: `/registry/v1/admin/versions/${UNKNOWN}/activate`,                 body: { reason: 'not this one' },      role: 'admin' },
+  { method: 'POST', path: `/registry/v1/admin/versions/${UNKNOWN}/rollback`,                 body: { reason: 'not this one' },      role: 'admin' },
+  { method: 'PUT',  path: `/registry/v1/admin/versions/${UNKNOWN}/networks/1/overlay`,       body: { reason: 'x', overlay: {} },    role: 'operator' },
+  { method: 'GET',  path: `/registry/v1/admin/versions/${UNKNOWN}/networks/1/overlay`,                                              role: 'reader' },
+  { method: 'PUT',  path: `/registry/v1/admin/versions/${UNKNOWN}/markets/1/usdc/overlay`,   body: { reason: 'x', overlay: {} },    role: 'operator' },
+  { method: 'GET',  path: `/registry/v1/admin/versions/${UNKNOWN}/markets/1/usdc/overlay`,                                          role: 'reader' },
+  { method: 'PUT',  path: `/registry/v1/admin/versions/${UNKNOWN}/overlays`,                 body: { reason: 'x' },                 role: 'operator' },
+];
+
+// a route the router takes and the table leaves out would go untested, so the table is held to the router
+t.test('the table of roles names every administrative route once', async t => {
+  for (const route of ROUTES) {
+    const rows = ROUTE_TABLE.filter(row => row.method === route.method && route.pattern.test(row.path));
+    t.equal(rows.length, 1, `${route.method} ${route.pattern} has one row`);
+  }
+  for (const row of ROUTE_TABLE) {
+    t.equal(ROUTES.filter(route => route.method === row.method && route.pattern.test(row.path)).length, 1,
+      `${row.method} ${row.path} is a route`);
+  }
+});
+
+t.test('a token reaches the routes of its role and of every role before it, and no other', async t => {
+  await freshDatabase();
+
+  for (const [ rank, role ] of ROLES.entries()) {
+    // each role from an address of its own, so the address's budget is not what answers
+    const address = `198.51.100.${20 + rank}`;
+    for (const row of ROUTE_TABLE) {
+      const response = await server.fetch(row.path, {
+        method:  row.method,
+        headers: {
+          'Authorization':   `Bearer ${ROLE_TOKENS[role]}`,
+          'CF-Connecting-IP': address,
+          ...(row.body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        },
+        ...(row.body === undefined ? {} : { body: JSON.stringify(row.body) }),
+      });
+      const what = `${role} on ${row.method} ${row.path}`;
+      // roles nest: each takes every route the roles before it take
+      if (rank >= ROLES.indexOf(row.role)) {
+        t.notOk([ 401, 403 ].includes(response.status), `${what} is answered on its own merits, ${response.status}`);
+        continue;
+      }
+      t.equal(response.status, 403, `${what} is refused`);
+      t.equal(response.headers.get('www-authenticate'), 'Bearer error="insufficient_scope"', 'as a token without the scope');
+      const { error } = await response.json() as { error: { code: string, message: string, details: unknown } };
+      t.same([ error.code, error.details ], [ 'FORBIDDEN', { role, requiredRole: row.role } ], 'saying which role it needs');
+      t.equal(error.message, `the token ${role} has the role ${role}, and this route needs ${row.role}`);
+    }
+  }
+});
+
+/*
+ * A refusal for the token is logged under the answer's request id, with whose
+ * token it was — an expired one still in use may have leaked — and never the
+ * token, its digest, or the fingerprint its budget is kept under.
+ */
+t.test('a refused token is logged by its name, and never by itself', async t => {
+  await freshDatabase();
+  server.clearLogs();
+
+  const from = (token: string) => ({ headers: { 'Authorization': `Bearer ${token}`, 'CF-Connecting-IP': '198.51.100.30' } });
+  const role = await server.fetch('/registry/v1/admin/versions', from(ROLE_TOKENS.monitor));
+  t.equal(role.status, 403, 'a monitor reading the versions is refused');
+  const expired = await server.fetch('/registry/v1/admin/status', from(ROTATED_OUT));
+  t.equal(expired.status, 401, 'and so is a token past its notAfter');
+
+  const logged = server.getLogs().map(line => line.message).join('\n');
+  t.match(logged, /registry route refused/, 'both are logged as refusals');
+  t.match(logged, /name: 'monitor'/, 'with the name of the token that lacked the role');
+  t.match(logged, /requiredRole: 'reader'/, 'and the role the route needs');
+  t.match(logged, /name: 'rotating'/, 'and the name of the token that has expired');
+  for (const token of [ ROLE_TOKENS.monitor, ROTATED_OUT ]) {
+    const digest = await sha256Hex(token);
+    t.notOk(logged.includes(token) || logged.includes(digest.slice(0, 16)), 'never the token, nor any of its digest');
+  }
+});
+
+/*
+ * Rotating a token: a holder is given a second token under the same name, and
+ * the first is given a notAfter. Past it, the first is refused as expired,
+ * while the second acts under the name both share.
+ */
+t.test('a rotated token is refused once it has expired, and its replacement acts under the same name', async t => {
+  const db   = await freshDatabase();
+  const from = (token: string) => ({ 'Authorization': `Bearer ${token}`, 'CF-Connecting-IP': '198.51.100.31' });
+
+  const expired = await server.fetch('/registry/v1/admin/status', { headers: from(ROTATED_OUT) });
+  t.equal(expired.status, 401, 'the token rotated out is refused');
+  t.equal(expired.headers.get('www-authenticate'), 'Bearer error="invalid_token"', 'with the challenge a wrong token gets');
+  const { error } = await expired.json() as { error: { message: string } };
+  t.equal(error.message, 'the bearer token has expired', 'saying that it has expired');
+
+  // a run whose lease has run out, for the token rotated in to cancel
+  const runId = randomUUID();
+  const past  = new Date(Date.now() - 60_000).toISOString();
+  await db.prepare(
+    `INSERT INTO sync_runs (
+       id, source_commit_sha, tracked_ref, trigger_kind, requested_by, status,
+       lease_owner, lease_expires_at, expected_count, started_at
+     ) VALUES (?1, ?2, 'main', 'scheduled', 'registry-cron', 'running', 'stopped-invocation', ?3, 1, ?3)`
+  ).bind(runId, 'a'.repeat(40), past).run();
+  const cancelled = await server.fetch(`/registry/v1/admin/sync-runs/${runId}/cancel`, {
+    method:  'POST',
+    headers: { ...from(ROTATED_IN), 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ reason: 'rotated in' }),
+  });
+  t.equal(cancelled.status, 200, 'the token rotated in is taken');
+  const { syncRun } = await cancelled.json() as { syncRun: { lastError: string } };
+  t.equal(syncRun.lastError, 'cancelled by rotating: rotated in', 'and acts under the name the two share');
+});
+
+/*
+ * A list the worker cannot read closes the administrative API: every token is
+ * refused, those of its entries that are well formed included, until the list
+ * is put again. The answer names the setting alone; the log line names the
+ * entry and what is wrong with it, and nothing of its values.
+ */
+t.test('a list the worker cannot read closes the administrative API to every token', async t => {
+  await freshDatabase();
+  await server.update({ workers: [ registryWorker({
+    COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([
+      await listed('alice', ADMIN_TOKEN, 'admin'),
+      await listed('monitor', ROLE_TOKENS.monitor, 'monitor'),
+      { ...await listed('somebody', ROLE_TOKENS.admin, 'admin'), name: 'Somebody' },
+    ]),
+  }) ] });
+  server.clearLogs();
+
+  for (const [ token, what ] of [ [ ADMIN_TOKEN, 'an admin\'s token the list names' ], [ ROLE_TOKENS.monitor, 'a monitor\'s' ] ] as const) {
+    const response = await server.fetch('/registry/v1/admin/status', {
+      headers: { 'Authorization': `Bearer ${token}`, 'CF-Connecting-IP': '198.51.100.32' },
+    });
+    t.equal(response.status, 403, `${what} is refused`);
+    t.equal(response.headers.get('www-authenticate'), null, 'as the environment\'s fault, asking for no other token');
+    const { error } = await response.json() as { error: { code: string, message: string } };
+    t.same([ error.code, error.message ], [
+      'FORBIDDEN',
+      'the administrative API is misconfigured in this environment: COMET_REGISTRY_ADMIN_TOKENS is malformed',
+    ], 'naming the setting alone');
+  }
+
+  const logged = server.getLogs().map(line => line.message).join('\n');
+  t.match(logged, /COMET_REGISTRY_ADMIN_TOKENS\[2\]\.name must be/, 'the log names the entry and what is wrong with it');
+  t.notMatch(logged, /Somebody/, 'and not the value');
+});
+
+/*
+ * The list is the only place a token is taken from: an environment without
+ * one has no administrative API, and refuses every request as its own fault,
+ * asking for no token, whatever the request sends.
+ */
+t.test('an environment without a list refuses every administrative request', async t => {
+  await freshDatabase();
+  await server.update({ workers: [ registryWorker() ] });
+
+  for (const [ headers, what ] of [
+    [ { 'Authorization': `Bearer ${ADMIN_TOKEN}` }, 'a token' ],
+    [ {}, 'no token' ],
+  ] as const) {
+    const response = await server.fetch('/registry/v1/admin/status', { headers: { ...headers, 'CF-Connecting-IP': '198.51.100.34' } });
+    t.equal(response.status, 403, `a request with ${what} is refused`);
+    t.equal(response.headers.get('www-authenticate'), null, 'as the environment\'s fault, asking for no token');
+    const { error } = await response.json() as { error: { code: string, message: string } };
+    t.same([ error.code, error.message ], [ 'FORBIDDEN', 'the administrative API is not configured in this environment' ],
+      'saying the API is not configured');
+  }
 });

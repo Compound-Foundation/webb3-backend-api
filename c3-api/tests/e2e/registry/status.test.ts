@@ -9,11 +9,13 @@ import type { Address } from '../../../lib/model/comet-registry.js';
 import { sha256Hex } from '../../../src/http/bearer-auth.js';
 import { activeSnapshot, cacheDepsOf } from '../../../src/registry/cache.js';
 import { CHECK_KEY, checkChain } from '../../../src/registry/drift.js';
+import { FAILURE_KEY } from '../../../src/registry/notifications.js';
 import { activateVersion, markInvalid, recordValidationResults } from '../../../src/registry/repository.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { FakeChain, fakeChain } from '../../util/fake-chain.js';
-import { activateSeeded, loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { activateSeeded, approveSeeded, loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * The status route: one answer a monitor polls and an operator reads.
@@ -23,18 +25,20 @@ import { activateSeeded, loadRegistrySnapshotFixture, seedCandidate, validateSee
  * "alerts is empty" without the monitor knowing the registry's rules.
  */
 const ADMIN_TOKEN = 'registry-admin-token-for-tests';
-const SECRETS     = { COMET_REGISTRY_ADMIN_TOKEN_HASH: await sha256Hex(ADMIN_TOKEN) };
+const SECRETS     = {
+  COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([ { name: 'test-admin', sha256: await sha256Hex(ADMIN_TOKEN), role: 'admin', notAfter: null } ]),
+};
 
-const server = createTestHarness({
-  workers: [ {
-    configPath: './wrangler.toml',
-    secrets:    SECRETS,
-  } ],
-});
+const server = createTestHarness({ workers: [ registryWorker(SECRETS) ] });
 
 // the worker again, with `vars` set over the ones wrangler.toml gives it, until the next freshDatabase
 async function withVars(vars: Record<string, string>): Promise<void> {
-  await server.update({ workers: [ { configPath: './wrangler.toml', secrets: SECRETS, vars } ] });
+  await server.update({ workers: [ { ...registryWorker(SECRETS), vars } ] });
+}
+
+// the worker again, with secrets set beside its token list, until the next freshDatabase
+async function withSecrets(secrets: Record<string, string>): Promise<void> {
+  await server.update({ workers: [ registryWorker({ ...SECRETS, ...secrets }) ] });
 }
 
 t.before(async () => {
@@ -48,7 +52,7 @@ const auth     = { 'Authorization': `Bearer ${ADMIN_TOKEN}` };
 type Status = {
   environment: string,
   configuration: { invalid: string[] },
-  active: { versionId: string, checksum: string, activatedBy: string | null } | null,
+  active: { versionId: string, checksum: string, activatedBy: string | null, approvedBy: string | null } | null,
   cache: { snapshotCached: boolean, pointerAgeSeconds: number | null },
   sync: {
     lastRun: { id: string, status: string, failedCount: number, lastError: string | null } | null,
@@ -59,7 +63,7 @@ type Status = {
   },
   candidates: {
     importing: Array<{ versionId: string, unreviewed: { networks: number, markets: number } }>,
-    validated: Array<{ versionId: string, unserved: string[] }>,
+    validated: Array<{ versionId: string, unserved: string[], approval: { id: string, actor: string, expiresAt: string } | null }>,
     invalid:   number,
   },
   chainCheck: {
@@ -69,6 +73,7 @@ type Status = {
     drifts:     Array<Record<string, unknown>>,
     unreadable: Array<{ chainId: number, network: string, error: string }>,
   } | null,
+  notifications: { webhook: string, failure: Record<string, unknown> | null },
   alerts: string[],
 };
 
@@ -136,11 +141,13 @@ t.test('a healthy registry raises nothing', async t => {
   const healthy = await status();
   t.equal(healthy.active?.versionId, versionId);
   t.equal(healthy.active?.activatedBy, 'test-admin', 'the status says who switched it on');
+  t.equal(healthy.active?.approvedBy, 'test-approver', 'and who approved it');
   t.equal(healthy.cache.snapshotCached, true, 'the bytes of the active version are cached');
   t.type(healthy.cache.pointerAgeSeconds, 'number', 'and the pointer record has an age');
   t.equal(healthy.sync.lastRun?.status, 'completed');
   t.same(healthy.alerts, [], 'so there is nothing to alert on');
   t.same(healthy.configuration, { invalid: [] }, 'every registry setting is one the registry takes');
+  t.same(healthy.notifications, { webhook: 'off', failure: null }, 'and no webhook is set, so nothing is announced');
   t.equal(healthy.environment, 'local');
 });
 
@@ -169,8 +176,9 @@ t.test('a candidate nobody has reviewed is reported as work waiting', async t =>
   t.same(waiting.alerts, [ 'candidate-awaiting-review' ]);
 });
 
-// switches a version that is already validated on, as an activation or a rollback does
+// switches a version that is already validated on, as an activation does once somebody else has approved it
 async function switchOn(db: D1Database, versionId: string): Promise<void> {
+  await approveSeeded(db, versionId);
   await activateVersion(db, { versionId, action: 'activate', actor: 'test-admin', reason: 'switching it on' });
 }
 
@@ -195,7 +203,7 @@ t.test('a validated version newer than the active one is reported as waiting to 
   t.same(waiting.candidates.validated.map(entry => entry.versionId), [ newer.versionId ], 'the validated version is named');
   t.same(waiting.candidates.validated[0]?.unserved, [], 'serving every market the active one does');
   t.same(waiting.candidates.importing, [], 'and it is no draft');
-  t.same(waiting.alerts, [ 'candidate-awaiting-activation' ]);
+  t.same(waiting.alerts, [ 'candidate-awaiting-activation', 'candidate-awaiting-approval' ], 'nobody having approved it yet');
 
   await switchOn(db, newer.versionId);
   await switchOn(db, active);
@@ -251,14 +259,73 @@ t.test('a validated version that would stop serving a market is raised with the 
   t.same(raised.candidates.validated.map(({ versionId, unserved }) => ({ versionId, unserved })), [
     { versionId: dropping.versionId, unserved: [ '1/usdt', '1/wbtc', '1/weth' ] },
   ], 'the version names each market of the active one whose Comet it does not serve');
-  t.same(raised.alerts, [ 'candidate-awaiting-activation', 'candidate-drops-markets' ], 'and the status raises it');
+  t.same(raised.alerts, [ 'candidate-awaiting-activation', 'candidate-awaiting-approval', 'candidate-drops-markets' ], 'and the status raises it');
 
   await switchOn(db, dropping.versionId);
   t.equal((await server.fetch('/registry/v1/active')).status, 200);
   t.same((await status()).alerts, [], 'until it is switched on, which is the decision the alert asks for');
 });
 
-t.test('a version skipped for a newer one is not raised again by a rollback past both', async t => {
+/*
+ * A version waiting to be switched on needs two people: one who approves
+ * it, and another who switches it on. While nobody's approval could let it
+ * through — never given, expired, used, or given while another version was
+ * on — the status raises that as well, and names the approval once there is
+ * one.
+ */
+t.test('a version waiting to be switched on is raised until somebody approves it', async t => {
+  const db = await freshDatabase();
+  const { versionId: active } = await seedCandidate(db, snapshot);
+  await activateSeeded(db, active);
+  await db.prepare(`UPDATE registry_state SET last_upstream_checked_at = ?1 WHERE singleton_id = 1`)
+    .bind(new Date().toISOString()).run();
+  t.equal((await server.fetch('/registry/v1/active')).status, 200);
+
+  const validated = async (attempt: number) => {
+    const version = await seedCandidate(db, snapshot, { versionId: randomUUID(), attempt });
+    await validateSeeded(db, version.versionId);
+    return version.versionId;
+  };
+  const hotfix = await validated(2);
+  const newer  = await validated(3);
+  const waiting = await status();
+  t.same(waiting.alerts, [ 'candidate-awaiting-activation', 'candidate-awaiting-approval' ], 'the newest version waiting, nobody approved');
+  t.same(waiting.candidates.validated.map(({ versionId, approval }) => ({ versionId, approval })),
+    [ { versionId: newer, approval: null }, { versionId: hotfix, approval: null } ], 'and none of them has an approval to show');
+
+  // an approval given yesterday, for an hour, which nobody used
+  const checksum  = await db.prepare(`SELECT snapshot_checksum FROM registry_versions WHERE id = ?1`).bind(newer).first<string>('snapshot_checksum');
+  const yesterday = Date.now() - 86_400_000;
+  await db.prepare(
+    `INSERT INTO registry_approvals (id, registry_version_id, snapshot_checksum, active_version_id, actor, reason, created_at, expires_at)
+     VALUES (?1, ?2, ?3, ?4, 'bob', 'read it', ?5, ?6)`
+  ).bind(randomUUID(), newer, checksum, active, new Date(yesterday).toISOString(), new Date(yesterday + 3_600_000).toISOString()).run();
+  t.same((await status()).alerts, [ 'candidate-awaiting-activation', 'candidate-awaiting-approval' ], 'an approval past its expiry is none');
+
+  const approval = await approveSeeded(db, newer, 'bob');
+  const approved = await status();
+  t.same(approved.alerts, [ 'candidate-awaiting-activation' ], 'one in force clears the alert, an older version waiting being nobody\'s to approve');
+  t.same(approved.candidates.validated[0]?.approval, { id: approval.id, actor: 'bob', expiresAt: approval.expiresAt },
+    'and is named, for whoever switches the version on');
+
+  await switchOn(db, hotfix);
+  t.equal((await server.fetch('/registry/v1/active')).status, 200);
+  const moved = await status();
+  t.same(moved.alerts, [ 'candidate-awaiting-activation', 'candidate-awaiting-approval' ],
+    'once another version is on, an approval given against the one before lets nothing through, and is raised again');
+  t.same(moved.candidates.validated.map(({ versionId, approval }) => ({ versionId, approval })), [ { versionId: newer, approval: null } ]);
+
+  await switchOn(db, newer);
+  t.equal((await server.fetch('/registry/v1/active')).status, 200);
+  const on = await status();
+  t.same(on.alerts, [], 'switched on, nothing waits');
+  t.same([ on.active?.versionId, on.active?.activatedBy, on.active?.approvedBy ], [ newer, 'test-admin', 'test-approver' ],
+    'and the status names who approved the move');
+  await activateVersion(db, { versionId: hotfix, action: 'rollback', actor: 'test-admin', reason: 'go back' });
+  t.equal((await status()).active?.approvedBy, null, 'while a rollback, which nobody approves, names nobody');
+});
+
+t.test('a version skipped for a newer one is not raised again when the version before both is switched on again', async t => {
   const db = await freshDatabase();
   const { versionId: first } = await seedCandidate(db, snapshot);
   await activateSeeded(db, first);
@@ -706,6 +773,50 @@ t.test('a setting the environment does not take is raised at once, by name', asy
   t.equal(read.status, 200, 'a setting only reads take does not fail them');
   t.equal(read.headers.get('cache-control'), 'public, max-age=300', 'they take its default');
   t.same((await status()).configuration.invalid, [ 'REGISTRY_SNAPSHOT_CACHE_TTL_S' ], 'and it is raised all the same');
+});
+
+/*
+ * The webhook a move or an approval is announced to is a secret, and a
+ * secret set to something no message can go to is raised as any setting is.
+ * A message given up is raised while the webhook is on, until a later one is
+ * sent: a channel that has stopped hearing of changes says nothing by itself.
+ */
+t.test('the webhook is raised when it is set wrong, and when a message to it was given up', async t => {
+  const db = await freshDatabase();
+  const { versionId } = await seedCandidate(db, snapshot);
+  await activateSeeded(db, versionId);
+  await db.prepare(`UPDATE registry_state SET last_upstream_checked_at = ?1 WHERE singleton_id = 1`)
+    .bind(new Date().toISOString()).run();
+  t.equal((await server.fetch('/registry/v1/active')).status, 200);
+
+  await withSecrets({ COMET_REGISTRY_WEBHOOK_URL: 'http://hooks.example.test/services/T0/B0/status-secret' });
+  const invalid = await status();
+  t.same(invalid.alerts, [ 'configuration-invalid' ], 'a webhook that is no https URL is a setting the registry does not take');
+  t.same(invalid.configuration.invalid, [ 'COMET_REGISTRY_WEBHOOK_URL' ], 'named by its secret');
+  t.same(invalid.notifications, { webhook: 'invalid', failure: null }, 'to which nothing is announced');
+  t.notOk(JSON.stringify(invalid).includes('status-secret'), 'and whose value the status never repeats');
+
+  await withSecrets({ COMET_REGISTRY_WEBHOOK_URL: 'https://hooks.example.test/services/T0/B0/status-secret' });
+  const { kv_registry } = await server.getWorker<Env>().getEnv();
+  const failure = {
+    at:           new Date().toISOString(),
+    activationId: randomUUID(),
+    kind:         'activate',
+    versionId,
+    status:       410,
+    reason:       'the webhook answered 410',
+  };
+  await kv_registry.put(FAILURE_KEY, JSON.stringify(failure));
+  const failing = await status();
+  t.same(failing.alerts, [ 'notification-failing' ], 'a message given up while a webhook is set is raised');
+  t.same(failing.notifications, { webhook: 'on', failure: { ...failure, approvalId: null } },
+    'naming the move, and what the webhook answered, and no approval');
+  t.notOk(JSON.stringify(failing).includes('status-secret'), 'never the webhook');
+
+  await withSecrets({});
+  const off = await status();
+  t.same(off.alerts, [], 'with no webhook set nothing is meant to be announced, and nothing is raised');
+  t.same(off.notifications, { webhook: 'off', failure: null }, 'nor is a record left from before reported');
 });
 
 t.test('the status is behind the admin token', async t => {

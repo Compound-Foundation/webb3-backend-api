@@ -21,6 +21,7 @@ import {
   seedCandidate,
   sha256Hex,
 } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * Runs the worker from wrangler.toml in real workerd with local D1, KV, and
@@ -28,7 +29,7 @@ import {
  * migrations, then checks that migration 0001 enforces the registry
  * invariants in the database itself rather than in application code.
  */
-const server = createTestHarness({ workers: [ { configPath: './wrangler.toml' } ] });
+const server = createTestHarness({ workers: [ registryWorker() ] });
 
 t.before(async () => {
   await server.listen();
@@ -56,6 +57,7 @@ const APPLICATION_TABLES = [
   'validation_results',
   'registry_overlay_events',
   'registry_activations',
+  'registry_approvals',
   'sync_runs',
   'sync_run_items',
 ];
@@ -178,13 +180,13 @@ function priceExceptionRow(scope: Scope, overrides: Row = {}): Row {
 
 type Candidate = Scope & { marketId: string, baseTokenId: string, collateralTokenId: string };
 
-async function insertCandidate(db: D1Database, versionId: string = randomUUID(), chainId: number = 1): Promise<Candidate> {
+async function insertCandidate(db: D1Database, versionId: string = randomUUID(), chainId: number = 1, version: Row = {}): Promise<Candidate> {
   const scope = { registry_version_id: versionId, network_id: randomUUID() };
   const marketId = randomUUID();
   const baseTokenId = randomUUID();
   const collateralTokenId = randomUUID();
   await db.batch([
-    insertStatement(db, 'registry_versions', versionRow(versionId)),
+    insertStatement(db, 'registry_versions', versionRow(versionId, version)),
     insertStatement(db, 'registry_networks', networkRow(scope, chainId)),
     insertStatement(db, 'markets', marketRow(marketId, scope)),
     insertStatement(db, 'tokens', tokenRow(baseTokenId, scope)),
@@ -225,14 +227,23 @@ async function validate(db: D1Database, versionId: string): Promise<void> {
  * The registry's own activation batch: an audit event and the pointer
  * change, each written only when the pointer differs from the target. It is
  * sent as it is, without the checks activateVersion makes before it, because
- * what refuses a version that is not validated has to be the schema.
+ * what refuses a version that is not validated, or a move nobody approved,
+ * has to be the schema. A move is made by test-admin at NOW, with no
+ * approval, unless it says otherwise.
  */
-function activationBatch(db: D1Database, versionId: string, action: 'activate' | 'rollback' = 'activate'): D1PreparedStatement[] {
-  return activationStatements(db, { activationId: randomUUID(), versionId, action, actor: 'test-admin', reason: 'test', at: NOW });
+type Move = { actor?: string, at?: string, approvalId?: string | null };
+
+function activationBatch(
+  db: D1Database,
+  versionId: string,
+  action: 'activate' | 'rollback' = 'activate',
+  { actor = 'test-admin', at = NOW, approvalId = null }: Move = {},
+): D1PreparedStatement[] {
+  return activationStatements(db, { activationId: randomUUID(), versionId, action, actor, reason: 'test', at, approvalId });
 }
 
-async function activate(db: D1Database, versionId: string, action: 'activate' | 'rollback' = 'activate'): Promise<number[]> {
-  const results = await db.batch(activationBatch(db, versionId, action));
+async function activate(db: D1Database, versionId: string, action: 'activate' | 'rollback' = 'activate', move: Move = {}): Promise<number[]> {
+  const results = await db.batch(activationBatch(db, versionId, action, move));
   return results.map(changedRows);
 }
 
@@ -258,6 +269,7 @@ const REGISTRY_SETTINGS = [
   'COMET_SYNC_LEASE_SECONDS',
   'REGISTRY_SNAPSHOT_CACHE_TTL_S',
   'REGISTRY_STALE_FALLBACK_MAX_S',
+  'COMET_REGISTRY_APPROVAL_TTL_S',
 ] as const;
 
 t.test('the worker boots in workerd with the registry bindings', async t => {
@@ -291,6 +303,12 @@ t.test('the worker boots in workerd with the registry bindings', async t => {
     t.notSame(String(env[name] ?? '').trim(), '', `${name} comes from wrangler.toml`);
   }
   t.same(registryConfig(env).invalid, [], 'and the registry takes every one of them');
+  /*
+   * A webhook is a secret, which the harness would take from a developer's
+   * .dev.vars: a test that switches a version on would announce it there.
+   */
+  t.equal(env.COMET_REGISTRY_WEBHOOK_URL, '', 'no webhook is set, whatever .dev.vars sets');
+  t.equal(registryConfig(env).webhook, 'off', 'so nothing is announced');
 
   const limited = await env.REGISTRY_ADMIN_RATE_LIMITER.limit({ key: 'registry-admin:test:sync' });
   t.equal(limited.success, true, 'the admin rate limiter is bound');
@@ -322,6 +340,7 @@ t.test('migration 0001 creates strict tables and an empty active pointer', async
     'market_assets_single_reward',
     'markets_one_default_per_version',
     'markets_slug_per_network',
+    'registry_activations_one_per_approval',
     'sync_runs_only_one_running',
   ], 'partial unique indexes exist');
 
@@ -346,6 +365,15 @@ t.test('migration 0001 creates strict tables and an empty active pointer', async
      )`
   ).all<{ name: string }>();
   t.same(unused.results ?? [], [], 'migration 0004 drops the columns and indexes nothing uses');
+
+  const approvals = await db.prepare(
+    `SELECT name FROM pragma_table_info('registry_activations') WHERE name = 'approval_id'
+     UNION ALL SELECT name FROM sqlite_schema WHERE type = 'trigger' AND name IN (
+       'registry_activations_activate_requires_approval', 'registry_activations_rollback_restores',
+       'registry_state_move_requires_activation'
+     )`
+  ).all<{ name: string }>();
+  t.equal((approvals.results ?? []).length, 4, 'migration 0011 adds approvals, and what an activation needs');
 
   const state = await db.prepare('SELECT singleton_id, active_version_id FROM registry_state').all();
   t.same(
@@ -913,6 +941,187 @@ t.test('sync runs keep one running job and consistent checkpoints', async t => {
   await t.resolves(() => insertRow(db, 'sync_runs', syncRun()), 'a new run may start after the previous one completes');
 });
 
+// a minute of the day the moves below are made in, so that what is later is later
+const minute = (n: number) => `2026-09-17T00:${String(n).padStart(2, '0')}:00.000Z`;
+
+/*
+ * An approval as a row: of a validated version by its checksum, by bob,
+ * given at minute 0 while nothing was on, and in force for the hour.
+ */
+async function approve(db: D1Database, versionId: string, overrides: Row = {}): Promise<string> {
+  const id = randomUUID();
+  await insertRow(db, 'registry_approvals', {
+    id,
+    registry_version_id: versionId,
+    snapshot_checksum:   sha256Hex(`snapshot:${versionId}`),
+    active_version_id:   null,
+    actor:               'bob',
+    reason:              'reviewed',
+    created_at:          minute(0),
+    expires_at:          minute(59),
+    ...overrides,
+  });
+  return id;
+}
+
+// three validated versions, each made a minute after the one before, which is the order a rollback goes back in
+async function threeVersions(db: D1Database): Promise<[ string, string, string ]> {
+  const ids: string[] = [];
+  for (const [ index, chainId ] of [ 1, 137, 8453 ].entries()) {
+    const { registry_version_id: versionId } = await insertCandidate(db, randomUUID(), chainId, { created_at: minute(index) });
+    await validate(db, versionId);
+    ids.push(versionId);
+  }
+  return ids as [ string, string, string ];
+}
+
+const APPROVAL_REQUIRED = { message: /an activation requires an approval of its version by another name, in force/ };
+const RESTORES          = { message: /a rollback restores only the older version the one on replaced when it was last activated/ };
+const MOVES_WITH        = { message: /the active registry version moves only with its activation/ };
+
+t.test('an approval names a validated version by its checksum, and is never changed', async t => {
+  const { APP_DB: db } = await freshEnv();
+  const { registry_version_id: importing } = await insertCandidate(db, randomUUID(), 1);
+  const invalid = await insertCandidate(db, randomUUID(), 10);
+  await recordChecks(db, invalid.registry_version_id, 1, [ false ]);
+  await setStatus(db, invalid.registry_version_id, 'invalid');
+  const { registry_version_id: validated } = await insertCandidate(db, randomUUID(), 137);
+  await validate(db, validated);
+
+  const BY_CHECKSUM = { message: /must name a validated version by its checksum/ };
+  await t.rejects(() => approve(db, importing), BY_CHECKSUM, 'a draft is not approved');
+  await t.rejects(() => approve(db, invalid.registry_version_id), BY_CHECKSUM, 'nor an invalid version');
+  await t.rejects(() => approve(db, randomUUID()), BY_CHECKSUM, 'nor one that does not exist');
+  await t.rejects(() => approve(db, validated, { snapshot_checksum: hex('other', 64) }), BY_CHECKSUM,
+    'nor a validated one by a checksum that is not its own');
+  await t.rejects(() => approve(db, validated, { expires_at: minute(0) }), CHECK_FAILED, 'an approval expires after it is given');
+  await t.rejects(() => approve(db, validated, { reason: ' ' }), CHECK_FAILED, 'it has a reason');
+  await t.rejects(() => approve(db, validated, { active_version_id: validated }), CHECK_FAILED,
+    'and it is not of the version that was on, which is no change');
+
+  const approval = await approve(db, validated);
+  await t.rejects(() => run(db, `UPDATE registry_approvals SET expires_at = ?1 WHERE id = ?2`, minute(58), approval),
+    { message: /append-only/ }, 'an approval is never changed');
+  await t.rejects(() => run(db, `DELETE FROM registry_approvals WHERE id = ?1`, approval), { message: /append-only/ },
+    'nor deleted');
+  t.same(await foreignKeyViolations(db), [], 'no foreign key violations');
+});
+
+/*
+ * Migration 0011 applies while the release before it is live, which records
+ * no approval. Until an environment has one, the schema takes every move that
+ * release makes, and leaves the rule to the code.
+ */
+t.test('until the first approval, the schema takes the moves the release before it made', async t => {
+  const { APP_DB: db } = await freshEnv();
+  const [ first, second, third ] = await threeVersions(db);
+
+  t.same(await activate(db, second, 'activate', { at: minute(1) }), [ 1, 1 ], 'an activation without an approval');
+  t.same(await activate(db, third, 'rollback', { at: minute(2) }), [ 1, 1 ], 'a rollback to a version never on');
+  await t.resolves(() => run(db, `UPDATE registry_state SET active_version_id = ?1, updated_at = ?2`, first, minute(3)),
+    'and a move of the pointer no activation records');
+  t.equal(await count(db, 'registry_activations', 'approval_id IS NULL'), 2, 'no move names an approval');
+});
+
+t.test('once an environment has an approval, an activation needs one it may use', async t => {
+  const { APP_DB: db } = await freshEnv();
+  const [ first, second, third ] = await threeVersions(db);
+  t.same(await activate(db, first, 'activate', { at: minute(1) }), [ 1, 1 ], 'the first version is on, from before approvals');
+
+  // bob approves the second against the first, and the same again, as a request sent twice records it
+  const good    = await approve(db, second, { active_version_id: first, created_at: minute(2) });
+  const retried = await approve(db, second, { active_version_id: first, created_at: minute(2) });
+  const cases: Array<[ string, Move ]> = [
+    [ 'no approval', {} ],
+    [ 'its approver\'s own', { actor: 'bob', approvalId: good } ],
+    [ 'one past its expiry', { approvalId: await approve(db, second, { active_version_id: first, created_at: minute(1), expires_at: minute(3) }) } ],
+    [ 'one of another version', { approvalId: await approve(db, third, { active_version_id: first, created_at: minute(2) }) } ],
+    [ 'one given while another version was on', { approvalId: await approve(db, second, { active_version_id: third, created_at: minute(2) }) } ],
+    [ 'one given while nothing was on', { approvalId: await approve(db, second, { created_at: minute(2) }) } ],
+  ];
+  for (const [ name, move ] of cases) {
+    await t.rejects(() => activate(db, second, 'activate', { at: minute(3), ...move }), APPROVAL_REQUIRED, `an activation with ${name} is refused`);
+  }
+  t.equal(await count(db, 'registry_activations'), 1, 'none of them is recorded');
+  t.equal(await activeVersionId(db), first, 'and the pointer has not moved');
+
+  t.same(await activate(db, second, 'activate', { at: minute(4), approvalId: good }), [ 1, 1 ],
+    'one by another name, in force, given while the version it replaces was on, is taken');
+  t.same(await activate(db, first, 'rollback', { at: minute(5) }), [ 1, 1 ], 'the version is rolled back from');
+  await t.rejects(() => activate(db, second, 'activate', { at: minute(6), approvalId: good }), APPROVAL_REQUIRED,
+    'and switching it on again does not take the approval used before');
+  await t.rejects(() => activate(db, second, 'activate', { at: minute(6), approvalId: retried }), APPROVAL_REQUIRED,
+    'nor the one given beside it: its version was switched on after it was given');
+  const fresh = await approve(db, second, { active_version_id: first, created_at: minute(6), actor: 'carol' });
+  t.same(await activate(db, second, 'activate', { at: minute(7), approvalId: fresh }), [ 1, 1 ], 'it takes a new one');
+
+  await t.rejects(() => activate(db, first, 'rollback', { at: minute(8), approvalId: good }), UNIQUE_FAILED,
+    'and no approval is recorded with two moves, whatever the second one is');
+  t.same((await db.prepare(`SELECT approval_id FROM registry_activations ORDER BY rowid`).all()).results,
+    [ { approval_id: null }, { approval_id: good }, { approval_id: null }, { approval_id: fresh } ], 'each move names what it used');
+  t.same(await foreignKeyViolations(db), [], 'no foreign key violations');
+});
+
+/*
+ * A rollback goes back one step: to the version the one on replaced when an
+ * activation last switched it on, and only to one older than it. A version
+ * switched on by a rollback is left by the step its own last activation
+ * names; one switched on in place of a newer version by none.
+ */
+t.test('once an environment has an approval, a rollback goes back one step only', async t => {
+  const { APP_DB: db } = await freshEnv();
+  const [ first, second, third ] = await threeVersions(db);
+  const switchOn = async (versionId: string, replacing: string | null, at: number) => {
+    const approvalId = await approve(db, versionId, { active_version_id: replacing, created_at: minute(at) });
+    t.same(await activate(db, versionId, 'activate', { at: minute(at + 1), approvalId }), [ 1, 1 ], `${versionId} is switched on`);
+  };
+
+  await approve(db, first);
+  await t.rejects(() => activate(db, first, 'rollback', { at: minute(1) }), RESTORES, 'with nothing on, there is nothing to roll back');
+
+  await switchOn(first, null, 2);
+  await switchOn(second, first, 4);
+  await t.rejects(() => activate(db, third, 'rollback', { at: minute(6) }), RESTORES, 'a version never on is not restored');
+  await switchOn(third, second, 6);
+  await t.rejects(() => activate(db, first, 'rollback', { at: minute(8) }), RESTORES, 'nor one two steps back at once');
+  t.same(await activate(db, second, 'rollback', { at: minute(9) }), [ 1, 1 ], 'one step back is, to the version the one on replaced');
+  t.same(await activate(db, first, 'rollback', { at: minute(10) }), [ 1, 1 ], 'and so is the next, from the version it restored');
+  await t.rejects(() => activate(db, second, 'rollback', { at: minute(11) }), RESTORES, 'a newer one is not, though it was on');
+  t.same(await activate(db, first, 'rollback', { at: minute(12) }), [ 0, 0 ], 'and a rollback to the version on writes nothing');
+
+  // the third switched on again in place of the first, and the second in place of the third, which is newer
+  await switchOn(third, first, 13);
+  await switchOn(second, third, 15);
+  await t.rejects(() => activate(db, third, 'rollback', { at: minute(17) }), RESTORES,
+    'from a version switched on in place of a newer one, that newer one is not restored');
+  await t.rejects(() => activate(db, first, 'rollback', { at: minute(17) }), RESTORES,
+    'nor what an earlier activation of it replaced');
+  t.equal(await activeVersionId(db), second);
+  t.same(await foreignKeyViolations(db), [], 'no foreign key violations');
+});
+
+t.test('once an environment has an approval, the pointer moves only with an activation', async t => {
+  const { APP_DB: db } = await freshEnv();
+  const [ first, second ] = await threeVersions(db);
+  t.same(await activate(db, first, 'activate', { at: minute(1) }), [ 1, 1 ]);
+  const approvalId = await approve(db, second, { active_version_id: first, created_at: minute(2) });
+
+  await t.rejects(() => run(db, `UPDATE registry_state SET active_version_id = ?1, updated_at = ?2`, second, minute(3)), MOVES_WITH,
+    'a move no activation records is refused');
+  await t.rejects(
+    () => db.batch([
+      activationBatch(db, second, 'activate', { at: minute(3), approvalId })[0]!,
+      db.prepare(`UPDATE registry_state SET active_version_id = ?1, updated_at = ?2`).bind(second, minute(4)),
+    ]),
+    MOVES_WITH,
+    'and so is one at another instant than the activation beside it, which goes back with it',
+  );
+  await t.resolves(() => run(db, `UPDATE registry_state SET last_upstream_checked_at = ?1, updated_at = ?1`, minute(5)),
+    'the rest of the row is written as before');
+  t.equal(await activeVersionId(db), first, 'the pointer is where the last activation left it');
+  t.same(await activate(db, second, 'activate', { at: minute(6), approvalId }), [ 1, 1 ], 'and an activation moves it');
+});
+
 /*
  * Migration 0004 drops columns from tables a deployed release has already
  * written to, so it has to apply over their rows and keep the rest of them.
@@ -983,4 +1192,55 @@ t.test('migration 0004 keeps the sync history it drops columns from', async t =>
     'a checkpoint keeps its claim');
   t.equal(await count(db, 'tokens'), 2, 'tokens outlive the index nobody read');
   t.same(await foreignKeyViolations(db), [], 'no foreign key violations');
+});
+
+/*
+ * Migration 0011 applies while the release before it is live, over the moves
+ * that release has made. That release goes on activating and rolling back
+ * with its own statement, which names no approval, until the environment
+ * records its first: from then on its activations are refused, and a
+ * rollback of it goes through only as the rule allows, one step back.
+ */
+t.test('migration 0011 keeps the moves of the release before it, until the first approval', async t => {
+  await server.reset();
+  const { APP_DB: db } = await server.getWorker<Env>().getEnv();
+  await applyMigrations(db, undefined, { through: '0004' });
+
+  // the release before's own move: its audit row names its columns, and the pointer moves at the same instant
+  const released = (versionId: string, action: 'activate' | 'rollback', at: string): D1PreparedStatement[] => [
+    db.prepare(
+      `INSERT INTO registry_activations (id, registry_version_id, previous_version_id, action, actor, reason, created_at)
+       SELECT ?1, ?2, active_version_id, ?3, ?4, ?5, ?6
+       FROM registry_state
+       WHERE singleton_id = 1 AND active_version_id IS NOT ?2`
+    ).bind(randomUUID(), versionId, action, 'test-admin', 'test', at),
+    db.prepare(
+      `UPDATE registry_state SET active_version_id = ?1, updated_at = ?2
+       WHERE singleton_id = 1 AND active_version_id IS NOT ?1`
+    ).bind(versionId, at),
+  ];
+  const moved = async (statements: D1PreparedStatement[]) => (await db.batch(statements)).map(changedRows);
+
+  const [ first, second, third ] = await threeVersions(db);
+  t.same(await moved(released(first, 'activate', minute(1))), [ 1, 1 ]);
+  t.same(await moved(released(second, 'activate', minute(2))), [ 1, 1 ]);
+
+  await applyMigration(db, '0011_registry_approvals.sql');
+
+  t.same(await moved(released(third, 'activate', minute(3))), [ 1, 1 ], 'the release before activates as it did');
+  t.same(await moved(released(first, 'rollback', minute(4))), [ 1, 1 ], 'and rolls back as it did');
+  t.same((await db.prepare(`SELECT approval_id FROM registry_activations`).all()).results, [
+    { approval_id: null }, { approval_id: null }, { approval_id: null }, { approval_id: null },
+  ], 'the moves made before and after the migration name no approval');
+  t.same(await foreignKeyViolations(db), [], 'no foreign key violations');
+
+  const approvalId = await approve(db, third, { active_version_id: first, created_at: minute(5) });
+  await t.rejects(() => moved(released(third, 'activate', minute(6))), APPROVAL_REQUIRED,
+    'from the first approval on, its activation is refused');
+  t.same(await moved(activationBatch(db, third, 'activate', { at: minute(7), approvalId })), [ 1, 1 ],
+    'while one with the approval goes through');
+  await t.rejects(() => moved(released(second, 'rollback', minute(8))), RESTORES,
+    'and its rollback is held to the rule: not to a version the one on did not replace');
+  t.same(await moved(released(first, 'rollback', minute(8))), [ 1, 1 ],
+    'while one step back, to the version the one on replaced, still goes through');
 });

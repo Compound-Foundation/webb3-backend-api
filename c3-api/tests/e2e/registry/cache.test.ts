@@ -23,7 +23,8 @@ import { activateVersion, snapshotChecksum } from '../../../src/registry/reposit
 
 import { applyMigrations } from '../../util/d1.js';
 import { refusingKv } from '../../util/kv.js';
-import { loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { approveSeeded, loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * The snapshot cache against real local D1 and KV.
@@ -38,7 +39,7 @@ import { loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../.
  * An isolate keeps what it read per database binding, so a test that wants a
  * fresh isolate reads through a binding it has not used before.
  */
-const server = createTestHarness({ workers: [ { configPath: './wrangler.toml' } ] });
+const server = createTestHarness({ workers: [ registryWorker() ] });
 
 t.before(async () => {
   await server.listen();
@@ -63,6 +64,7 @@ async function freshEnvironment(): Promise<{ db: D1Database, kv: KVNamespace }> 
 }
 
 async function activate(db: D1Database, versionId: string): Promise<void> {
+  await approveSeeded(db, versionId);
   await activateVersion(db, { versionId, action: 'activate', actor: 'test-admin', reason: 'test' });
 }
 

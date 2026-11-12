@@ -32,6 +32,9 @@ type RegistryErrorCode = (
   | 'OVERLAY_CREATION_BLOCK_WRONG'
   // the stored candidate is not in the state the caller expected
   | 'CANDIDATE_STATE_CONFLICT'
+  // an activation without an approval it may use, and a rollback to a version it may not restore
+  | 'APPROVAL_REQUIRED'
+  | 'ROLLBACK_TARGET_INVALID'
   // the sync fence refused the work
   | 'SYNC_ALREADY_RUNNING'
 );
