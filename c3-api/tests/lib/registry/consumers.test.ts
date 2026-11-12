@@ -12,7 +12,7 @@ import { enrichTransactionHistoryItem, isBulker } from '../../../lib/computation
 import { rawTransactionHistoryItems, tokenSymbol } from '../../../lib/computations/account/raw-transaction-history-items.js';
 import { accountRewards } from '../../../lib/computations/account/account-rewards.js';
 import { baseAssetLabel, marketRewards } from '../../../lib/computations/market/market-rewards.js';
-import { usdBasePriceFeedFor } from '../../../lib/computations/rewards/base-price-feed.js';
+import { convertsRewardPriceToUsd, usdBasePriceFeedFor } from '../../../lib/computations/rewards/base-price-feed.js';
 import type * as account from '../../../lib/computations/account.js';
 import type * as comet from '../../../lib/computations/comet.js';
 import type * as market from '../../../lib/computations/market.js';
@@ -32,10 +32,12 @@ import { describeRegistryTargets, knownGovernanceContracts } from '../../../src/
 import { getProposalVoteReceipts, type VoteReceiptsResponseData } from '../../../src/governance-handlers/proposal-vote-receipts.js';
 import { describeContractCallForHumans, contractForLocation } from '../../../lib/well-known/contracts/utils.js';
 import { defaultAbiCoder } from '@ethersproject/abi';
-import { rewardGroups } from '../../../src/account-handlers/rewards.js';
+import { rewardGroups, rewardsInclusion, rewardsSummary } from '../../../src/account-handlers/rewards.js';
 import type { MarketRouteData } from '../../../src/router.js';
 import { streamEventsOf, streamKeyOf } from '../../../src/transaction-history-handler/cursor.js';
 
+import { consoleLines } from '../../util/console.js';
+import { evaluatorOver, stub } from '../../util/evaluator.js';
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
 import { fakeNode } from '../../util/fake-node.js';
 
@@ -100,6 +102,70 @@ t.test('account rewards are grouped by the rewards contract that holds them', as
   t.equal(none[0]!.contracts.length, 3, 'a market whose account rewards are off is left out');
 });
 
+/*
+ * The rewards contract says, at the latest block, which token it pays for a
+ * market; what an account is owed is read, scaled, priced and labelled as the
+ * token the version describes. They are read only where the two are one.
+ */
+t.test('an account\'s rewards are read only in the token the version describes', async t => {
+  const usdc  = catalog.marketAt(MAINNET, USDC)!.comet;
+  const COMP  = '0xc00e94Cb662C3520282E6f5717214004A7f26888';
+  const OTHER = '0x2222222222222222222222222222222222222222';
+
+  t.equal(rewardsInclusion(usdc, Eth.NullAddress), 'none', 'a market the contract pays nothing for is left out');
+  t.equal(rewardsInclusion(usdc, COMP as never), 'read', 'one that pays the token the version describes is read');
+
+  const warnings = consoleLines(t, [ 'warn' ]);
+  const mismatch = rewardsInclusion(usdc, OTHER as never);
+  rewardsInclusion(usdc, OTHER as never);
+  t.same(mismatch, {
+    chainId: 1,
+    comet:   { address: usdc.address },
+    status:  'error',
+    message: `the rewards contract pays ${OTHER}, not the COMP the registry version describes`,
+  }, 'one that pays another token is answered as a market whose rewards cannot be valued');
+  t.equal(warnings.length, 1, 'and named in the log once a minute, however often it is asked for');
+  t.match(warnings[0], /^reward token differs from the registry: 0xc3d688B66703497DAA19211EEdff47f25384cdc3 on ethereum-mainnet pays 0x2{40}/);
+});
+
+/*
+ * The route over every market of the fixture's one rewards contract: a market
+ * the contract pays nothing for is left out, one it pays the described token
+ * for is read, and one it pays another token for is answered as an error.
+ */
+t.test('the account rewards route reconciles each market\'s reward token with the version', async t => {
+  const OTHER = '0x2222222222222222222222222222222222222222';
+  const COMP  = '0xc00e94Cb662C3520282E6f5717214004A7f26888';
+  const paid: Record<string, string> = { [USDC]: COMP, [WETH]: OTHER, [USDT]: Eth.NullAddress, [WBTC]: COMP };
+  const read: string[] = [];
+  const evaluator = evaluatorOver({
+    ethGetBlock:            stub(() => ({ number: 23_500_000, timestamp: 1_790_000_000 })),
+    // every other market of the fixture, Base's, is paid nothing here
+    getRewardConfigsSleuth: stub(({ cometMarkets }) => cometMarkets.map((comet: any) => ({
+      cometAddress: comet.address,
+      rewardConfig: { rewardToken: paid[comet.address.toLowerCase()] ?? Eth.NullAddress, rescaleFactor: 1, shouldUpscale: true },
+    }))),
+    accountRewards:         stub(({ contract }) => {
+      read.push(contract.address.toLowerCase());
+      const amount = BigFixnum.from({ value: 1 });
+      return { status: 'success', chainId: 1, comet: { address: contract.address }, amountOwed: amount, walletBalance: amount, supplyBalance: amount, borrowBalance: amount };
+    }),
+  });
+
+  t.capture(console, 'warn');
+  const answer = await (await rewardsSummary(
+    { apiHost: '', nodeHost: '', nodeKey: '', account: '0x1111111111111111111111111111111111111111', catalog },
+    { evaluator } as never,
+  )).json() as Array<{ comet: { address: string }, status: string, message?: string }>;
+
+  t.same(read.sort(), [ USDC, WBTC ].sort(), 'the amounts of the markets paying the token the version describes are read');
+  t.same(answer.map(entry => [ entry.comet.address.toLowerCase(), entry.status ]).sort(), [
+    [ USDC, 'success' ], [ WBTC, 'success' ], [ WETH, 'error' ],
+  ].sort(), 'the market paying another token is an error, and the one paying nothing is left out');
+  t.match(answer.find(entry => entry.status === 'error'), { chain_id: 1, message: /pays 0x2{40}, not the COMP/ },
+    'in the envelope of a market whose rewards cannot be valued, naming the token it pays');
+});
+
 t.test('transaction history streams are the markets the version serves history for', async t => {
   const streams = streamEventsOf(catalog);
 
@@ -137,8 +203,8 @@ t.test('the base price feed of a rewards APR follows the unit of the reward feed
 
   t.equal(usdBasePriceFeedFor(usdc), null, 'a USD-quoted market needs no conversion');
   t.equal(usdBasePriceFeedFor(weth), null, 'nor does one whose reward feed is quoted in its base asset');
-  t.equal(usdBasePriceFeedFor(wbtc)?.address, '0xf4030086522a5beea4988f8ca5b36dbc97bee88c',
-    'a USD reward feed against a base-quoted market converts through the USD feed');
+  // which feed that is, the APR's own test reads (rewards-apr.test.ts)
+  t.not(usdBasePriceFeedFor(wbtc), null, 'a USD reward feed against a base-quoted market converts through the USD feed');
 });
 
 /*
@@ -230,7 +296,9 @@ t.test('a computation takes only a Comet the registry materialized', async t => 
 
   const taken = [
     marketOf<comet.AssetPrice>(usdc),
+    marketOf<comet.BasePrice>(usdc),
     marketOf<comet.BaseUsdPrice>(usdc),
+    marketOf<comet.CometBasePrice>(usdc),
     marketOf<market.Collaterals>(usdc),
     marketOf<market.MarketSummary>(usdc),
     marketOf<market.MarketDaySummary>(usdc),
@@ -244,6 +312,7 @@ t.test('a computation takes only a Comet the registry materialized', async t => 
     marketOf<rewards.RewardsSummary>(usdc),
     marketOf<account.AccountRewards>(usdc),
     argumentOf<typeof usdBasePriceFeedFor>(usdc),
+    argumentOf<typeof convertsRewardPriceToUsd>(usdc),
     argumentOf<typeof baseAssetLabel>(usdc),
     routedTo(usdc),
   ];
@@ -266,8 +335,12 @@ t.test('a computation takes only a Comet the registry materialized', async t => 
   });
   // @ts-expect-error the price of a collateral is read at the scale the version states
   marketOf<comet.AssetPrice>(constant);
-  // @ts-expect-error the base asset's USD price is read through the feed the version's quote calls for
+  // @ts-expect-error the base price through the feed the version names
+  marketOf<comet.BasePrice>(constant);
+  // @ts-expect-error and its USD price through the feed the version's quote calls for
   marketOf<comet.BaseUsdPrice>(constant);
+  // @ts-expect-error and through the feed the Comet names for it, at the scale its version states
+  marketOf<comet.CometBasePrice>(constant);
   // @ts-expect-error and every price of a market's collateral is
   marketOf<market.Collaterals>(constant);
   // @ts-expect-error so a market summary prices with its version
@@ -294,6 +367,8 @@ t.test('a computation takes only a Comet the registry materialized', async t => 
   marketOf<rewards.RewardsSummary>(constant);
   // @ts-expect-error
   argumentOf<typeof usdBasePriceFeedFor>(constant);
+  // @ts-expect-error
+  argumentOf<typeof convertsRewardPriceToUsd>(constant);
   // @ts-expect-error
   argumentOf<typeof baseAssetLabel>(constant);
   // @ts-expect-error and a market route is handed nothing else

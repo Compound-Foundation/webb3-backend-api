@@ -1181,6 +1181,14 @@ the feed it replaces answered at that block. A replacement that reverts
 while the feed it replaces answers — at a block before it was deployed — is
 not logged.
 
+The market's base feed, its `baseAsset.priceFeed` there, is logged only when
+the feed its Comet names at that block did not answer either, by `/summary`
+as by a history. So a base feed the Comet has moved off, which Chainlink
+retired while the version still names it, is not logged: the API prices the
+base asset through the Comet's feed meanwhile, and the daily chain check
+raises the difference
+([A market that changed on chain](#a-market-that-changed-on-chain)).
+
 A price exception covers collateral feeds only. When the feed is the market's
 base feed, the Comet itself cannot price its base asset and only its
 governance can replace the feed. A reward feed or a base USD feed is changed
@@ -1191,6 +1199,16 @@ overlay with `GET …/markets/<chainId>/<deploymentKey>/overlay`, and send it
 back changed as in its step 5, with the `digest` the read answered as
 `"expectedDigest"`: if somebody changes the market in between, your write is
 refused instead of undoing theirs.
+
+An exception names a feed, not a token, and applies wherever a Comet reads
+that feed: at the latest block, and at a past block a history reads. Where a
+remap's replacement does not answer yet — at a block before it was deployed —
+a history reads the feed the Comet named at that block instead. A feed
+governance has since replaced is still priced by its exception on the days
+the market read it. That is all the seeded exceptions of wUSDM and pumpBTC do
+now: governance delisted both by moving them onto a "Constant price feed"
+that answers 10^-8, which the summaries read like any other feed from then
+on, with no exception.
 
 ### 2. Decide how to price it
 
@@ -1268,7 +1286,10 @@ included: a day before its replacement was deployed is read from the feed
 the Comet named that day, and only a day neither answers stays `partially`.
 
 `GET /registry/v1/admin/status` does not report a market whose feed reverts:
-alert on the `price feed reverted:` log line instead.
+alert on the `price feed reverted:` log line instead, as well as on the
+status's `chain-drift`. A base feed of the version that reverts while the
+feed its Comet names answers is not logged, since the API reads the
+Comet's: the daily chain check, as `chain-drift`, is what reports it.
 
 ## A market that changed on chain
 
@@ -1304,9 +1325,33 @@ each with the feed its Comet reads, and names it by the token's `symbol()`.
 Its summary at the latest block prices collateral the same way, but lists
 and names it as the version does: a collateral the Comet added is left out
 until a version describes it, and one the Comet replaced at an index is
-reported as one that could not be read (`partially`). And `/registry/v1/*`
-serves the old facts, which a client that prices from the registry's feeds
-would use.
+reported as one that could not be read (`partially`). A collateral the Comet
+added is read in a user's transaction history at the decimals the token
+reports, with no symbol. Both read the base asset through the base feed the
+version stores first, so a base feed governance replaced is still read
+first — once Chainlink retires it, the summaries, their history and the
+rewards routes, `/account/{address}/rewards` among them, price the base
+asset through the feed the Comet names instead, and answer `error` only
+where that one reverts too. Until the market is imported again, the rewards
+still name the version's feed as the market's (`base_asset.priceFeed` of
+`/rewards/dapp-data`), even where they read the Comet's. And
+`/registry/v1/*` serves the old facts, which a client that prices from the
+registry's feeds would use.
+
+The check does not read reward tokens: a rewards contract cannot start paying
+another token, since CometRewards sets a market's token once, and the import
+reads it from the contract the version names. A version that describes
+another token than its rewards contract pays shows instead in the worker's
+log, once a minute per market for as long as it lasts:
+
+```
+reward token differs from the registry: 0xc3d688B66703497DAA19211EEdff47f25384cdc3 on ethereum-mainnet pays 0x…, the version describes 0xc00e94cb662c3520282e6f5717214004a7f26888
+```
+
+This line should never appear. If it does, the version was not built from
+that contract, and `/account/{address}/rewards` answers that market as
+`error` until a version describes the token it pays: import the commit again
+as below.
 
 ### 2. Import the commit again
 
@@ -1381,6 +1426,11 @@ it has, `chainCheck` is still the check of the version before it — its
 `versionId` says which — and the alert stays; it clears once that check
 finds the version agrees with the chain. Switching back to a version that
 stores what drifted keeps it raised.
+
+A version that changes a market's base feed prices the market's whole
+history through the new feed, whatever its quote, and a day sampled before
+that feed existed through the feed the Comet named that day. Such a day
+answers `error` only where neither feed answered.
 
 ## Switching back
 
@@ -1511,7 +1561,7 @@ When `alerts` is not empty, each name says what to do:
 | `candidate-awaiting-approval` | The newest version waiting to be switched on has no approval anybody could switch it on with: none was given, or the one given expired, was used, or was given while another version was on | An admin reads what it changes and approves it (step 5 of [the first bring-up](#bringing-an-environment-up-for-the-first-time), with the version's id and the version on as `expectedActiveVersionId`). The alert clears then, and comes back if the approval expires unused or another version goes on first; its `approval` in `candidates.validated` names it while it holds |
 | `candidate-drops-markets` | A version waiting to be switched on would stop serving markets the version on serves; its `unserved` in `candidates.validated` names them, by their keys in the version on. Nothing holds it back | Step 2 of [When the source changes](#when-the-source-changes): `markets.unserved` says where each Comet went. Confirm every one with a developer before switching it on, and describe a renamed one under its new key first. The alert holds until a version at least that new is switched on |
 | `commit-rejected` | The newest commit imported completely but did not validate, and the scheduled job will not import it again by itself; `sync.rejectedCommit` names it | Read why it failed (`GET /registry/v1/admin/versions/<versionId>`). If a decision was wrong, hold a new attempt (step 1 of [Describing a new market](#describing-a-new-market)), correct it there and validate; otherwise the alert clears when the source moves on |
-| `chain-drift` | The version on stores a price feed or a collateral asset its market's Comet no longer answers with: governance changed the market on chain after the import, and the source did not move. `chainCheck.drifts` names each, with what the version stores and what the chain answers. Until a version that agrees is on, the summary at the latest block leaves out a collateral the Comet added ([A market that changed on chain](#a-market-that-changed-on-chain)) | [A market that changed on chain](#a-market-that-changed-on-chain): import the commit again with `forceNewAttempt`, check what it changes and switch it on. The alert clears once the next hourly invocation has checked the version on and found it agrees with the chain, within the hour of the switch |
+| `chain-drift` | The version on stores a price feed or a collateral asset its market's Comet no longer answers with: governance changed the market on chain after the import, and the source did not move. `chainCheck.drifts` names each, with what the version stores and what the chain answers. Until a version that agrees is on, the summary at the latest block leaves out a collateral the Comet added, and the summaries read the base feed the version stores, or where it reverts the one the Comet names ([A market that changed on chain](#a-market-that-changed-on-chain)) | [A market that changed on chain](#a-market-that-changed-on-chain): import the commit again with `forceNewAttempt`, check what it changes and switch it on. The alert clears once the next hourly invocation has checked the version on and found it agrees with the chain, within the hour of the switch |
 | `last-sync-failed` | The last import ended `failed`. `sync.lastRun.lastError` says how: `validation failed` is a draft that failed a check, and `cancelled by <actor>: <reason>` a run somebody cancelled. A root that fails does not fail the run, and neither do the checks of a run held for review — the first import of an environment, or one with `holdForReview`: it completes, its draft left open | After `validation failed`, read the draft's checks: `GET /registry/v1/admin/versions/<sync.lastRun.registryVersionId>` lists them under `validation.checks`, failed first, with their `details`. If `all-roots-imported` is among them, the run gave roots up: `GET /registry/v1/admin/sync-runs/<sync.lastRun.id>` lists them with `status` `failed`, and why in each `lastError`. Fix that — most often the node provider proxy — and the scheduled job tries the commit again, or force a new attempt. Otherwise `commit-rejected` is raised as well: follow it. After a cancel, import again as `sync-stalled` says |
 | `sync-failing` | The import that is running keeps failing: the last root it tried failed, or an invocation has failed since before trying one, and the roots left failed have spent two attempts or more between them — two roots once, or one root twice. A single failure does not raise it. `sync.lastRun.lastError` says why, once an invocation has recorded it | Read its run: `GET /registry/v1/admin/sync-runs/<id>` lists each root with why it failed and the `attempts` it has spent. `SOURCE_REQUEST_FAILED` and `CHAIN_REQUEST_FAILED` are GitHub or the node provider proxy not answering: fix the proxy, or wait for GitHub, and the next hourly invocation carries on. Until then an invocation that imports nothing spends an attempt of each root it tries, and a root is given up after five, whatever failed it. `the invocation importing this root did not finish` is an invocation stopped in the middle of that root — a deploy, or a Worker past its time or CPU: the next one tries it again, and if one market keeps stopping it, the worker's logs say what did. Until the next one records it, such a root is still `processing`, under a `leaseExpiresAt` already past, and the run's `lastError` is still that of the attempt before it — `null` if that one succeeded. `the database did not answer` is D1 failing under that root — restarted, overloaded or cut off. A restart or an overload spends the attempt all the same, and the next invocation tries the root again; if it keeps coming back, check the database's health. The worker's log line `registry root failed` has what D1 said, as it has the whole of a fault, which a root records as `an unexpected error interrupted the import`. Anything else is the root itself. A `lastError` that no root of the run carries — `OVERLAY_INVALID` naming a `version …`, or `an unexpected error interrupted the import` — is an invocation that failed before it tried a root: see `sync-stalled`, which the status raises as well once nothing has moved for two hours |
 | `sync-stalled` | A run says it is running, but nobody is continuing it: the hourly trigger is not firing, or every invocation fails before it imports a market | Read why in `sync.lastRun.lastError`; where it is `null`, the worker's log line `registry sync failed` names the service that did not answer — GitHub, the node provider proxy or the database — and once it answers, the hourly import resumes the run by itself. A `lastError` that comes back the same every hour does not pass: cancel the run — `POST /registry/v1/admin/sync-runs/<sync.lastRun.id>/cancel` with `{"reason": "…"}` — fix what it names, then import again with `{"forceNewAttempt": true, "reason": "…"}` (step 1 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)). That attempt is of the commit the tracked ref names now: if the source has moved on since the run started — the cancel's answer names the run's `sourceCommitSha` — it imports the newer commit and leaves the run's draft open. To keep what was reviewed on that draft, send the run's `sourceCommitSha` with `forceNewAttempt` instead; otherwise close the draft as the row on a draft of an older commit in [When something goes wrong](#when-something-goes-wrong) says. Cancelling does not help with two of them, which a new attempt meets the same way. `an unexpected error interrupted the import` is a fault, which the log has whole as `registry sync failed unexpectedly`: see `INTERNAL` in [When something goes wrong](#when-something-goes-wrong). `OVERLAY_INVALID` naming a `version …` is a decision that version stores, the one on or an earlier attempt of the commit, which this release no longer takes: a developer's to fix, in a release. Once either is fixed, the hourly import resumes the run by itself |

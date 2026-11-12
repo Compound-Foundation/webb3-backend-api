@@ -101,12 +101,15 @@ summaries, their history, the rewards routes and `/account/{address}/rewards`
   leave that collateral out, and `collaterals` says which it was.
 - `error`: the base asset could not be priced, or — for the rewards routes —
   a price the rewards are valued in: the reward token's, the base asset's, or
-  the USD price a base-quoted reward is converted with. `/summary` still
-  reports every field that does not need a price that failed — the section
-  on `/summary` below says which — and its `total_collateral_value` leaves
-  out a collateral that could not be priced, as in `partially`. Elsewhere —
-  on the other routes, and on each such day of a history — only what
-  identifies the market is reported, with the node's message:
+  the USD price a base-quoted reward is converted with. The base asset is
+  priced through the base feed the registry version names, and where that
+  one reverts, through the feed the market's Comet names at the block, so
+  its price fails only where neither answers. `/summary` still reports every
+  field that does not need a price that failed — the section on `/summary`
+  below says which — and its `total_collateral_value` leaves out a
+  collateral that could not be priced, as in `partially`. Elsewhere — on the
+  other routes, and on each such day of a history — only what identifies the
+  market is reported, with the node's message:
 
 ```json
 { "chain_id": 1, "comet": { "address": "0xe85d…9293" }, "status": "error", "message": "execution reverted" }
@@ -114,6 +117,18 @@ summaries, their history, the rewards routes and `/account/{address}/rewards`
 
 `/market/{network}/{address}/rewards/summary` names no market in its answer,
 so its `error` is `{ "status": "error", "message": … }` alone.
+
+`/account/{address}/rewards` also answers a market as `error` when its
+rewards contract pays another token than the one the registry version
+describes: what the account is owed is an amount of the token paid, and
+reading it as the described one would scale, price and name it wrongly. A
+version imported from the rewards contract describes the very token it pays,
+which CometRewards sets once, so this guards against a version that was not.
+The market stays so until a version describing the token paid is active:
+
+```json
+{ "chain_id": 1, "comet": { "address": "0xc3d6…cdc3" }, "status": "error", "message": "the rewards contract pays 0x…, not the COMP the registry version describes" }
+```
 
 A summary lists every collateral with its own status:
 
@@ -281,25 +296,31 @@ meanwhile ([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#a-market-that-changed-on-
 Where the Comet now holds another asset at a collateral's index, that
 collateral is `error`, and its `message` names the asset the Comet holds
 there. Each is priced through the feed the Comet reads for it at the block
+summarized, and the base asset through the feed the version names for it,
+or, where that one reverts, through the feed the Comet names for it at the
+block
 summarized. A history lists instead the collaterals its Comet listed on each
 day, named by their token's `symbol()`.
 
-The base asset has two prices: its price in the market's unit,
-`base_price`, through the base feed the Comet names, which values
-`total_borrow_value` and `total_supply_value`; and its price in USD,
-`base_usd_price`, through the feed the registry version names for it — on a
-market quoted in USD, that same base feed while the version agrees with the
-chain, so both fail together. The market is `error` where either could not
-be read, with the node's message for the first where it failed, otherwise
-for the second, and still reports every field that does not need a price
-that failed: it leaves out `base_price`, `total_borrow_value` and
-`total_supply_value` where the first failed, and `base_usd_price` where the
-second did. The totals stay in the market's unit: on a market quoted in its
-base asset they are in the unit its feeds answer in — ETH, wstETH or
-BTC — and without `base_usd_price` nothing here converts them to USD.
-`total_collateral_value` leaves out each collateral that is `error`, as in
-`partially`. A USDC market whose base feed reverts, and which the version
-gives no rewards contract or bulker:
+The base asset has two prices: its price in the market's unit, `base_price`,
+through the version's base feed — or, where that reverts, through the feed
+the Comet names at the block — which values `total_borrow_value` and
+`total_supply_value`; and its price in USD, `base_usd_price`. On a market
+quoted in USD that is the same read, with the same fallback, so the two fail
+together, and only where neither feed answers. On one quoted in its base
+asset it is read through the USD feed the version names, which the Comet
+does not name, so nothing stands in for it. The market is `error` where
+either could not be read, with the node's message for the first where it
+failed, otherwise for the second, and still reports every field that does
+not need a price that failed: it leaves out `base_price`,
+`total_borrow_value` and `total_supply_value` where the first failed, and
+`base_usd_price` where the second did. The totals
+stay in the market's unit: on a market quoted in its base asset they are in
+the unit its feeds answer in — ETH, wstETH or BTC — and without
+`base_usd_price` nothing here converts them to USD. `total_collateral_value`
+leaves out each collateral that is `error`, as in `partially`. A USDC market
+whose base feed reverts, and which the version gives no rewards contract or
+bulker:
 
 ```json
 [ {
@@ -418,13 +439,18 @@ $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3
 ]
 ```
 
-Every day reads the base asset's USD price from the feed the active version
-names: a day before that feed was deployed — before governance moved the
-market to it, say — answers `error` ([Market status](#market-status)). A
-collateral the version remaps to another feed (`deprecated_price_remap`) is
-read from that feed, and where it does not answer — on a day before it was
-deployed — from the feed its Comet named that day; the collateral is
-`error`, and the day `partially`, only when neither answers.
+Every day reads the base asset's price from the base feed the active version
+names, and where that feed does not answer — on a day before it was
+deployed, or after Chainlink retired it while the version still names it —
+from the feed the market's Comet named that day. The USD price of a market
+quoted in its base asset is read from the USD feed the version names alone,
+which its Comet does not name. A day is `error`
+([Market status](#market-status)) only where neither feed gave the base
+asset's price, or where its USD price could not be read. A collateral the
+version remaps to another feed (`deprecated_price_remap`) is read from that
+feed, and where it does not answer — on a day before it was deployed — from
+the feed its Comet named that day; the collateral is `error`, and the day
+`partially`, only when neither answers.
 
 A market whose creation block is past the latest block has no day to
 sample ([Market status](#market-status)). It reports the same days as the
@@ -859,6 +885,13 @@ Query parameters:
 - `markets[]` (optional): array of markets filter to be included in the response. Default is every market whose history the active version serves. A market of a testnet is refused with `TESTNET_NOT_SERVED` ([The market registry](#the-market-registry)), and one whose history the active version does not serve with a `400`, `Invalid market address …`. (e.g. filter only Ethereum cUSDCv3 market `markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3`)
 - `actions[]` (optional): array of actions to filter transactions by. Default is all actions. (e.g. filter only borrow actions `actions[]=Borrow`)
 - `cursor` (optional): The first response (with no cursor parameter) will return with a cursor value, to pass that cursor value will allow request to get more transaction history further in the past.
+
+Each action names its token by address, and by the symbol the active
+registry version gives it, and states its amount at the decimals the version
+read for the token. A token the version does not describe — a collateral a
+market listed, or a reward token it started paying, after the version was
+imported — has an empty `symbol`, and its amount is read at the decimals the
+token itself reports, until a version describes it.
 
 A cursor holds a position in the logs of every market whose history its
 version serves, whatever `markets[]` keeps. Markets that share a rewards
