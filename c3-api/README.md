@@ -220,6 +220,11 @@ What that means for the endpoints:
   whatever mainnet market its `markets[]` names, and the client restarts
   pagination. So is a cursor issued before the registry, which carries no
   version, whatever it reads;
+- a market summary, and each day of its history, takes the feed that prices
+  its base asset from the version; what the Comet holds, the feed it reads
+  for each collateral at the block, and the prices are read on chain.
+  Transaction history reads the amounts of a token no version describes at
+  the decimals the token reports ([API.md](./API.md));
 - routes that resolve no market — V2 and gas price — never read `APP_DB`,
   and governance reads it only to name the markets of proposal actions,
   which the static constants do not. The proposal list, and the vote

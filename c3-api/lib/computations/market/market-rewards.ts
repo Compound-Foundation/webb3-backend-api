@@ -85,8 +85,8 @@ function baseAssetLabel(contract: RegistryComet): { symbol: string, description:
 
 const { implement, pipe } = Compute.Functor<MarketRewards>({});
 const marketRewards = implement({
-  // 5: a price that reverts is reported as the market's status
-  version: 5,
+  // 7: where the feed the registry version names reverts, its APRs read the base price from the one the Comet names
+  version: 7,
   index: Index.MinutelyBlockIndex,
   key(name, { block, ...context }) {
     const { block: projected } = Fallible.must(this.index.project({ block, ...context }));

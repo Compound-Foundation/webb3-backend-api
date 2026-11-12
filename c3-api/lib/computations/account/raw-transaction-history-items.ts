@@ -13,12 +13,13 @@ import { RawTransactionHistoryAction } from '../../model/transaction-history/act
 
 import * as KnownNetwork from '../../well-known/networks/network.js';
 
-import { Contract } from '../../well-known/contracts/utils.js';
+import { Contract, UntypedContract } from '../../well-known/contracts/utils.js';
 
 import { checksumAddress } from '../../model/comet-registry.js';
 import type { RegistryLookup } from '../../model/registry-lookup.js';
 
 import type * as evm from '../evm.js';
+import type { Erc20Decimals } from './erc20-decimals.js';
 
 type RawTransactionHistoryItems = Compute.Spec<{
   name: 'rawTransactionHistoryItems',
@@ -35,13 +36,14 @@ type RawTransactionHistoryItems = Compute.Spec<{
     // the one registry version this request resolves tokens against
     catalog: RegistryLookup,
   },
-  depends: [ evm.EthGetLogs ],
+  depends: [ evm.EthGetLogs, Erc20Decimals ],
   returns: RawTransactionHistoryItem[],
 }>;
 
 const {
   join,
   pull1,
+  pipe_,
   implement,
 } = Compute.Functor<RawTransactionHistoryItems>({});
 
@@ -49,12 +51,14 @@ const {
  * The tokens an event names, as the pinned version describes them.
  *
  * An event carries an address and a raw amount; the symbol and the scale it
- * has to be read at come from the registry. A token no version describes — an
- * asset of a market outside the registry, or one added on chain but not yet
- * imported — keeps the defaults this code has always used, so an unknown
- * token is reported rather than dropped.
+ * has to be read at come from the registry. A token the version does not
+ * describe — a collateral a market listed, or a reward token it started
+ * paying, after the version's import — is read at the decimals it reports
+ * itself (erc20Decimals): its scale is what makes a raw amount a number of
+ * tokens, and the 18 this used to assume made a 6-decimal token's amounts a
+ * trillionth of what they were. Nothing names it until a version describes
+ * it, so it is reported with its address and no symbol, rather than dropped.
  */
-const UNKNOWN_DECIMALS = 18;
 
 /*
  * A token's own symbol can be the same as another's, or one its issuer has
@@ -69,10 +73,30 @@ function tokenSymbol(catalog: RegistryLookup, network: KnownNetwork.Name, addres
   return catalog.renamedSymbolAt(network, token.address) ?? token.symbol;
 }
 
-function tokenDecimals(catalog: RegistryLookup, network: KnownNetwork.Name, address: Eth.Address): number {
+function describedDecimals(catalog: RegistryLookup, network: KnownNetwork.Name, address: Eth.Address): number | null {
   return catalog.tokenAt(network, address)?.decimals
       ?? catalog.baseTokenAt(network, address)?.decimals
-      ?? UNKNOWN_DECIMALS;
+      ?? null;
+}
+
+// the tokens an event names by address; the others name a market's base token by its Comet
+function tokensNamedBy(decoded: ReturnType<typeof coders.decode>): Eth.Address[] {
+  switch (decoded.name) {
+    case 'SupplyCollateral':
+    case 'WithdrawCollateral':
+    case 'TransferCollateral':
+    case 'AbsorbCollateral':
+      return [ decoded.body.asset ];
+    case 'RewardClaimed':
+      return [ decoded.body.token ];
+    default:
+      return [];
+  }
+}
+
+// a token as an ethCall reads it: only its address is called
+function undescribedToken(network: KnownNetwork.Name, address: Eth.Address): Contract {
+  return UntypedContract('ERC20', { network, address: checksumAddress(address) as Eth.Address, block: { number: 0 } });
 }
 
 /*
@@ -92,20 +116,22 @@ function isMigratorAddress(address: Eth.Address, network: KnownNetwork.Name) {
 }
 
 function createTransactionAction({
-  log,
+  decoded,
   network,
   contractAddress,
   proxyAddresses,
   catalog,
+  decimalsOf,
 }: {
-  log: Eth.Event.Log,
+  decoded: ReturnType<typeof coders.decode>,
   network: KnownNetwork.Name,
   contractAddress: Eth.Address,
   proxyAddresses: Eth.Address[],
   catalog: RegistryLookup,
+  // the scale of a token's amounts: the version's, or the one an undescribed token reports
+  decimalsOf: (address: Eth.Address) => number,
 }): RawTransactionHistoryAction | null {
   const lowerCasedProxyAddresses = proxyAddresses.map(address => address.toLowerCase());
-  const decoded = coders.decode(log);
   switch (decoded.name) {
     case 'Supply': {
       return {
@@ -116,7 +142,7 @@ function createTransactionAction({
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: tokenDecimals(catalog, network, contractAddress),
+          decimals: decimalsOf(contractAddress),
         }),
         contract: {
           address: contractAddress,
@@ -138,7 +164,7 @@ function createTransactionAction({
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: tokenDecimals(catalog, network, decoded.body.asset),
+          decimals: decimalsOf(decoded.body.asset),
         }),
         contract: {
           address: contractAddress,
@@ -160,7 +186,7 @@ function createTransactionAction({
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: tokenDecimals(catalog, network, contractAddress),
+          decimals: decimalsOf(contractAddress),
         }),
         contract: {
           address: contractAddress,
@@ -182,7 +208,7 @@ function createTransactionAction({
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: tokenDecimals(catalog, network, decoded.body.asset),
+          decimals: decimalsOf(decoded.body.asset),
         }),
         contract: {
           address: contractAddress,
@@ -208,7 +234,7 @@ function createTransactionAction({
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: tokenDecimals(catalog, network, contractAddress),
+          decimals: decimalsOf(contractAddress),
         }),
         contract: {
           address: contractAddress,
@@ -229,7 +255,7 @@ function createTransactionAction({
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: tokenDecimals(catalog, network, decoded.body.asset),
+          decimals: decimalsOf(decoded.body.asset),
         }),
         contract: {
           address: contractAddress,
@@ -250,7 +276,7 @@ function createTransactionAction({
         },
         amount: BigFixnum.from({
           value: decoded.body.collateralAbsorbed,
-          decimals: tokenDecimals(catalog, network, decoded.body.asset),
+          decimals: decimalsOf(decoded.body.asset),
         }),
         contract: {
           address: contractAddress,
@@ -271,7 +297,7 @@ function createTransactionAction({
         },
         amount: BigFixnum.from({
           value: decoded.body.basePaidOut,
-          decimals: tokenDecimals(catalog, network, contractAddress),
+          decimals: decimalsOf(contractAddress),
         }),
         contract: {
           address: contractAddress,
@@ -292,7 +318,7 @@ function createTransactionAction({
         },
         amount: BigFixnum.from({
           value: decoded.body.amount,
-          decimals: tokenDecimals(catalog, network, decoded.body.token),
+          decimals: decimalsOf(decoded.body.token),
         }),
         contract: {
           address: contractAddress,
@@ -309,8 +335,8 @@ function createTransactionAction({
 };
 
 const rawTransactionHistoryItems = implement({
-  // 6: keyed by what history reads, so a change to a feed or an exception keeps the items
-  version: 6,
+  // 7: a token the version does not describe is read at the decimals it reports, not at 18
+  version: 7,
   index: Index.TransactionHistoryIndex,
   /*
    * The items read one network's markets and tokens, so a change elsewhere
@@ -437,47 +463,73 @@ const rawTransactionHistoryItems = implement({
           .sort((a, b) => {
             return parseInt(a.blockNumber, 16) - parseInt(b.blockNumber, 16);
           });
-        //
-        const items: RawTransactionHistoryItem[] = [];
-        let prevHash = `0x0`;
-        for (let i = 0; i < finalLogs.length; i++) {
-          const log = finalLogs[i];
-          if (!Eth.parseAddress(log.address)){
-            throw new Error(`log address invalid: ${log.address}`);
-          }
-          const action = createTransactionAction({
-            log,
-            network,
-            contractAddress: log.address, // log.address is contract address in string, but we know it must be an Eth.Address
-            proxyAddresses,
-            catalog,
-          });
-          // createTransactionAction will return null, if detected the derived action is minting / burning of cTokens
-          // If action === null, we skip this action
-          if (action === null) {
-            continue;
-          }
+        const decodedLogs = finalLogs.map(log => ({ log, decoded: coders.decode(log) }));
+        /*
+         * The tokens the logs name that the version does not describe, each
+         * read once for the decimals it reports, at the block the page ends at.
+         */
+        const undescribed = [ ...new Set(decodedLogs
+          .flatMap(({ decoded }) => tokensNamedBy(decoded))
+          .filter(address => describedDecimals(catalog, network, address) === null)
+          .map(address => address.toLowerCase() as Eth.Address)) ];
+        return pipe_([
+          undescribed.map(address => [
+            'erc20Decimals',
+            { apiHost, nodeHost, nodeKey, network, blockNumber, contract: undescribedToken(network, address) },
+          ] as const),
+          reported => {
+            const scales = new Map(undescribed.map((address, index) => [ address, reported[index] as number ]));
+            const decimalsOf = (address: Eth.Address) => {
+              const decimals = describedDecimals(catalog, network, address) ?? scales.get(address.toLowerCase() as Eth.Address);
+              if (decimals === undefined) {
+                throw new Error(`invariant violated: no scale for ${address}`);
+              }
+              return decimals;
+            };
+            //
+            const items: RawTransactionHistoryItem[] = [];
+            let prevHash = `0x0`;
+            for (let i = 0; i < decodedLogs.length; i++) {
+              const { log, decoded } = decodedLogs[i];
+              if (!Eth.parseAddress(log.address)){
+                throw new Error(`log address invalid: ${log.address}`);
+              }
+              const action = createTransactionAction({
+                decoded,
+                network,
+                contractAddress: log.address, // log.address is contract address in string, but we know it must be an Eth.Address
+                proxyAddresses,
+                catalog,
+                decimalsOf,
+              });
+              // createTransactionAction will return null, if detected the derived action is minting / burning of cTokens
+              // If action === null, we skip this action
+              if (action === null) {
+                continue;
+              }
 
-          if (!Eth.isTransactionHash(log.transactionHash)) {
-            throw new Error(`Invariant violated: log transaction hash invalid.`);
-          }
-          const curHash = log.transactionHash;
-          if (curHash == prevHash) {
-            // Merge with previous actions
-            const prevItem = items[items.length - 1];
-            prevItem.actions.push(action);
-          } else {
-            // Push as new unit action
-            items.push({
-              transactionHash: log.transactionHash,
-              network,
-              actions: [action],
-              blockNumber: parseInt(log.blockNumber, 16),
-            });
-          }
-          prevHash = curHash;
-        }
-        return items;
+              if (!Eth.isTransactionHash(log.transactionHash)) {
+                throw new Error(`Invariant violated: log transaction hash invalid.`);
+              }
+              const curHash = log.transactionHash;
+              if (curHash == prevHash) {
+                // Merge with previous actions
+                const prevItem = items[items.length - 1];
+                prevItem.actions.push(action);
+              } else {
+                // Push as new unit action
+                items.push({
+                  transactionHash: log.transactionHash,
+                  network,
+                  actions: [action],
+                  blockNumber: parseInt(log.blockNumber, 16),
+                });
+              }
+              prevHash = curHash;
+            }
+            return items;
+          },
+        ]);
       },
     ]);
   },
