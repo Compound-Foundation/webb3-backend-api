@@ -4,9 +4,15 @@ import { marketKey } from '../../lib/model/comet-registry.js';
 
 import { cacheStatus } from './cache.js';
 import type { CacheDeps } from './cache.js';
+import { nowOf } from './clock.js';
 import { registryConfig } from './config.js';
+import type { RegistryConfig } from './config.js';
 import { readChainCheck } from './drift.js';
 import type { ChainCheck, ChainDrift, UnreadNetwork } from './drift.js';
+import { readNotificationFailure } from './notifications.js';
+import type { NotificationFailure } from './notifications.js';
+import { approvalUsable } from './repository.js';
+import type { SyncOutcome, SyncRunRow, SyncRunStatus } from './rows.js';
 import { ALL_ROOTS_CHECK } from './validation.js';
 
 /*
@@ -25,6 +31,7 @@ type Alert =
   | 'no-active-version'
   | 'candidate-awaiting-review'
   | 'candidate-awaiting-activation'
+  | 'candidate-awaiting-approval'
   | 'candidate-drops-markets'
   | 'commit-rejected'
   | 'chain-drift'
@@ -33,7 +40,8 @@ type Alert =
   | 'sync-overdue'
   | 'sync-stalled'
   | 'snapshot-not-cached'
-  | 'cache-unreadable';
+  | 'cache-unreadable'
+  | 'notification-failing';
 
 type RegistryStatus = {
   environment: string,
@@ -47,6 +55,8 @@ type RegistryStatus = {
     checksum:    string,
     activatedAt: string | null,
     activatedBy: string | null,
+    // who approved the move that switched it on: null for a rollback, and for a move made before approvals existed
+    approvedBy:  string | null,
     ageSeconds:  number | null,
   } | null,
   cache: {
@@ -59,8 +69,8 @@ type RegistryStatus = {
       id:                string,
       // the version the run imports into, null until it has created one
       registryVersionId: string | null,
-      status:            string,
-      outcome:           string | null,
+      status:            SyncRunStatus,
+      outcome:           SyncOutcome | null,
       startedAt:         string,
       completedAt:       string | null,
       ageSeconds:        number,
@@ -96,6 +106,8 @@ type RegistryStatus = {
       validatedAt: string | null,
       // the markets of the active version whose Comet it does not serve, by their keys there
       unserved:    string[],
+      // the newest approval an activation by another name could use now, or null for none
+      approval:    { id: string, actor: string, expiresAt: string } | null,
     }>,
     invalid: number,
   },
@@ -113,6 +125,17 @@ type RegistryStatus = {
     drifts:     ChainDrift[],
     unreadable: UnreadNetwork[],
   } | null,
+  /*
+   * Whether a version switched on or approved is announced (notifications.ts):
+   * whether a webhook is set, never where, and the last move or approval a
+   * message was given up for, until a later one is sent. A failure is
+   * reported only while the webhook is on: with none, or one set to no URL,
+   * nothing is meant to be announced.
+   */
+  notifications: {
+    webhook: RegistryConfig['webhook'],
+    failure: NotificationFailure | null,
+  },
   alerts: Alert[],
 };
 
@@ -126,13 +149,15 @@ type ActiveRow = {
   checksum:    string,
   activated_at: string | null,
   actor:        string | null,
+  approver:     string | null,
 };
 
-type RunRow = {
-  id: string, registry_version_id: string | null, status: string, outcome: string | null,
-  started_at: string, completed_at: string | null, failed_count: number, expected_count: number,
-  completed_count: number, last_error: string | null, lease_expires_at: string | null,
-};
+type ApprovalRow = { version_id: string, id: string, actor: string, expires_at: string };
+
+type RunRow = Pick<SyncRunRow,
+  | 'id' | 'registry_version_id' | 'status' | 'outcome' | 'started_at' | 'completed_at'
+  | 'failed_count' | 'expected_count' | 'completed_count' | 'last_error' | 'lease_expires_at'
+>;
 
 type CandidateRow = { id: string, attempt: number, created_at: string, status: string };
 
@@ -235,6 +260,42 @@ function failing(run: RunRow | null, failedAttempts: number, stopped: boolean): 
 }
 
 /*
+ * A run as an operator is told about it: the status's last run, which adds
+ * its age, and the run both sync run routes answer with, which adds what
+ * started it (handlers.ts). Each field is named, so the lease owner a row
+ * carries never leaves the worker. Neither answer spreads it: each lists the
+ * fields in the order it always has, and the two orders differ.
+ */
+function syncRunSummary(run: RunRow): Omit<NonNullable<RegistryStatus['sync']['lastRun']>, 'ageSeconds'> {
+  return {
+    id:                run.id,
+    registryVersionId: run.registry_version_id,
+    status:            run.status,
+    outcome:           run.outcome,
+    startedAt:         run.started_at,
+    completedAt:       run.completed_at,
+    failedCount:       run.failed_count,
+    expectedCount:     run.expected_count,
+    completedCount:    run.completed_count,
+    lastError:         run.last_error,
+    leaseExpiresAt:    run.lease_expires_at,
+  };
+}
+
+// the status's last run, with its age right after when it completed
+function lastRunOf(row: RunRow, now: Date): NonNullable<RegistryStatus['sync']['lastRun']> {
+  const {
+    id, registryVersionId, status, outcome, startedAt, completedAt,
+    failedCount, expectedCount, completedCount, lastError, leaseExpiresAt,
+  } = syncRunSummary(row);
+  return {
+    id, registryVersionId, status, outcome, startedAt, completedAt,
+    ageSeconds: ageOf(row.completed_at ?? row.started_at, now) ?? 0,
+    failedCount, expectedCount, completedCount, lastError, leaseExpiresAt,
+  };
+}
+
+/*
  * The last chain check. Right after another version is switched on it is
  * still the check of the version before, until the next hourly invocation
  * checks the one on; it is answered all the same, under the version it is
@@ -246,7 +307,7 @@ async function chainCheckOf(deps: CacheDeps, now: Date): Promise<RegistryStatus[
   try {
     check = await readChainCheck(deps.kv);
   } catch (error) {
-    deps.debug?.warn(`registry chain check unreadable`, { error });
+    deps.debug.warn(`registry chain check unreadable`, { error });
     return null;
   }
   if (check === null) {
@@ -261,17 +322,34 @@ async function chainCheckOf(deps: CacheDeps, now: Date): Promise<RegistryStatus[
   };
 }
 
+/*
+ * The message given up last, while the webhook is on. With none, or one set
+ * to no URL, nothing is sent, and a record left from before is not news; a
+ * namespace that does not answer is `cache-unreadable`'s to say.
+ */
+async function notificationFailureOf(deps: CacheDeps, webhook: RegistryConfig['webhook']): Promise<NotificationFailure | null> {
+  if (webhook !== 'on') {
+    return null;
+  }
+  try {
+    return await readNotificationFailure(deps.kv);
+  } catch (error) {
+    deps.debug.warn(`registry notification failure unreadable`, { error });
+    return null;
+  }
+}
+
 async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus> {
-  const now = deps.now?.() ?? new Date();
+  const now = nowOf(deps.now);
   const db  = deps.db;
 
   const [
-    state, active, run, candidates, unreviewedMarkets, unreviewedNetworks, lastItem, invalid, validated, unserved, rejected,
+    state, active, run, candidates, unreviewedMarkets, unreviewedNetworks, lastItem, invalid, validated, unserved, approvals, rejected,
   ] = await db.batch([
     db.prepare(`SELECT active_version_id, last_upstream_checked_at FROM registry_state WHERE singleton_id = 1`),
     db.prepare(
       `SELECT version.id AS id, version.snapshot_checksum AS checksum,
-              activation.created_at AS activated_at, activation.actor AS actor
+              activation.created_at AS activated_at, activation.actor AS actor, approval.actor AS approver
        FROM registry_state AS state
        JOIN registry_versions AS version ON version.id = state.active_version_id
        LEFT JOIN registry_activations AS activation
@@ -279,6 +357,7 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
         AND activation.created_at = (
           SELECT MAX(created_at) FROM registry_activations WHERE registry_version_id = version.id
         )
+       LEFT JOIN registry_approvals AS approval ON approval.id = activation.approval_id
        WHERE state.singleton_id = 1`
     ),
     db.prepare(
@@ -366,6 +445,15 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
          )
        ORDER BY network.chain_id, market.deployment_key`
     ).bind(MAX_CANDIDATES),
+    // the approvals of each that an activation could use now, newest first, by the rule an activation is held to
+    db.prepare(
+      `SELECT approval.registry_version_id AS version_id, approval.id, approval.actor, approval.expires_at
+       FROM registry_approvals AS approval
+       JOIN registry_state AS state ON state.singleton_id = 1
+       WHERE approval.registry_version_id IN (${AWAITING_ACTIVATION})
+         AND ${approvalUsable('approval', 'state.active_version_id', '?2')}
+       ORDER BY approval.created_at DESC, approval.rowid DESC`
+    ).bind(MAX_CANDIDATES, now.toISOString()),
     /*
      * A commit discovery has stopped importing: the newest version there is
      * ended invalid although its import brought in every root. Another
@@ -397,6 +485,13 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
   for (const row of (unserved.results ?? []) as Array<{ version_id: string, chain_id: number, deployment_key: string }>) {
     dropped.set(row.version_id, [ ...(dropped.get(row.version_id) ?? []), marketKey(row.chain_id, row.deployment_key) ]);
   }
+  const approved     = new Map<string, { id: string, actor: string, expiresAt: string }>();
+  for (const row of (approvals.results ?? []) as ApprovalRow[]) {
+    // newest first, so the first of a version is the one an activation would use
+    if (!approved.has(row.version_id)) {
+      approved.set(row.version_id, { id: row.id, actor: row.actor, expiresAt: row.expires_at });
+    }
+  }
   const awaiting     = ((validated.results ?? []) as Array<{ id: string, attempt: number, created_at: string, validated_at: string | null }>)
     .map(version => ({
       versionId:   version.id,
@@ -404,6 +499,7 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
       createdAt:   version.created_at,
       validatedAt: version.validated_at,
       unserved:    dropped.get(version.id) ?? [],
+      approval:    approved.get(version.id) ?? null,
     }));
   const rejectedRow  = (rejected.results?.[0] ?? null) as { id: string, source_commit_sha: string, attempt: number, created_at: string } | null;
   const items        = (lastItem.results?.[0] ?? null) as { last_item_at: string | null, failed_attempts: number, stopped: number } | null;
@@ -415,6 +511,7 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
   const config      = registryConfig(env);
   const upstreamAge = ageOf(stateRow?.last_upstream_checked_at ?? null, now);
   const interval    = config.upstreamIntervalSeconds;
+  const failure     = await notificationFailureOf(deps, config.webhook);
 
   const marketsOpen  = countsBy(unreviewedMarkets.results as CountRow[] | undefined, 'markets');
   const networksOpen = countsBy(unreviewedNetworks.results as CountRow[] | undefined, 'networks');
@@ -460,6 +557,15 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
   if (awaiting.length > 0) {
     alerts.push('candidate-awaiting-activation');
   }
+  if (awaiting.length > 0 && awaiting[0]!.approval === null) {
+    /*
+     * The newest version waiting has nobody's approval an activation could
+     * use: never approved, or its approval expired, used, or given against a
+     * version that is no longer on. An older one waiting is one a newer
+     * commit has passed, which nobody is asked to approve.
+     */
+    alerts.push('candidate-awaiting-approval');
+  }
   if (awaiting.some(version => version.unserved.length > 0)) {
     /*
      * Nothing holds such a version back: the scheduled import validates it
@@ -499,6 +605,16 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
   if (upstreamAge === null || upstreamAge > interval * 2) {
     alerts.push('sync-overdue');
   }
+  if (failure !== null) {
+    /*
+     * A move went live, or an approval was given, and the channel was not
+     * told: the webhook refused the message or did not answer — a webhook
+     * revoked, most often — and a channel that has stopped hearing says
+     * nothing by itself. It holds until a later message is sent, a move's
+     * or an approval's.
+     */
+    alerts.push('notification-failing');
+  }
 
   return {
     environment:   env.ENVIRONMENT,
@@ -509,24 +625,12 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
       checksum:    activeRow.checksum,
       activatedAt: activeRow.activated_at,
       activatedBy: activeRow.actor,
+      approvedBy:  activeRow.approver,
       ageSeconds:  ageOf(activeRow.activated_at, now),
     },
     cache,
     sync: {
-      lastRun: runRow === null ? null : {
-        id:                runRow.id,
-        registryVersionId: runRow.registry_version_id,
-        status:            runRow.status,
-        outcome:           runRow.outcome,
-        startedAt:         runRow.started_at,
-        completedAt:       runRow.completed_at,
-        ageSeconds:        ageOf(runRow.completed_at ?? runRow.started_at, now) ?? 0,
-        failedCount:       runRow.failed_count,
-        expectedCount:     runRow.expected_count,
-        completedCount:    runRow.completed_count,
-        lastError:         runRow.last_error,
-        leaseExpiresAt:    runRow.lease_expires_at,
-      },
+      lastRun:            runRow === null ? null : lastRunOf(runRow, now),
       upstreamCheckedAt:  stateRow?.last_upstream_checked_at ?? null,
       upstreamAgeSeconds: upstreamAge,
       intervalSeconds:    interval,
@@ -539,9 +643,10 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
     },
     candidates: { importing: unreviewed, validated: awaiting, invalid: invalidCount },
     chainCheck,
+    notifications: { webhook: config.webhook, failure },
     alerts,
   };
 }
 
 export type { Alert, RegistryStatus };
-export { registryStatus };
+export { registryStatus, syncRunSummary };

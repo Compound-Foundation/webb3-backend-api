@@ -1,13 +1,6 @@
-import t from 'tap';
+import t, { Test } from 'tap';
 
-import * as Debug    from '../../lib/debug-log.js';
-import * as Flags    from '../../lib/flags.js';
-import { BigNumber } from '../../lib/bignumber.js';
-import { BigFixnum } from '../../lib/bigfixnum.js';
-
-import * as Compute    from '../../lib/symbolic/computation.js';
-import * as Evaluator  from '../../lib/symbolic/evaluator.js';
-import { MemoryCache } from '../../lib/symbolic/cache.js';
+import * as Flags from '../../lib/flags.js';
 
 import * as KnownNetwork from '../../lib/well-known/networks/network.js';
 
@@ -23,6 +16,8 @@ import {
   type MarketRouteData,
 } from '../../src/router.js';
 
+import { consoleLines } from '../util/console.js';
+import { evaluatorOver, stub } from '../util/evaluator.js';
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../util/registry-fixture.js';
 import { REGISTRY_KEYS } from '../util/summary-registry-fields.js';
 
@@ -34,7 +29,6 @@ import '../../shim/node-self.js';
  * identifies it — and a node that fails still fails the request.
  */
 const flags = Flags.parseWithDefaults(process.env);
-const debug = Debug.MakeLogger([]).configure(process.env);
 
 const catalog = fixtureCatalog();
 
@@ -67,12 +61,13 @@ const COMPUTATIONS = [
 ] as const;
 
 function evaluatorOf(answer: Answer, overrides: Flags.SomeFlags = {}) {
-  const computations = Object.fromEntries(COMPUTATIONS.map(name => [
-    name, Compute.Functor<any>({}).implement({ version: 0, compute: context => answer(name, context) }),
-  ]));
-  const cache     = new MemoryCache({}, [ BigFixnum.JsonReviver, BigNumber.JsonReviver ]);
+  const computations = Object.fromEntries(COMPUTATIONS.map(name => [ name, stub(context => answer(name, context)) ]));
+  // on what the handler asks for, and otherwise on what the environment sets
   const evaluator = Object.assign(
-    Evaluator.instantiate<any>(computations as any, { cache, debug, flags: { ...flags, ...overrides } }),
+    evaluatorOver(computations, {
+      algorithm: overrides.evaluatorAlgorithm ?? flags.evaluatorAlgorithm,
+      batching:  overrides.batchingEnabled ?? flags.batchingEnabled,
+    }),
     { evaluations: 0 },
   );
   // a handler takes evaluate off the evaluator, so the count is put where it reads it
@@ -324,10 +319,8 @@ function createdAt(block: number, comets: string[]) {
 }
 
 // the warning a market the chain has not reached is logged with, kept out of the test's output
-function quiet(test: { teardown(fn: () => void): unknown }): void {
-  const warn = console.warn;
-  console.warn = () => {};
-  test.teardown(() => { console.warn = warn; });
+function quiet(t: Test): void {
+  consoleLines(t, [ 'warn' ]);
 }
 
 /*

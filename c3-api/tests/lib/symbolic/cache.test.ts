@@ -1,5 +1,6 @@
 import t, { Test } from 'tap';
 
+import { consoleLines } from '../../util/console.js';
 import { MemoryKv, refusingKv } from '../../util/kv.js';
 
 import Quota         from '../../../lib/quota.js';
@@ -67,10 +68,7 @@ t.test('WorkersKvCache supports custom JSON revivers', async t => {
  * configures it, and the warnings it writes.
  */
 function warnings(t: Test): { debug: Debug.Logger, lines: string[] } {
-  const lines: string[] = [];
-  const warn = console.warn;
-  console.warn = (...parameters: unknown[]) => { lines.push(parameters.map(String).join(' ')); };
-  t.teardown(() => { console.warn = warn; });
+  const lines = consoleLines(t, [ 'warn' ]);
   return { debug: Debug.MakeLogger([]).configure({}), lines };
 }
 

@@ -1,13 +1,11 @@
 import t from 'tap';
 
-import { createTestHarness } from 'wrangler';
-
-import type { Env } from '../../../entrypoint.js';
-import { sha256Hex } from '../../../src/http/bearer-auth.js';
+import type { RegistrySnapshotV1 } from '../../../lib/model/comet-registry.js';
 import { overlayOfMarket } from '../../../src/registry/overlay.js';
 
-import { applyMigrations } from '../../util/d1.js';
 import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { registryHarness } from '../../util/registry-harness.js';
+import { ADMIN_TOKEN } from '../../util/test-env.js';
 
 /*
  * `PUT /registry/v1/admin/versions/{id}/overlays`: a whole reviewed directory
@@ -19,28 +17,14 @@ import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate, validateS
  * one of them cannot. Each document is decided exactly as the one-document
  * routes decide it, which api.test.ts covers.
  */
-const ADMIN_TOKEN = 'registry-admin-token-for-tests';
-
-const server = createTestHarness({
-  workers: [ {
-    configPath: './wrangler.toml',
-    secrets:    { COMET_REGISTRY_ADMIN_TOKEN_HASH: await sha256Hex(ADMIN_TOKEN) },
-  } ],
-});
-
-t.before(async () => {
-  await server.listen();
-});
-t.teardown(() => server.close());
+const { server, freshDatabase } = await registryHarness({ admin: true });
 
 const snapshot = loadRegistrySnapshotFixture();
 const mainnet  = snapshot.networks.find(network => network.chainId === 1)!;
 
-async function freshCandidate(): Promise<{ db: D1Database, versionId: string }> {
-  await server.reset();
-  const { APP_DB: db } = await server.getWorker<Env>().getEnv();
-  await applyMigrations(db);
-  const { versionId } = await seedCandidate(db, snapshot);
+async function freshCandidate(seeded: RegistrySnapshotV1 = snapshot): Promise<{ db: D1Database, versionId: string }> {
+  const db = await freshDatabase();
+  const { versionId } = await seedCandidate(db, seeded);
   return { db, versionId };
 }
 
@@ -230,7 +214,36 @@ t.test('a directory that moves a slug is written in an order the schema accepts'
     markets: { '1/weth': { ...marketOverlay('weth'), slug: 'usdc-main' } },
   });
   t.equal(taken.status, 409, 'a slug another market keeps is refused');
-  t.match((await taken.json() as { error: { message: string } }).error.message, /already has that slug/);
+  t.match((await taken.json() as { error: unknown }).error, { message: /already has that slug/, details: { code: 'SLUG_TAKEN' } });
+});
+
+/*
+ * A document can contradict the rest of the draft: name a second default, or
+ * a reward feed for a market whose rewards contract names no reward token.
+ * The draft is open, so it is the document that has to change, and the
+ * answer says which conflict it met.
+ */
+t.test('a document the rest of the draft contradicts writes nothing, and says why', async t => {
+  const unrewarded = structuredClone(snapshot);
+  const scroll     = unrewarded.networks.find(network => network.chainId === 534352)!.markets[0]!;
+  scroll.rewardAsset = null;
+  const { db, versionId } = await freshCandidate(unrewarded);
+  const conflictOf = async (response: Response) => [
+    response.status,
+    (await response.json() as { error: { details: { code: string } } }).error.details.code,
+  ];
+
+  t.same(await conflictOf(await put(versionId, {
+    reason:  'a second default',
+    markets: { '1/weth': { ...marketOverlay('weth'), isDefault: true } },
+  })), [ 409, 'DEFAULT_TAKEN' ], 'a default while another market of the version is the default is refused');
+
+  const rewardPriceFeed = { address: '0x00000000000000000000000000000000000000f1', quote: 'usd' };
+  t.same(await conflictOf(await put(versionId, {
+    reason:  'a reward feed without a reward',
+    markets: { '534352/usdc': { ...overlayOfMarket(scroll), rewardPriceFeed } },
+  })), [ 409, 'REWARD_FEED_WITHOUT_REWARD' ], 'and so is a reward feed for a market whose rewards contract names no reward token');
+  t.same(await events(db, versionId), [], 'neither writes anything');
 });
 
 t.test('nothing is written unless everything can be', async t => {
@@ -323,8 +336,11 @@ t.test('a directory says what each of its documents was decided against', async 
   const stale = await move(usdc, weth, { '1/usdc': usdc.digest, '1/weth': weth.digest });
   t.equal(stale.status, 409, 'a directory decided against an overlay replaced since is refused');
   const renamed = await read('markets/1/usdc');
-  t.same((await stale.json() as { error: { details: { current: Record<string, string> } } }).error.details.current,
-    { 'market 1/usdc': renamed.digest }, 'naming the market that changed, and what it holds now');
+  t.same(
+    (await stale.json() as { error: { details: unknown } }).error.details,
+    { code: 'OVERLAY_CHANGED', current: { 'market 1/usdc': renamed.digest } },
+    'naming the market that changed, and what it holds now',
+  );
   t.same(await defaults(), [ 'usdc' ], 'and nothing is written');
 
   const network = await read('networks/1');
@@ -338,8 +354,9 @@ t.test('a directory says what each of its documents was decided against', async 
   t.same(await defaults(), [ 'weth' ]);
   t.equal((await mainnetState(db, versionId)).network, 'Ethereum Mainnet', 'and so is the network, decided against its own read');
 
-  t.equal((await move(renamed, weth, { '1/weth': null })).status, 409,
-    'a document that expects a market nobody has reviewed is refused when somebody has');
+  const unexpected = await move(renamed, weth, { '1/weth': null });
+  t.equal(unexpected.status, 409, 'a document that expects a market nobody has reviewed is refused when somebody has');
+  t.equal((await unexpected.json() as { error: { details: { code: string } } }).error.details.code, 'OVERLAY_CHANGED');
 
   for (const [ what, expectedDigests ] of [
     [ 'an expectation of a document the request does not carry', { '1/usdt': null } ],
@@ -357,4 +374,5 @@ t.test('only an importing candidate can be reviewed', async t => {
 
   const response = await put(versionId, { reason: 'too late', markets: { '1/usdc': marketOverlay('usdc') } });
   t.equal(response.status, 409, 'a validated version can no longer be changed');
+  t.equal((await response.json() as { error: { details: { code: string } } }).error.details.code, 'VERSION_NOT_IMPORTING');
 });

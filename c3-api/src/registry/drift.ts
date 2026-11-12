@@ -1,8 +1,11 @@
 import { Address, MarketV1, NetworkV1, RegistrySnapshotV1, marketKey } from '../../lib/model/comet-registry.js';
 
+import type { Log } from '../log.js';
+
 import type { CachedSnapshot } from './cache.js';
 import { servedNetworks } from './catalog.js';
 import type { ServedMarket } from './catalog.js';
+import { nowOf } from './clock.js';
 import { CometFacts, RpcTransport, readCometFacts } from './enrichment.js';
 import { isRegistryError } from './errors.js';
 
@@ -79,10 +82,7 @@ type ChainCheckDeps = {
   intervalSeconds: number,
   // the time of the invocation: what a check is recorded at, and what it is due by
   now?:            () => Date,
-  debug?: {
-    log:  (...parameters: unknown[]) => unknown,
-    warn: (...parameters: unknown[]) => unknown,
-  },
+  debug:           Pick<Log, 'log' | 'warn'>,
 };
 
 // the last check, for the status to read; a new one replaces it
@@ -214,7 +214,7 @@ async function compareWithChain(
       };
     } catch (error) {
       // a chain that did not answer is reported as unread, and read again
-      deps.debug?.warn(`registry chain not read`, { network: network.key, error });
+      deps.debug.warn(`registry chain not read`, { network: network.key, error });
       return {
         drifts: (previous?.drifts ?? []).filter(drift => drift.chainId === network.chainId && sharesDrift(markets, drift)),
         unread: { chainId: network.chainId, network: network.key, error: failureOf(error) },
@@ -269,7 +269,7 @@ async function checkChain(deps: ChainCheckDeps): Promise<ChainCheck | null> {
     return null;
   }
   const { snapshot } = active;
-  const now = deps.now?.() ?? new Date();
+  const now = nowOf(deps.now);
   if (!isDue(previous, snapshot.registryVersion.id, now, deps.intervalSeconds)) {
     return null;
   }
@@ -277,9 +277,9 @@ async function checkChain(deps: ChainCheckDeps): Promise<ChainCheck | null> {
   const check = await compareWithChain(snapshot, previous, deps, now);
   await deps.kv.put(CHECK_KEY, JSON.stringify(check));
   if (check.drifts.length > 0) {
-    deps.debug?.warn(`registry chain drift`, { versionId: check.versionId, drifts: check.drifts });
+    deps.debug.warn(`registry chain drift`, { versionId: check.versionId, drifts: check.drifts });
   }
-  deps.debug?.log({ registryChainCheck: { versionId: check.versionId, drifts: check.drifts.length, unreadable: check.unreadable } });
+  deps.debug.log({ registryChainCheck: { versionId: check.versionId, drifts: check.drifts.length, unreadable: check.unreadable } });
   return check;
 }
 

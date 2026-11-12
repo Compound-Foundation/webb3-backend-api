@@ -1,6 +1,9 @@
-import { SyncRunRow, marketKey } from '../../lib/model/comet-registry.js';
+import { marketKey } from '../../lib/model/comet-registry.js';
+
+import type { Log } from '../log.js';
 
 import { isUnreachable } from './cache.js';
+import { Clock, nowOf } from './clock.js';
 import { RpcTransport, enrichMarket } from './enrichment.js';
 import { RegistryError, isRegistryError, isTransportFailure } from './errors.js';
 import {
@@ -11,23 +14,21 @@ import {
   provisionalMarketOverlay,
   provisionalNetworkOverlay,
 } from './overlay.js';
+import { readImportOverlays } from './overlay-store.js';
+import type { ClonedOverlays } from './overlay-store.js';
 import {
-  ClonedOverlays,
   ImportedMarket,
   candidateRow,
-  changedRows,
-  failedChecks,
   findAttemptsByCommit,
   marketWrites,
   readActiveVersionId,
-  readImportOverlays,
   readVersion,
-  recorded,
   supersedeEarlierAttempts,
   supersedeStaleAttempts,
 } from './repository.js';
+import type { SyncRunRow } from './rows.js';
+import { changedRows } from './sql-condition.js';
 import {
-  Clock,
   Fence,
   RunFinish,
   acquireRun,
@@ -59,6 +60,7 @@ import {
 import { sourceChecksum } from './source/roots.js';
 import { ALL_ROOTS_CHECK, failures, judgeVersion, verdictStatements } from './validation.js';
 import type { Verdict } from './validation.js';
+import { failedChecks, recorded } from './validation-store.js';
 
 /*
  * One registry import, driven by the Cron trigger a few markets at a time.
@@ -75,10 +77,7 @@ type ImporterDeps = {
    * Where the cause of a failure goes, and housekeeping that did not happen
    * as a warning; D1 keeps only the sanitized form of either.
    */
-  debug?: {
-    error: (...parameters: unknown[]) => unknown,
-    warn:  (...parameters: unknown[]) => unknown,
-  },
+  debug:  Pick<Log, 'error' | 'warn'>,
   source: SourceConfig,
   // one transport per network, so each chain is read through its own endpoint
   transportFor: (network: string) => RpcTransport,
@@ -126,10 +125,8 @@ type Invocation = {
  * - `imported`: the candidate validated, and is a version to activate.
  * - `unchanged`: the commit is already imported, as `versionId`.
  * - `invalid`: the candidate failed its checks.
- * - `failed`: the invocation stopped on a failure. `error` is what stopped
- *   one that failed on a registry error, so a caller that answers a person
- *   can tell a request it has to refuse from a source that did not answer. It
- *   never leaves the process: the reason is the sanitized form of it.
+ *
+ * An invocation that fails does none of these: what stopped it is raised.
  */
 type InvocationResult = Invocation & (
   | { kind: 'idle', reason: string }
@@ -138,7 +135,6 @@ type InvocationResult = Invocation & (
   | { kind: 'imported', runId: string, versionId: string }
   | { kind: 'unchanged', versionId: string, reason: string }
   | { kind: 'invalid', runId: string, versionId: string, reason: string }
-  | { kind: 'failed', reason: string, error?: RegistryError }
 );
 
 type ManualRequest = {
@@ -169,10 +165,6 @@ type ManualRequest = {
  * whole attempt every day until they are.
  */
 const MAX_RETRY_INTERVALS = 8;
-
-function now(clock: Clock | undefined): Date {
-  return (clock ?? (() => new Date()))();
-}
 
 // diagnostics are sanitized: an upstream body or a token never reaches D1
 function diagnosticOf(error: unknown): string {
@@ -207,12 +199,17 @@ async function underFence<T>(deps: ImporterDeps, fence: Fence, work: (fence: Fen
   try {
     return await work(fence);
   } catch (error) {
-    const carrier = isTransportFailure(error) || isUnreachable(error);
+    /*
+     * A registry error is judged by its code, never by its text: a parser
+     * quotes what it refused, and a key named "timeout" would otherwise pass
+     * for a database that did not answer, leaving the run no error to say why.
+     */
+    const carrier = isTransportFailure(error) || (!isRegistryError(error) && isUnreachable(error));
     try {
       await releaseLease(deps.db, fence, carrier ? {} : { error: diagnosticOf(error) });
     } catch (unreleased) {
       // the lease then runs out, as it does for an invocation stopped outright
-      deps.debug?.warn(`registry lease not released`, { runId: fence.runId, error: unreleased });
+      deps.debug.warn(`registry lease not released`, { runId: fence.runId, error: unreleased });
     }
     throw error;
   }
@@ -285,9 +282,9 @@ async function startImport(
    * as it did before and the next discovery tries again.
    */
   try {
-    await supersedeStaleAttempts(db, source.repository, commitSha);
+    await supersedeStaleAttempts(db, source.repository, commitSha, { now: deps.now });
   } catch (error) {
-    deps.debug?.warn(`registry stale drafts not closed`, { error });
+    deps.debug.warn(`registry stale drafts not closed`, { error });
   }
   const attempts = await findAttemptsByCommit(db, source.repository, commitSha);
 
@@ -342,7 +339,7 @@ async function startImport(
     const complete = !(await failedChecks(db, newest.id)).includes(ALL_ROOTS_CHECK);
     const started  = Date.parse(await lastStartedAt(db, commitSha) ?? newest.created_at);
     const retryAt  = started + config.upstreamIntervalSeconds * 1000 * Math.min(2 ** (attempts.length - 1), MAX_RETRY_INTERVALS);
-    if (complete || now(deps.now).getTime() < retryAt) {
+    if (complete || nowOf(deps.now).getTime() < retryAt) {
       await recordUpstreamCheck(db, { now: deps.now });
       return {
         result: {
@@ -430,7 +427,7 @@ async function importMarket(
   const reviewedMarket  = reviewedFor === root.contracts.comet ? inherited : undefined;
   const reviewedNetwork = overlays.networks.get(root.chainId);
   if (inherited !== undefined && reviewedMarket === undefined) {
-    deps.debug?.warn(`registry overlay not inherited: the deployment key names another Comet`, {
+    deps.debug.warn(`registry overlay not inherited: the deployment key names another Comet`, {
       market: key, reviewedFor, comet: root.contracts.comet,
     });
   }
@@ -486,10 +483,10 @@ async function closeEarlierAttempts(deps: ImporterDeps, versionId: string): Prom
   try {
     const version = await readVersion(deps.db, versionId);
     if (version !== null) {
-      await supersedeEarlierAttempts(deps.db, version);
+      await supersedeEarlierAttempts(deps.db, version, { now: deps.now });
     }
   } catch (error) {
-    deps.debug?.warn(`registry earlier drafts not closed`, { versionId, error });
+    deps.debug.warn(`registry earlier drafts not closed`, { versionId, error });
   }
 }
 
@@ -541,10 +538,10 @@ async function finishCandidate(deps: ImporterDeps, fence: Fence, versionId: stri
    * run that gave roots up keeps the latest error, which says why.
    */
   const finish: RunFinish = held || failed === 0
-    ? { status: 'completed', outcome: 'imported', registryVersionId: versionId, ...(verdict.complete ? { error: null } : {}) }
-    : { status: 'failed', registryVersionId: versionId, error: 'validation failed' };
+    ? { status: 'completed', ...(verdict.complete ? { error: null } : {}) }
+    : { status: 'failed', error: 'validation failed' };
   const results = await deps.db.batch([
-    ...verdictStatements(deps.db, verdict, { hold: held, when: leaseHeld(fence), at: now(deps.now).toISOString() }),
+    ...verdictStatements(deps.db, verdict, { hold: held, when: leaseHeld(fence), at: nowOf(deps.now).toISOString() }),
     // the run closes only with the attempt that decides its candidate, which the statements before record
     finishRunStatement(deps.db, fence, finish, { now: deps.now, when: recorded(versionId, verdict.attempt) }),
   ]);
@@ -630,9 +627,9 @@ async function closeEndedRun(
     deps.db,
     fence,
     status === 'invalid'
-      ? { status: 'failed', registryVersionId: versionId, error: 'validation failed' }
+      ? { status: 'failed', error: 'validation failed' }
       // a version validates only with every root imported, which leaves the run nothing to report (finishCandidate)
-      : { status: 'completed', outcome: 'imported', registryVersionId: versionId, error: null },
+      : { status: 'completed', error: null },
     { now: deps.now },
   );
   if (!closed) {
@@ -740,7 +737,7 @@ async function continueRun(deps: ImporterDeps, fence: Fence, request: ManualRequ
        * reaches this first, the version is the run's.
        */
       createdBy: run.requested_by ?? deps.actor,
-      createdAt: now(deps.now).toISOString(),
+      createdAt: nowOf(deps.now).toISOString(),
     });
     if (!(await bindCandidate(db, fence, version, { now: deps.now }))) {
       return takenOver(deps, fence, null, 0);
@@ -776,7 +773,7 @@ async function continueRun(deps: ImporterDeps, fence: Fence, request: ManualRequ
         deploymentKey:      item.deployment_key,
         sourceBlobSha:      item.source_blob_sha,
       }, run.source_commit_sha, overlays);
-      committed = await completeItem(db, fence, { id: item.id }, {
+      committed = await completeItem(db, fence, item.id, {
         ...lease,
         writes: await marketWrites(db, versionId, market),
       });
@@ -789,7 +786,7 @@ async function continueRun(deps: ImporterDeps, fence: Fence, request: ManualRequ
        * goes to the logs, where it is the only way to tell which limit or
        * which provider ended the invocation.
        */
-      deps.debug?.error(`registry root failed`, { rootPath: item.root_path, error });
+      deps.debug.error(`registry root failed`, { rootPath: item.root_path, error });
       /*
        * A transport failure in an invocation that has already imported
        * something is the invocation running out — of the subrequests or the
@@ -804,10 +801,7 @@ async function continueRun(deps: ImporterDeps, fence: Fence, request: ManualRequ
        * registry would stop following the source.
        */
       const interrupted = isTransportFailure(error) && imported > 0;
-      committed = await failItem(db, fence, { id: item.id, error: message }, {
-        ...lease,
-        spendsAttempt: !interrupted,
-      });
+      committed = await failItem(db, fence, { id: item.id, error: message }, { ...lease, refund: interrupted });
     }
     /*
      * A checkpoint that does not commit means the lease was taken over while

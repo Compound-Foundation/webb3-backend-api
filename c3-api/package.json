@@ -58,11 +58,9 @@
   },
   "scripts": {
     "preinstall": "cd .. && npm install-clean --workspaces && npm run build --workspaces && npm test --workspaces",
-    "pretest": "tsc",
-    "test": "npm run test:tap",
+    "test": "npm run build && npm run test:tap",
     "test:tap": "npx tap --disable-coverage --timeout=900 'dist/tests/**/*.test.js'",
-    "pretest:worker": "tsc",
-    "test:worker": "npx tap --disable-coverage --timeout=300 'dist/tests/e2e/registry/**/*.test.js'",
+    "test:worker": "npm run build && npx tap --disable-coverage --timeout=300 'dist/tests/e2e/registry/**/*.test.js'",
     "build": "npx tsc",
     "test:offline": "npm run build && sh tests/offline.sh",
     "start": "wrangler dev --local entrypoint.ts",

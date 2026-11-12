@@ -1,12 +1,11 @@
-import type { Env } from '../../entrypoint.js';
-
 import type { RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
 
-import { ApiError } from '../http/errors.js';
+import { noActiveVersion } from '../http/errors.js';
 
 import { Catalog, catalogOf } from './catalog.js';
 import type { CacheDeps } from './cache.js';
-import { RegistryUnavailable, activeSnapshot, cacheDepsOf, isRegistryUnavailable } from './cache.js';
+import { activeSnapshot } from './cache.js';
+import { nowOf } from './clock.js';
 import { registryHeaders } from './version-headers.js';
 
 /*
@@ -23,7 +22,11 @@ import { registryHeaders } from './version-headers.js';
  * it only to name the markets of proposal actions, and answers without it.
  */
 type RequestCatalog = {
-  // loads the active version; throws RegistryUnavailable when there is none to serve, and a database fault as it is
+  /*
+   * Loads the active version. It throws REGISTRY_NOT_ACTIVE when none is,
+   * RegistryUnavailable when D1 did not answer and there is nothing to fall
+   * back on, and a database fault as it is.
+   */
   load(): Promise<Catalog>,
   // the version that answered this request, if one was loaded
   loaded(): Catalog | null,
@@ -50,7 +53,7 @@ const built = new WeakMap<RegistrySnapshotV1, { catalog: Catalog, until: number 
 
 // the clock the cache was given, so an injected one decides expiry as well as staleness
 function clockOf(deps: CacheDeps): number {
-  return (deps.now?.() ?? new Date()).getTime();
+  return nowOf(deps.now).getTime();
 }
 
 function catalogFor(snapshot: RegistrySnapshotV1, now: number): Catalog {
@@ -63,19 +66,7 @@ function catalogFor(snapshot: RegistrySnapshotV1, now: number): Catalog {
   return catalog;
 }
 
-/*
- * How a route answers a registry it cannot read: 503 either way, with a code
- * that says which — nothing is active, or the database did not answer. Why it
- * did not answer is the log's to say, never the client's.
- */
-function unavailableError(error: RegistryUnavailable): ApiError {
-  return error.reason === 'not_active'
-    ? new ApiError('REGISTRY_NOT_ACTIVE', `No active registry snapshot is available`)
-    : new ApiError('UPSTREAM_UNAVAILABLE', `the comet registry could not be read`);
-}
-
-function requestCatalog(env: Env, debug?: CacheDeps['debug']): RequestCatalog {
-  const deps = cacheDepsOf(env, debug);
+function requestCatalog(deps: CacheDeps): RequestCatalog {
   let pending: Promise<Catalog> | null = null;
   let catalog: Catalog | null          = null;
   let staleFor: number | null          = null;
@@ -86,9 +77,10 @@ function requestCatalog(env: Env, debug?: CacheDeps['debug']): RequestCatalog {
     load() {
       /*
        * The active version is read as the registry's own routes read it, so a
-       * market route fails as they do: a database that did not answer, with
-       * nothing within the window to fall back on, is RegistryUnavailable,
-       * and one that answered with a fault is raised as it is.
+       * market route fails as they do: nothing active is REGISTRY_NOT_ACTIVE,
+       * a database that did not answer, with nothing within the window to
+       * fall back on, is RegistryUnavailable, and one that answered with a
+       * fault is raised as it is.
        *
        * A failed load is not memoized: the promise is cleared so a later
        * handler of the same request can try again, which matters when the
@@ -99,7 +91,7 @@ function requestCatalog(env: Env, debug?: CacheDeps['debug']): RequestCatalog {
         try {
           const active = await activeSnapshot(deps);
           if (active === null) {
-            throw new RegistryUnavailable(`no comet registry version is active`, 'not_active');
+            throw noActiveVersion();
           }
           catalog  = catalogFor(active.snapshot, clockOf(deps));
           staleFor = active.staleFor;
@@ -115,26 +107,17 @@ function requestCatalog(env: Env, debug?: CacheDeps['debug']): RequestCatalog {
 }
 
 /*
- * The headers a registry-dependent response carries: they name the version a
- * client was served without changing any response body.
- */
-function catalogHeaders(catalog: Catalog, staleFor: number | null = null): Record<string, string> {
-  return {
-    ...registryHeaders({ id: catalog.versionId, checksum: catalog.checksum }, staleFor),
-  };
-}
-
-/*
  * The headers of whatever a request answered, by the version it loaded: none
- * when it loaded none, since nothing it said depended on one. A failure that
- * came after the version was read names it too, because an error a client
- * reports is only diagnosable if it says what it was computed against. The
- * legacy router sets these over everything else a response carries.
+ * when it loaded none, since nothing it said depended on one. They name the
+ * version a client was served without changing any response body. A failure
+ * that came after the version was read names it too, because an error a
+ * client reports is only diagnosable if it says what it was computed against.
+ * The legacy router sets these over everything else a response carries.
  */
 function catalogHeadersOf(registry: RequestCatalog): Record<string, string> {
   const catalog = registry.loaded();
-  return catalog === null ? {} : catalogHeaders(catalog, registry.staleFor());
+  return catalog === null ? {} : registryHeaders({ id: catalog.versionId, checksum: catalog.checksum }, registry.staleFor());
 }
 
 export type { RequestCatalog };
-export { RegistryUnavailable, catalogHeaders, catalogHeadersOf, isRegistryUnavailable, requestCatalog, unavailableError };
+export { catalogHeadersOf, requestCatalog };

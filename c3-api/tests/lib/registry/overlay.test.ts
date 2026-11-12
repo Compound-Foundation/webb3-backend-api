@@ -1,5 +1,7 @@
 import t from 'tap';
 
+import { readFileSync } from 'node:fs';
+
 import type { Address, PriceFeedV1 } from '../../../lib/model/comet-registry.js';
 
 import {
@@ -12,6 +14,8 @@ import {
 } from '../../../src/registry/overlay.js';
 import { isRegistryError } from '../../../src/registry/errors.js';
 import { priceExceptionOfRow } from '../../../src/registry/repository.js';
+
+import { sourceFiles } from '../../util/sources.js';
 
 /*
  * Overlay documents are complete replacements with exact key sets: a missing
@@ -336,6 +340,29 @@ t.test('a price exception is one decision in every shape it is held in', async t
     overlay,
     'which states the decision the row was written from',
   );
+});
+
+/*
+ * That holds while a stored exception is read in one place, which names every
+ * kind. A reader that told the kinds apart itself reads the same documents for
+ * the kinds there are now, so no answer would show it, and would read a kind
+ * added later as another.
+ */
+t.test('a stored exception is read in one place', async t => {
+  const sources = sourceFiles();
+  t.ok(sources.length > 200, 'every source file is read');
+  /*
+   * A column only some kinds fill, read off a row, or a row's kind where the
+   * rows are exceptions: other rows have kinds of their own, such as the
+   * audit row of a move or an approval (notifications.ts).
+   */
+  const reading = sources.filter(path => {
+    const text = readFileSync(path, 'utf8');
+    return /\.(?:fixed_price|replacement_price_feed)_\w+/.test(text)
+      || (/\bnetwork_price_exceptions\b|\bNetworkPriceExceptionRow\b/.test(text) && /\brow\.kind\b/.test(text));
+  });
+  t.same(reading, [ 'src/registry/repository.ts' ], 'only priceExceptionOfRow reads one');
+  t.match(readFileSync('src/registry/overlay-store.ts', 'utf8'), /priceExceptionOfRow\(/, 'which is what the overlay store reads its rows with');
 });
 
 /*

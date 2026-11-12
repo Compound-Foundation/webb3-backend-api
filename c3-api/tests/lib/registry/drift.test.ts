@@ -3,16 +3,17 @@ import t, { Test } from 'tap';
 import C3Api, { Env } from '../../../entrypoint.js';
 import type { Address, RegistrySnapshotV1 } from '../../../lib/model/comet-registry.js';
 
-import { sha256Hex } from '../../../src/http/bearer-auth.js';
 import { cacheDepsOf } from '../../../src/registry/cache.js';
 import { ChainCheckDeps, checkChain, readChainCheck } from '../../../src/registry/drift.js';
 import { registryStatus } from '../../../src/registry/status.js';
 
 import { FakeChain, fakeChain } from '../../util/fake-chain.js';
+import { fakeSource, isSourceUrl } from '../../util/fake-source.js';
 import { MemoryKv } from '../../util/kv.js';
+import { quietLog } from '../../util/quiet-log.js';
 import { RegistryDatabase, activeRegistryDatabase } from '../../util/registry-database.js';
 import { loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
-import { makeTestEnv } from '../../util/test-env.js';
+import { ADMIN_TOKEN, adminTestEnv, makeTestEnv } from '../../util/test-env.js';
 
 import '../../../shim/node-self.js';
 
@@ -58,6 +59,7 @@ function depsOf(
     transportFor:    chain.transportFor,
     intervalSeconds: DAY,
     now:             () => now,
+    debug:           quietLog,
   };
 }
 
@@ -377,17 +379,14 @@ async function servedRegistry(
   t.teardown(() => registry.dispose());
 
   const chain       = chainOf(registry.snapshot);
+  const source      = fakeSource({ commit: registry.snapshot.registryVersion.sourceCommitSha });
   const fetchBefore = globalThis.fetch;
   globalThis.fetch = (async (input: Request | string, init?: RequestInit) => {
     const request = new Request(input, init);
-    return request.url.endsWith('/commits/main')
-      ? new Response(registry.snapshot.registryVersion.sourceCommitSha)
-      : chain.fetch(request);
+    return isSourceUrl(request.url) ? source.fetch(request) : chain.fetch(request);
   }) as unknown as typeof globalThis.fetch;
   t.teardown(() => { globalThis.fetch = fetchBefore; });
-  const warn = console.warn;
-  console.warn = () => {};
-  t.teardown(() => { console.warn = warn; });
+  t.capture(console, 'warn');
 
   return { registry, chain };
 }
@@ -408,7 +407,7 @@ t.test('the hourly job reads the chain once a day, the commit already imported, 
   const today = start - start % (DAY * 1000);
 
   t.equal(await cron(env, today), 'ok', 'the hourly job succeeds');
-  const status = await registryStatus(env, cacheDepsOf(env));
+  const status = await registryStatus(env, cacheDepsOf(env, quietLog));
   t.ok(status.alerts.includes('chain-drift'), 'the status raises the drift');
   t.same(status.chainCheck?.drifts.map(({ market, asset, field, current }) => ({ market, index: asset.assetIndex, field, current })), [
     { market: '1/usdc', index: 2, field: 'priceFeed', current: MOVED },
@@ -435,28 +434,21 @@ t.test('an administrative sync that checks the source leaves the chain to the ho
   const { registry, chain } = await servedRegistry(t, served => fakeChain(served, {
     changes: { [USDC]: { basePriceFeed: MOVED } },
   }));
-  const env = makeTestEnv({
-    DEBUG:                            '',
-    APP_DB:                           registry.db,
-    kv_registry:                      MemoryKv({}),
-    COMET_REGISTRY_ADMIN_TOKEN_HASH:  await sha256Hex('registry-admin-token-for-tests'),
-    REGISTRY_ADMIN_RATE_LIMITER:      { limit: async () => ({ success: true }) },
-    REGISTRY_ADMIN_AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
-  });
+  const env = await adminTestEnv({ DEBUG: '', APP_DB: registry.db, kv_registry: MemoryKv({}) });
 
   const response = await C3Api.fetch(new Request('https://api.test.local/registry/v1/admin/sync', {
     method:  'POST',
-    headers: { 'Authorization': 'Bearer registry-admin-token-for-tests', 'Content-Type': 'application/json' },
+    headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}`, 'Content-Type': 'application/json' },
     body:    '{}',
   }), env);
   t.equal(response.status, 200);
   t.match(await response.json(), { status: 'completed', outcome: 'no_change' },
     'the sync checked the source, which still names the commit on');
-  t.ok((await registryStatus(env, cacheDepsOf(env))).sync.upstreamCheckedAt !== null, 'and recorded that it did');
+  t.ok((await registryStatus(env, cacheDepsOf(env, quietLog))).sync.upstreamCheckedAt !== null, 'and recorded that it did');
   t.same(chain.asked, [], 'reading no chain');
 
   t.equal(await cron(env, Date.now()), 'ok', 'the hourly job that follows succeeds');
-  const status = await registryStatus(env, cacheDepsOf(env));
+  const status = await registryStatus(env, cacheDepsOf(env, quietLog));
   t.same(status.chainCheck?.drifts.map(({ market, field, current }) => ({ market, field, current })), [
     { market: '1/usdc', field: 'priceFeed', current: MOVED },
   ], 'and reads the chain, the source checked already');

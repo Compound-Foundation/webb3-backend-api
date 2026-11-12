@@ -985,12 +985,33 @@ errors, which use the [envelope](#errors) every endpoint uses:
 and `INTERNAL` (500); the market endpoints add `REWARDS_NOT_AVAILABLE` (404),
 `REGISTRY_VERSION_CHANGED` (409) and `TESTNET_NOT_SERVED` (400), described
 with them. A failure the registry names more precisely — an import, a chain
-read, an overlay — carries its own code in `details.code`, such as
-`SYNC_ALREADY_RUNNING` or `OVERLAY_FEED_UNREADABLE`, under the kind of answer
-it is; a monitor matches `details.code` for those. Besides
+read, an overlay, a move of the active version — carries its own code in
+`details.code`, such as `SYNC_ALREADY_RUNNING`, `OVERLAY_FEED_UNREADABLE` or
+`APPROVAL_REQUIRED`, under the kind of answer it is; a monitor matches
+`details.code` for those. Besides
 `REGISTRY_NOT_ACTIVE`, only a source or a node provider that did not answer,
 and a database that could not be reached, are a `503`, here as on every
 endpoint ([Errors](#errors)): those are the answers worth trying again.
+
+Every `CONFLICT` names in `details.code` the conflict it met, which is what a
+script matches; the message says the same to a person, and may change. An
+overlay write below is any of `PUT …/overlay` and `PUT …/overlays`:
+
+| `details.code` | Answered by | Means |
+|---|---|---|
+| `SYNC_ALREADY_RUNNING` | `POST …/admin/sync` | an import is running: another invocation holds its run right now, or the request carries what only a new run takes — `sourceCommitSha`, `forceNewAttempt` or `holdForReview` |
+| `SYNC_RUN_HELD` | `POST …/sync-runs/{sync_run_id}/cancel` | an invocation holds the run until the time the message names |
+| `SYNC_RUN_ENDED` | `POST …/sync-runs/{sync_run_id}/cancel` | the run has already ended |
+| `IMPORT_STILL_RUNNING` | `POST …/validate` | the candidate's import is still running |
+| `CANDIDATE_CHANGED` | `POST …/validate` | an overlay was written to the candidate while it was being checked |
+| `CANDIDATE_STATE_CONFLICT` | `POST …/approve`, `POST …/activate`, `POST …/rollback` | the version is not validated, `expectedActiveVersionId` no longer names the version that is on, another move landed while the request was deciding, or an approval names the version that is on |
+| `APPROVAL_REQUIRED` | `POST …/activate` | no approval the activating token may use: one by another name, in force, given while the version now on was on, and neither used nor overtaken by a move since; or the one it was to use was used up while it was decided |
+| `ROLLBACK_TARGET_INVALID` | `POST …/rollback` | the version is not the one a rollback may restore now — the version the one on replaced when it was last activated, if that is older — which the message names, or says there is none |
+| `VERSION_NOT_IMPORTING` | an overlay write | the version is no longer importing, so it cannot be changed |
+| `OVERLAY_CHANGED` | an overlay write | a scope holds another overlay than the digest it was decided against, and `details.current` names the one it holds; or another write to the candidate landed in the middle of this one |
+| `SLUG_TAKEN` | an overlay write | another market of the network keeps the slug a market's document names |
+| `DEFAULT_TAKEN` | an overlay write | a market's document says `isDefault: true` while another market of the version is the default |
+| `REWARD_FEED_WITHOUT_REWARD` | an overlay write | a market's document names a `rewardPriceFeed`, and its rewards contract names no reward token |
 
 Public reads are cacheable and carry `ETag`, `X-Registry-Version` and
 `X-Registry-Checksum`, which a browser can read, and answer `304` to an
@@ -1022,21 +1043,76 @@ so that one resource has one URL.
 Administrative routes require `Authorization: Bearer <token>` — a `401` names
 the scheme in `WWW-Authenticate` — and answer no CORS headers at all. The
 scheme is read in any case, and one space or more may follow it; a header
-with anything after the token is answered as one without a token. An
-environment without a token hash it can use — none at all, or a value that is
-not 64 hex digits — answers every administrative request `403 FORBIDDEN`,
-whatever token it carries, and the message says which. Every administrative
-request is rate limited twice, reads as well as commands:
+with anything after the token is answered as one without a token.
+
+Each token has a name and a role. The name is who holds the token, and every
+change the token makes is recorded under it: the `actor` of an approval, an
+activation, a rollback or an overlay event, the `requestedBy` of an import it
+asks for and the `createdBy` of that import's version, and the name in a
+cancelled run's `cancelled by <name>: <reason>`. A validation, which decides
+nothing, is the one command that records no name: it records the checks it
+ran. The role is what the token may call, and each role may call everything
+the one before it may:
+
+| Role | May call |
+|---|---|
+| `monitor` | `GET /registry/v1/admin/status` |
+| `reader` | every `GET` under `/registry/v1/admin` |
+| `operator` | besides, `POST …/sync`, `POST …/sync-runs/{sync_run_id}/cancel`, and the overlay writes: `PUT …/networks/{chain_id}/overlay`, `PUT …/markets/{chain_id}/{deployment_key}/overlay` and `PUT …/overlays` |
+| `admin` | besides, `POST …/validate`, `POST …/approve`, `POST …/activate` and `POST …/rollback` |
+
+`POST …/validate` is not the only way a version validates: an import that is
+not held for review validates its draft by itself once it completes, whoever
+asked for it. What is served is decided by `POST …/activate` and
+`POST …/rollback` alone.
+
+A version is switched on by two people. An admin approves it
+(`POST …/approve`), and an admin of another name activates it
+(`POST …/activate`): names, not tokens, are people, so two tokens of one
+holder — a token and the one rotated in for it — never approve each other's
+activation. There is no role of its own for approving: any admin may approve
+what another switches on. A rollback (`POST …/rollback`) needs nobody's
+approval, so that undoing a bad version takes one person, but it goes back
+one step only: to the version the one on replaced when it was last
+activated, if that is older. Going further back is another rollback, and
+going anywhere else is an activation. Every approval, and every move that
+changes what is served, is announced (below).
+
+An environment lists its tokens in the secret `COMET_REGISTRY_ADMIN_TOKENS`
+([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#the-admin-tokens)), and takes
+no other token.
+
+- A token the environment does not list is refused with `401`, the message
+  `the bearer token is not valid` and `Bearer error="invalid_token"`; so is a
+  token past its expiry, with the message `the bearer token has expired`.
+- A token whose role does not reach the route is refused with
+  `403 FORBIDDEN` and `WWW-Authenticate: Bearer error="insufficient_scope"`.
+  The message names the token, its role and the role the route needs, which
+  `details` carries as `role` and `requiredRole`. A method the path does not
+  take is still `405`, whatever the role.
+- An environment that lists no token — no list, a blank one, or `[]` — or
+  whose list the worker cannot read, answers every administrative request
+  `403 FORBIDDEN`, whatever it carries, and asks for no token: a malformed
+  list refuses every token, those of its well-formed entries too. The
+  message says which: the API is not configured, or
+  `COMET_REGISTRY_ADMIN_TOKENS is malformed`, for which the worker's log line
+  `registry route refused`, under the answer's `requestId`, names the entry
+  and what is wrong with it.
+
+Every administrative request is rate limited twice, reads as well as
+commands:
 
 - First, before its token is checked or its path is matched, by the address
   it comes from: 60 a minute for each address — for each /64 of an IPv6
   one, since a client can send from any address of its /64. Guessing a token,
   or a path, costs as much as a request with the right one, and once an
   address has spent its budget the right token is refused from it as well.
-- Then, once it is authenticated, by its token: 30 a minute for each token
-  and each family of routes. Every read shares one budget, so a monitor
-  polling the status spends it with an operator who holds the same token, and
-  each kind of command has one of its own.
+- Then, once its token is checked and its role reaches the route, by its
+  token: 30 a minute for each token and each family of routes. Every read
+  shares one budget, and each kind of command has one of its own. The
+  budgets are the token's: a monitor polling the status with a token of its
+  own spends nothing of an operator's, and callers who share a token share
+  its budgets.
 
 Past either budget the answer is `429` `RATE_LIMITED`, saying in
 `Retry-After` how many seconds to wait, and in its message which budget ran
@@ -1050,6 +1126,83 @@ at most 1,000 characters, and a longer one is refused with `400`.
 The body is JSON, sent as `application/json` or as a `+json` type such as
 `application/merge-patch+json`, or without a `Content-Type`. The type is read
 in any case, and a body of any other type is refused with `400`.
+
+A move of the active version that changes what the registry serves — an
+activation or a rollback that answers `changed: true` — is announced to the
+webhook the environment sets in the secret `COMET_REGISTRY_WEBHOOK_URL`, a
+Slack incoming webhook
+([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#announcing-changes)), and so is
+every approval, as it is given: the channel hears of a change while it can
+still be stopped. Nothing else is: not a move that changed nothing or was
+refused, nor a refused approval, an import, a validation, a cancel or an
+overlay write, whose changes the approval and the move that switches them on
+report. Once the move or the approval has committed, the worker posts:
+
+```json
+{
+  "text": "[production] alice activated registry version c0d77dad-… (commit a34d9b5), replacing d9698ddd-…, approved by bob. Markets: 1 added, 0 removed, 2 changed, 0 no longer served; networks: 1 added, 0 removed, 0 changed. Reason: \"switch on the new commit\"",
+  "unfurl_links": false,
+  "unfurl_media": false,
+  "registryEvent": {
+    "kind": "activate",
+    "environment": "production",
+    "at": "2026-11-04T12:00:00.000Z",
+    "actor": "alice",
+    "reason": "switch on the new commit",
+    "version": { "id": "c0d77dad-…", "sourceRepository": "compound-foundation/comet", "sourceCommitSha": "a34d9b57…", "checksum": "1bd74ebe…" },
+    "previousVersion": { "id": "d9698ddd-…", "sourceRepository": "compound-foundation/comet", "sourceCommitSha": "5d2e1f04…", "checksum": "748b4d56…" },
+    "activationId": "3e96812b-…",
+    "approval": { "id": "5b1f0c2e-…", "actor": "bob", "createdAt": "2026-11-04T11:00:00.000Z", "expiresAt": "2026-11-05T11:00:00.000Z" },
+    "changes": {
+      "networks": { "added": [ 8453 ], "removed": [], "changed": [] },
+      "markets": { "added": [ "8453/usdc" ], "removed": [], "changed": [ "1/usdc", "1/weth" ], "unserved": [] }
+    }
+  }
+}
+```
+
+- `text` is what Slack shows, on one line: who switched which version on,
+  in place of which, who approved it, how many markets and networks that
+  added, removed or changed, and last, why. A rollback reads `… rolled the
+  registry back to version <id> (commit …) from <id>. …`, a move made while
+  nothing was on says `with no version on before`, and an approval reads
+  `… bob approved registry version <id> (commit …) until <expiresAt>,
+  against <id>. …` — or `with no version on` — with what switching the
+  version on would change. `What changed could not be read.` stands in for
+  the counts when they could not be read. `&`, `<` and `>` are escaped as
+  Slack asks, and every run of line breaks or other control characters in a
+  value is one space, so a reason cannot use Slack's markup to mention
+  anyone (`<!channel>`) or to show a link under a name of its own, nor write
+  a line of its own; and as it comes last, nothing it says stands before the
+  counts. `unfurl_links` and `unfurl_media` keep Slack from previewing a
+  link a reason quotes.
+- `registryEvent` is for a receiver that acts on the message, with every
+  value as it is recorded, unescaped: `kind` (`activate`, `rollback` or
+  `approve`), `environment`, `at` (when the move was made, or the approval
+  given), `actor` (the token's name), `reason`, the version switched on or
+  approved (`version`) and the one it replaced, or that was on when the
+  approval was given (`previousVersion`, `null` when nothing was on), each as
+  `id`, `sourceRepository`, `sourceCommitSha` and `checksum`, `activationId`
+  (the move, as `GET …/versions/{version_id}` lists it under `activations`;
+  `null` for an approval), `approval` (the approval an activation used, or
+  the one given, as `id`, `actor`, `createdAt` and `expiresAt`; `null` for a
+  rollback), and `changes`: the chain ids of the networks and the
+  `chainId/deploymentKey` of the markets the move added, removed or changed —
+  or that switching the approved version on would — as
+  `GET …/versions/{version_id}/changes` compares the same two versions and
+  tells how each changed, and under `markets.unserved` the markets the
+  version replaced served and the one switched on does not. `changes` is
+  `null` when it could not be read.
+
+It is best effort. The message is sent once, and the command does not wait
+for it: nothing about it fails or delays the command. A message the webhook
+has not answered in 5 seconds is given up rather than sent again, since a
+message sent again could arrive twice. The record of what was approved and
+switched on is the audit (`GET …/versions/{version_id}`); a message given up
+is logged as `registry notification failed`, never with the webhook's URL,
+and `GET …/status` raises `notification-failing` until a later one is sent.
+A `COMET_REGISTRY_WEBHOOK_URL` that is not an `https` URL is sent nothing,
+and the status names it under `configuration-invalid`.
 
 ## `/registry/v1/active`
 ### description:
@@ -1247,12 +1400,15 @@ fault, whose `lastError` is `an unexpected error interrupted the import`.
 ## `GET /registry/v1/admin/status`
 ### description:
 
-Whether the registry is healthy, in one answer: the active version and who
-switched it on, whether its bytes are cached (`cache.snapshotCached`) and the
+Whether the registry is healthy, in one answer: the active version, who
+switched it on (`active.activatedBy`) and who approved that
+(`active.approvedBy`, `null` for a rollback, and for a move made before
+approvals existed), whether its bytes are cached (`cache.snapshotCached`) and the
 cache could be read at all (`cache.readable`), when the source was last
-checked, the last import run, the candidates still open, and the registry
+checked, the last import run, the candidates still open, the registry
 settings the environment sets to something they do not take
-(`configuration.invalid`, by name). A database that cannot be reached answers
+(`configuration.invalid`, by name), and whether moves and approvals are
+announced (`notifications`). A database that cannot be reached answers
 `503 UPSTREAM_UNAVAILABLE`, which a monitor tells apart from a fault, a `500`.
 A daily check of the source that finds nothing to import starts no run: it
 moves `sync.upstreamCheckedAt` alone, and `sync.lastRun` stays the last
@@ -1287,17 +1443,34 @@ because of it.
 
 Each version under `candidates.validated` carries `unserved`: the markets of
 the active version whose Comet it serves under no key of the same chain, by
-their keys in the active version, or `[]`.
+their keys in the active version, or `[]`; and `approval`: the newest
+approval an activation by another admin could use now, as `id`, `actor` and
+`expiresAt`, or `null` — none given, or each expired, used, or given while
+another version was on.
+
+`notifications` says whether moves and approvals are announced: `webhook` is
+`off` when `COMET_REGISTRY_WEBHOOK_URL` is not set, `on` when it is, and
+`invalid` when it is set to something that is not an `https` URL — never the
+URL itself.
+`failure` is the last move or approval whose message was given up, while
+`webhook` is `on` and until a later message is sent: when (`at`), the move
+(`activationId`) or the approval (`approvalId`), the other `null`, its `kind`
+(`activate`, `rollback` or `approve`) and the version it named (`versionId`),
+both `null` when the message failed before the move or the approval was read
+— the database did not answer, none has that id, or the worker met a fault —
+what the webhook answered (`status`, `null` when it did not answer), and
+`reason`.
 
 `alerts` is that state reduced to the conditions worth acting on, so a monitor
 can check that it is empty without knowing the registry's rules:
 
 | Alert | Means |
 |---|---|
-| `configuration-invalid` | a registry setting is set to something it does not take — a number that is not a whole number in its range, or a repository or ref that names no source; `configuration.invalid` names each. The import refuses to start while one of its own is invalid, and a read takes the default in its place |
+| `configuration-invalid` | a registry setting is set to something it does not take — a number that is not a whole number in its range (`COMET_REGISTRY_APPROVAL_TTL_S` is one from 1 to 604800, a week), a repository or ref that names no source, or a `COMET_REGISTRY_WEBHOOK_URL` that is not an `https` URL; `configuration.invalid` names each. The import refuses to start while one of its own is invalid, a read takes the default in its place, an approval given meanwhile lasts the default day, and nothing is announced to a webhook that is not one |
 | `no-active-version` | nothing is activated, so every market route answers `503` |
 | `candidate-awaiting-review` | a draft is held for review and no import is running: somebody has to review it and validate it, or discard it |
 | `candidate-awaiting-activation` | a version newer than any ever switched on validated, and is waiting to be — what the scheduled import produces for a new commit; `candidates.validated` lists it. It holds until a version at least that new is switched on |
+| `candidate-awaiting-approval` | the newest version `candidates.validated` lists has no approval an activation could use — none given, or each expired, used, or given while another version was on — so nobody can switch it on until an admin approves it (`POST /registry/v1/admin/versions/{version_id}/approve`). It is raised beside `candidate-awaiting-activation`, clears when the version is approved or a version at least that new is switched on, and comes back when the approval expires unused or another version goes on |
 | `candidate-drops-markets` | a version `candidates.validated` lists would stop serving a market the active version serves: its `unserved` names each, by its key in the active version — a deployment the source dropped, renamed to a key nobody has reviewed, or whose key it gave to another Comet, or a market a review switched off. Nothing holds such a version back, and it can be switched on; `GET /registry/v1/admin/versions/{version_id}/changes` says where each Comet went (`markets.unserved`). It holds until a version at least that new is switched on |
 | `commit-rejected` | the newest version imported every root of its commit and is invalid, so discovery no longer imports that commit by itself; `sync.rejectedCommit` names it. It holds until a newer version exists — a forced attempt, or a new commit |
 | `chain-drift` | the version on stores a price feed or a collateral asset its market's Comet no longer answers with: governance changed the market on chain after the import, and the source did not move; `chainCheck.drifts` names each. It holds until a check of the version on finds it agrees with the chain — a version imported again with `forceNewAttempt`, which reads the chain anew, switched on, and checked at the next hourly invocation — or the chain changes back. A version switched on is taken to drift as the one before it did until it has been checked, and a network the check could not read keeps the drifts last found there |
@@ -1307,6 +1480,7 @@ can check that it is empty without knowing the registry's rules:
 | `sync-overdue` | the source has not been checked for more than twice the configured interval, or never: a fresh environment raises it beside `no-active-version` until its first import records a check, from the hourly job or `POST /registry/v1/admin/sync` |
 | `snapshot-not-cached` | the active version's bytes are not in the cache, so every cold isolate hydrates it from D1 again |
 | `cache-unreadable` | the KV namespace did not answer at all: there is no cache, and no fallback if the database fails next |
+| `notification-failing` | a move went live, or an approval was given, and its message was given up — the webhook refused it, most often because it was revoked, or did not answer within 5 seconds — so the channel was not told; `notifications.failure` names the move or the approval. It holds, while `notifications.webhook` is `on`, until a later message is sent |
 
 ```sh
 $ curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
@@ -1320,7 +1494,8 @@ $ curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
     "versionId": "d9698ddd-ab86-46bc-a412-c71df7d20414",
     "checksum": "1bd74ebe00d845e0fa5e648b22a2c39e60d9a62bf6c58190320fa01cd9a26a4a",
     "activatedAt": "2026-09-21T18:44:02.881Z",
-    "activatedBy": "registry-admin:stage",
+    "activatedBy": "alice",
+    "approvedBy": "bob",
     "ageSeconds": 138518
   },
   "cache": { "snapshotCached": true, "pointerAgeSeconds": 412, "readable": true },
@@ -1346,6 +1521,7 @@ $ curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
     "drifts": [],
     "unreadable": []
   },
+  "notifications": { "webhook": "on", "failure": null },
   "alerts": []
 }
 ```
@@ -1370,10 +1546,10 @@ A drift, as `chainCheck.drifts` names it:
 ### description:
 
 One import run and its per-root checkpoints, including why a root failed and
-when the run becomes resumable. `requestedBy` is who started the run —
-`registry-admin:<environment>`, or the `COMET_REGISTRY_ADMIN_ACTOR` the
-environment sets, for an administrative sync, and `registry-cron:<environment>`
-for the hourly job — and `reason` the reason its request gave, if any.
+when the run becomes resumable. `requestedBy` is who started the run — the
+name of the token an administrative sync was sent with, and
+`registry-cron:<environment>` for the hourly job — and `reason` the reason
+its request gave, if any.
 `triggerKind` is `manual` for a run a request started with
 `sourceCommitSha`, `forceNewAttempt` or `holdForReview`, and `scheduled` for
 any other: the hourly job's, and one an administrative sync with none of the
@@ -1398,10 +1574,10 @@ again, and a sync with `forceNewAttempt` is refused while it is running. Its
 
 Takes `{"reason": "…"}` and nothing else, and spends from the same budget
 as `POST /registry/v1/admin/sync`. Only a run nobody holds is cancelled: a
-run whose lease is live is `409` until the lease has run out — the message
-says when — since the invocation that holds it may be importing into it, and
-so is a run that has already ended. An unknown id is `404`, and a missing
-`reason` is `400`.
+run whose lease is live is `409` with `SYNC_RUN_HELD` until the lease has run
+out — the message says when — since the invocation that holds it may be
+importing into it, and a run that has already ended is `409` with
+`SYNC_RUN_ENDED`. An unknown id is `404`, and a missing `reason` is `400`.
 
 Answers with the run as `GET /registry/v1/admin/sync-runs/{sync_run_id}`
 does: `failed`, with `lastError` `cancelled by <actor>: <reason>` and
@@ -1441,10 +1617,9 @@ It is a summary per version, never a snapshot: what each was built from and
 what became of it. The markets of one version are read by its id.
 
 `createdBy` is who asked for the import that created the version, as its run
-records them in `requestedBy`: the operator for a version an administrative
-sync created — `registry-admin:<environment>`, or the
-`COMET_REGISTRY_ADMIN_ACTOR` the environment sets — whatever its request
-asked for, and `registry-cron:<environment>` for one the hourly job created.
+records them in `requestedBy`: for a version an administrative sync created,
+the name of the token the sync was sent with, whatever its request asked for,
+and `registry-cron:<environment>` for one the hourly job created.
 Why a sync was asked for is kept with its run:
 `GET /registry/v1/admin/sync-runs/{sync_run_id}` answers `requestedBy` and
 `reason`, and the sync's own answer names the run as `syncRunId`.
@@ -1480,7 +1655,7 @@ $ curl -s "$API/registry/v1/admin/versions?status=importing" -H "Authorization: 
       "snapshotChecksum": null,
       "createdAt": "2026-09-23T08:12:44.019Z",
       "validatedAt": null,
-      "createdBy": "registry-admin:stage"
+      "createdBy": "olga"
     }
   ]
 }
@@ -1489,17 +1664,27 @@ $ curl -s "$API/registry/v1/admin/versions?status=importing" -H "Authorization: 
 ## `GET /registry/v1/admin/versions/{version_id}`
 ### description:
 
-A version with its validation summary and activation history.
+A version with its validation summary, activation history and approvals.
 
 `activations` lists every move that switched the version on or off, newest
 first, and names both versions of each: `targetVersionId` is the one the move
 switched on, and `previousVersionId` the one it switched off — `null` when
 nothing was on before. A record whose `previousVersionId` is this version is
-the move that switched it off.
+the move that switched it off. `approvalId` is the approval an activation
+used, and `null` for a rollback and for a move made before approvals
+existed.
+
+`approvals` lists every approval of the version, newest first: who gave it
+(`actor`) and why, the version that was on when it was given
+(`activeVersionId`, `null` for none), which the activation it lets through
+must replace, when it was given and until when it is in force (`createdAt`,
+`expiresAt`), the activation that used it (`activationId`, `null` until one
+does), and whether an activation by another admin could use it now
+(`usable`).
 
 ```json
 {
-  "version": { "id": "d9698ddd-…", "status": "validated", … },
+  "version": { "id": "c0d77dad-…", "status": "validated", … },
   "validation": { "attempt": 1, "passed": 42, "failed": 0, "checks": [ … ] },
   "activations": [
     {
@@ -1507,18 +1692,24 @@ the move that switched it off.
       "action": "activate",
       "previousVersionId": "d9698ddd-…",
       "targetVersionId": "c0d77dad-…",
-      "actor": "registry-admin:stage",
+      "actor": "alice",
       "reason": "switch on the new commit",
-      "createdAt": "2026-10-19T08:12:44.019Z"
-    },
+      "createdAt": "2026-10-19T08:12:44.019Z",
+      "approvalId": "5b1f0c2e-…"
+    }
+  ],
+  "approvals": [
     {
-      "id": "90e757e3-…",
-      "action": "activate",
-      "previousVersionId": null,
-      "targetVersionId": "d9698ddd-…",
-      "actor": "registry-admin:stage",
-      "reason": "first activation",
-      "createdAt": "2026-09-23T09:30:02.114Z"
+      "id": "5b1f0c2e-…",
+      "versionId": "c0d77dad-…",
+      "snapshotChecksum": "1bd74ebe…",
+      "activeVersionId": "d9698ddd-…",
+      "actor": "bob",
+      "reason": "read the changes: one market added",
+      "createdAt": "2026-10-19T07:58:10.402Z",
+      "expiresAt": "2026-10-20T07:58:10.402Z",
+      "activationId": "3e96812b-…",
+      "usable": false
     }
   ],
   "unreviewed": { "networks": [], "markets": [] }
@@ -1533,39 +1724,110 @@ that ran answers `200` with what it decided: `version.status` is `validated`,
 or `invalid` with the checks that decided it in `summary`. A version that is
 already decided, either way, answers the same again with `changed: false`.
 
-It answers `409` only when it could not run: while the candidate's import is
-still running, or when an overlay was written to the candidate while it was
-being checked — the checks would describe rows it no longer holds, so none of
-them is recorded; validate it again.
+It answers `409` only when it could not run: with `IMPORT_STILL_RUNNING`
+while the candidate's import is still running, and with `CANDIDATE_CHANGED`
+when an overlay was written to the candidate while it was being checked — the
+checks would describe rows it no longer holds, so none of them is recorded;
+validate it again.
 
 ```json
 { "version": { "id": "c0d77dad-…", "status": "invalid", "checksum": null }, "changed": true, "summary": { "attempt": 1, "passed": 41, "failed": 1, "checks": [ … ] } }
 ```
 
 It takes no body. Validation decides nothing: it checks the stored candidate
-and records every check it ran, exactly as the scheduled import does
-unattended. The decision a person makes about a version, with its reason, is
-the activation.
+and records every check it ran, and not who asked for it, exactly as the
+scheduled import does unattended. The decisions people make about a version,
+each with its reason, are the approval and the activation.
+
+## `POST /registry/v1/admin/versions/{version_id}/approve`
+### description:
+
+Approves a validated version, so that an admin of another name may switch it
+on. Requires a `reason`, stored with the approval, and
+`expectedActiveVersionId`: the version on that the approver read the changes
+against (`GET …/versions/{version_id}/changes`), or `null` when nothing is
+on. An approval is of the version — whose bytes no longer change once it is
+validated, so it covers exactly what goes live — against that version, and
+is given only while it is on: one decided against a version somebody has
+replaced since is refused, rather than given for a change nobody read. It
+lets an activation through only while that version is on.
+
+```json
+{ "reason": "read the changes: one market added", "expectedActiveVersionId": "d9698ddd-ab86-46bc-a412-c71df7d20414" }
+```
+
+It answers `200` with the approval, as `GET …/versions/{version_id}` lists
+it under `approvals`:
+
+```json
+{
+  "approval": {
+    "id": "5b1f0c2e-…",
+    "versionId": "c0d77dad-…",
+    "snapshotChecksum": "1bd74ebe…",
+    "activeVersionId": "d9698ddd-…",
+    "actor": "bob",
+    "reason": "read the changes: one market added",
+    "createdAt": "2026-10-19T07:58:10.402Z",
+    "expiresAt": "2026-10-20T07:58:10.402Z",
+    "activationId": null,
+    "usable": true
+  }
+}
+```
+
+An approval is in force for `COMET_REGISTRY_APPROVAL_TTL_S` after it is given
+— a day unless the environment sets otherwise, and a week at most — an expiry
+stored with it, so changing the setting changes no approval already given.
+It lets one activation through. It no longer counts once it has expired,
+once an activation has used it, or once any move has switched its version on
+after it was given: switching a version on again after a rollback needs a
+new approval. It cannot be withdrawn: one given by mistake, or by a token
+that turns out to have leaked, stays usable by any other admin until it
+expires, is used, or another version goes on.
+
+Every request records an approval of its own, and each is announced to the
+environment's webhook, as [Registry v1](#registry-v1) describes. A version
+that does not exist is `404`; a version that is not validated, the version
+that is on — which is no change to approve — and an `expectedActiveVersionId`
+that is no longer what is on are `409` with `details.code`
+`CANDIDATE_STATE_CONFLICT`; a body without a `reason` or without
+`expectedActiveVersionId`, or with another property, is `400`.
 
 ## `POST /registry/v1/admin/versions/{version_id}/activate`
 ### description:
 
-Makes a validated version the one the API serves. Requires a `reason`, which
-is stored with the audit event. Activating the version that is already active
-changes nothing.
+Makes a validated version the one the API serves, once an admin of another
+name has approved it; a version that is not validated is refused with `409`
+and `CANDIDATE_STATE_CONFLICT`. Requires a `reason`, which is stored with the
+audit event. Activating the version that is already active changes nothing,
+and needs no approval.
+
+The activation uses the newest approval of the version that is in force, was
+given by another name than the activating token's, was given while the
+version now on was on, and has not been used, or overtaken by a move that
+switched the version on after it was given. Without one it is refused with
+`409` and `details.code` `APPROVAL_REQUIRED`, and nothing moves. The first
+activation of an environment needs an approval too, given while nothing was
+on.
 
 `expectedActiveVersionId` — [optional] — the version the move is decided
 against, or `null` when nothing is on yet. When it is no longer the version
-that is on, the move is refused with `409` naming the one that is, instead of
-silently undoing a move somebody else made in the meantime. A move whose
-target is already on changes nothing, whatever it expected.
+that is on, the move is refused with `409` and `CANDIDATE_STATE_CONFLICT`,
+naming the one that is, instead of silently undoing a move somebody else made
+in the meantime. A move whose target is already on changes nothing, whatever
+it expected. A move made by somebody else between the activation's reading of
+what is on and its write is refused the same way, `409` with `details.code`
+`CANDIDATE_STATE_CONFLICT`, and records nothing: read the status and decide
+again.
 
 ```json
 { "reason": "switch on the new commit", "expectedActiveVersionId": "d9698ddd-ab86-46bc-a412-c71df7d20414" }
 ```
 
-It answers with the move it made. One that changed nothing answers
-`changed: false`, with `activationId` and `previousVersionId` null.
+It answers with the move it made, and the approval it used. One that changed
+nothing answers `changed: false`, with `activationId`, `previousVersionId`
+and `approvalId` null.
 
 ```json
 {
@@ -1574,15 +1836,45 @@ It answers with the move it made. One that changed nothing answers
   "previousVersionId": "d9698ddd-…",
   "targetVersionId": "c0d77dad-…",
   "changed": true,
+  "approvalId": "5b1f0c2e-…",
   "registryVersion": { "id": "c0d77dad-…", "checksum": "1bd74ebe…" }
 }
 ```
 
+A move that changed something is announced to the environment's webhook
+once it has committed, as [Registry v1](#registry-v1) describes; the answer
+does not wait for it. One that changed nothing is not.
+
+From an environment's first approval on, the database refuses an activation
+without an approval it may use, a rollback the rule below does not allow,
+and a move of the active version no activation records, whoever writes it
+(migration `0011`). Before that first approval only the worker holds the
+rule, and the release before approvals keeps working: it is what is live
+while the migration is applied. Someone who can write to the database
+directly can still go around the rule, as around every other.
+
 ## `POST /registry/v1/admin/versions/{version_id}/rollback`
 ### description:
 
-The same move in the other direction, recorded as a rollback, and taking the
-same `expectedActiveVersionId`.
+The same move in the other direction, recorded as a rollback, taking the
+same `expectedActiveVersionId`, and announced the same way, as a rollback.
+
+A rollback needs nobody's approval, so that undoing a bad version takes one
+person: break-glass. It goes back one step. It restores only the version the
+one on replaced when an activation last switched it on — in the
+`activations` of the version on (`GET …/versions/{version_id}`), the
+`previousVersionId` of the newest `activate` whose `targetVersionId` is the
+version on — and only when that version is older, in the order
+`GET …/versions` lists them. To go further back, roll back again from the
+version restored: each step is a rollback of its own, and each is announced.
+Anything else is refused with `409` and `details.code`
+`ROLLBACK_TARGET_INVALID`, whose message names the version a rollback may
+restore now, or says that none may: a version two steps back or more, one
+never on, one newer than the version on, any rollback while nothing is on,
+and any from a version an activation switched on in place of a newer one.
+Such a version is switched on with an activation, once another admin has
+approved it. A rollback to the version on changes nothing, as an activation
+of it does. Its answer's `approvalId` is `null`.
 
 ## `PUT /registry/v1/admin/versions/{version_id}/networks/{chain_id}/overlay`
 ### description:
@@ -1606,7 +1898,8 @@ property is refused with `400`:
 The overlay is applied to the rows the import wrote, and a network reviewed
 this way stops being listed as unreviewed. A chain the candidate has not
 imported yet answers `404`: the import writes every network it reaches, so
-the answer is to let it continue.
+the answer is to let it continue. Only an importing candidate is writable:
+any other version answers `409` with `VERSION_NOT_IMPORTING`.
 
 A feed the overlay introduces — a remap's replacement feed — is read on the
 chain for its decimals, unless the version already knows it on that chain.
@@ -1628,9 +1921,9 @@ The answer names the overlay the scope now holds by its `digest`.
 `expectedDigest` — [optional] — is the digest of the overlay the document was
 decided against, as the `GET` below answers it, or `null` for a scope nobody
 has reviewed: when the scope holds another one, the document is refused with
-`409` rather than silently undoing a change made since. A write that another
-write to the same candidate lands in the middle of is refused with `409` too;
-read again and resend.
+`409` and `OVERLAY_CHANGED` rather than silently undoing a change made since.
+A write that another write to the same candidate lands in the middle of is
+refused with `OVERLAY_CHANGED` too; read again and resend.
 
 ```json
 { "versionId": "d9698ddd-ab86-46bc-a412-c71df7d20414", "changed": true, "overlayEventId": "0d0f3f7e-...", "digest": "5f0c...", "snapshotChecksum": null }
@@ -1643,7 +1936,7 @@ after the type is the `scope` the scope's `GET` answers: read the scope again
 there, redo the change on what it answers, and send that with its `digest`.
 
 ```json
-{ "error": { "code": "CONFLICT", "message": "the overlay of network 1 is no longer the one this was decided against; read it again", "requestId": "8419...", "details": { "current": { "network 1": "1cd5..." } } } }
+{ "error": { "code": "CONFLICT", "message": "the overlay of network 1 is no longer the one this was decided against; read it again", "requestId": "8419...", "details": { "code": "OVERLAY_CHANGED", "current": { "network 1": "1cd5..." } } } }
 ```
 
 ## `GET /registry/v1/admin/versions/{version_id}/networks/{chain_id}/overlay`
@@ -1689,7 +1982,8 @@ unreviewed. It takes the same body, with the market's document as
 `overlay`, answers the market's `digest` and takes `expectedDigest` exactly
 as the network route does, and reads the feeds it introduces — the USD feed
 and the reward feed — the same way. A `rewardPriceFeed` on a market whose
-rewards contract names no reward token is refused with `409`.
+rewards contract names no reward token is refused with `409` and
+`REWARD_FEED_WITHOUT_REWARD`.
 
 A `creationBlock` the document changes is held against the chain, unless it
 is `0`: it must be the block the market's Comet was deployed in — the Comet
@@ -1715,10 +2009,10 @@ the same network, and `isInstitutional` lists it in the institutional section.
 Within a network, no two markets that are not disabled may answer to the same
 `slug`, or to the same label where they have none; validation refuses a
 version where they do, and a slug another market of the network keeps is
-refused with `409`. So is `isDefault: true` while another market of the
-version is the default: the default moves with both markets in one
-`PUT …/overlays`, each decided against the `digest` its `GET` answered
-(`expectedDigests`).
+refused with `409` and `SLUG_TAKEN`. So is `isDefault: true` while another
+market of the version is the default, with `DEFAULT_TAKEN`: the default moves
+with both markets in one `PUT …/overlays`, each decided against the `digest`
+its `GET` answered (`expectedDigests`).
 
 ## `GET /registry/v1/admin/versions/{version_id}/markets/{chain_id}/{deployment_key}/overlay`
 ### description:
@@ -1777,9 +2071,10 @@ and the writes are one D1 transaction: a document the parser refuses answers
 naming all of them, with nothing written in either case. A request may move
 the default market or a slug between the markets it names, or swap two slugs,
 in whatever order it names them. Only an importing candidate is
-writable (`409` otherwise), and a request that another write to the
-candidate lands in the middle of is refused with `409`, with nothing
-written: what it decided was decided against what it read.
+writable (`409` with `VERSION_NOT_IMPORTING` otherwise), and a request that
+another write to the candidate lands in the middle of is refused with `409`
+and `OVERLAY_CHANGED`, with nothing written: what it decided was decided
+against what it read.
 
 ```json
 {
@@ -1793,15 +2088,15 @@ written: what it decided was decided against what it read.
 the documents are, by chain id for a network and by `chainId/deploymentKey`
 for a market, the digest of the overlay each was decided against, as the
 `GET` of its scope answers it, or `null` for a scope nobody has reviewed. A
-request where any scope holds another overlay is refused with `409`, and
-nothing is written. Its `details.current` names each such scope as the
-one-document routes do, with the digest it holds now: the scope's type, then
-the key the request names it by (`"market 1/usdc"`). Read each of them again
-through its `GET`, redo the change, and send the digests read. A document it
-names nothing for is written whatever its scope holds; a key that names no
-document of the request, or a value that is not a digest, is refused with
-`400`. The default or a slug moving between two markets is read from both and
-sent back this way:
+request where any scope holds another overlay is refused with `409` and
+`OVERLAY_CHANGED`, and nothing is written. Its `details.current` names each
+such scope as the one-document routes do, with the digest it holds now: the
+scope's type, then the key the request names it by (`"market 1/usdc"`). Read
+each of them again through its `GET`, redo the change, and send the digests
+read. A document it names nothing for is written whatever its scope holds; a
+key that names no document of the request, or a value that is not a digest,
+is refused with `400`. The default or a slug moving between two markets is
+read from both and sent back this way:
 
 ```json
 {
