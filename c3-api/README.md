@@ -106,6 +106,22 @@ After setting that up, you can now run the sync script. This will update the fil
 ./tests/dumps/sync.sh
 ```
 
+# Error Monitoring
+
+The worker reports errors and traces to the Sentry project
+[`webb3-c3-api-server`](https://compound-foundation.sentry.io/projects/webb3-c3-api-server/).
+`SENTRY_DSN` in `wrangler.toml` turns reporting on for each environment, and
+[`lib/sentry.ts`](./lib/sentry.ts) holds the SDK options. It samples every trace
+locally and 10% in `stage` and `production`, leaves out client IP addresses and
+HTTP bodies, and replaces the node-proxy, Tally and Blocknative keys with
+`[Filtered]` in everything it sends.
+
+`npm run deploy:stage` and `npm run deploy:production` deploy through
+[`../scripts/deploy-with-sentry.sh`](../scripts/deploy-with-sentry.sh), which
+tags the release with the git commit and uploads source maps so stack traces
+show the TypeScript source. Set `SENTRY_AUTH_TOKEN` to a Sentry organization
+auth token before deploying; never commit it.
+
 # Network Compatibility
 
 The API should support any EVM-compatible networks where Comet is

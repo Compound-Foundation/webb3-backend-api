@@ -17,6 +17,10 @@ kv_namespaces = [
     { binding = "kv", preview_id = "preview:kv", id = "nil" },
 ]
 
+# Sentry reads the release from this binding
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
 [vars]
 # secrets
 allowedAppKey = ''
@@ -33,6 +37,9 @@ alchemyUnichainMainnet = 'ALCHEMY_XXX'
 alchemyRoninMainnet = 'ALCHEMY_XXX'
 quicknodeEthMainnet = 'QUICK_NODE_XXX'
 quicknodeEthMainnetSubdomain = 'QUICK_NODE_XXX'
+# error and trace reporting
+SENTRY_DSN = 'https://cf950b4a513253ff3822b58ee4eb5fa5@o4512414468669440.ingest.us.sentry.io/4512421119655936'
+SENTRY_ENVIRONMENT = 'local'
 
 [vars.settings]
 maskUpstreamErrors                    = false # show errors for debugging
@@ -43,6 +50,8 @@ defaultRetryAfterUpstreamErrorSeconds = 5     #  5s backoff Retry-After
 
 [env.production-v2.vars]
 allowedHosts = ["v2-app.compound.xyz", "v2-pinata-host.compound.xyz"]
+SENTRY_DSN = 'https://cf950b4a513253ff3822b58ee4eb5fa5@o4512414468669440.ingest.us.sentry.io/4512421119655936'
+SENTRY_ENVIRONMENT = 'production-v2'
 
 # secrets: ^^^ same as above, manage with wrangler
 [env.production-v2.vars.settings]
@@ -61,8 +70,14 @@ kv_namespaces = [
     { binding = "kv", id = "b656c8d3ba254c2189a436373efab3ef" },
 ]
 
+# Sentry reads the release from this binding
+[env.production-v2.version_metadata]
+binding = "CF_VERSION_METADATA"
+
 [env.production-v3-app.vars]
 allowedHosts = ["app.compound.xyz", "v3-app.compound.xyz", "v3-pinata-host.compound.xyz"]
+SENTRY_DSN = 'https://cf950b4a513253ff3822b58ee4eb5fa5@o4512414468669440.ingest.us.sentry.io/4512421119655936'
+SENTRY_ENVIRONMENT = 'production-v3-app'
 
 [env.production-v3-app.vars.settings]
 maskUpstreamErrors                    = true  # obscure upstream errors
@@ -80,8 +95,14 @@ kv_namespaces = [
     { binding = "kv", id = "d38d6e90c1d44dc0b8a6a9acc4dd2d64" },
 ]
 
+# Sentry reads the release from this binding
+[env.production-v3-app.version_metadata]
+binding = "CF_VERSION_METADATA"
+
 [env.production-v3-api.vars]
 allowedHosts = []
+SENTRY_DSN = 'https://cf950b4a513253ff3822b58ee4eb5fa5@o4512414468669440.ingest.us.sentry.io/4512421119655936'
+SENTRY_ENVIRONMENT = 'production-v3-api'
 
 [env.production-v3-api.vars.settings]
 maskUpstreamErrors                    = true  # obscure upstream errors
@@ -98,3 +119,7 @@ routes = [
 kv_namespaces = [
     { binding = "kv", id = "f3f191a18c474989b97755cd2a938089" },
 ]
+
+# Sentry reads the release from this binding
+[env.production-v3-api.version_metadata]
+binding = "CF_VERSION_METADATA"

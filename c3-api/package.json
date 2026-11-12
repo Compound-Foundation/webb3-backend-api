@@ -10,11 +10,13 @@
   "dependencies": {
     "@compound-finance/sleuth": "^1.0.1-alpha4",
     "@ethersproject/abi": "5.6",
+    "@sentry/cloudflare": "^11.12.0",
     "js-sha3": "0.8.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240314.0",
     "@ethersproject/hash": "5.6",
+    "@sentry/cli": "^3.8.2",
     "@types/node": "^18.0.6",
     "tap": "^21",
     "typescript": "^5",
@@ -62,7 +64,7 @@
     "test:tap": "npx tap --disable-coverage --timeout=900 'dist/tests/**/*.test.js'",
     "build": "npx tsc",
     "start": "wrangler dev --local entrypoint.ts",
-    "deploy:stage": "npx wrangler deploy --env stage",
-    "deploy:production": "npx wrangler deploy --env production"
+    "deploy:stage": "../scripts/deploy-with-sentry.sh webb3-c3-api-server --env stage",
+    "deploy:production": "../scripts/deploy-with-sentry.sh webb3-c3-api-server --env production"
   }
 }

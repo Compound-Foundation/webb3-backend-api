@@ -1,6 +1,8 @@
+import * as Sentry       from '@sentry/cloudflare';
 import { Settings      } from './settings.js';
 import { handleRequest } from './handler.js';
 import * as providers    from './providers.js'
+import { sentryOptions } from './sentry.js';
 
 export interface Env extends providers.Secrets {
   // kv for storing provider and application metadata
@@ -10,6 +12,9 @@ export interface Env extends providers.Secrets {
   // configurable allow key and allow list
   allowedAppKey: string;
   allowedHosts: string[];
+  // error and trace reporting; Sentry stays disabled when SENTRY_DSN is unset
+  SENTRY_DSN?: string;
+  SENTRY_ENVIRONMENT?: string;
 }
 
 // Stub execution context for the default fetch() arg (and tests). Only
@@ -32,7 +37,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Cross-Origin-Resource-Policy': 'cross-origin',
 };
 
-export default {
+const handler = {
   async fetch(
     request: Request,
     env: Env,
@@ -55,7 +60,8 @@ export default {
         allowedHosts: env.allowedHosts,
         defer:    context.waitUntil,
       });
-    } catch {
+    } catch (error) {
+      Sentry.captureException(error);
       return cors(origin, new Response(`unexpected error`, { status: 500 }));
     }
     // Always respond with proper CORS headers.
@@ -63,6 +69,8 @@ export default {
     return cors(origin, response);
   },
 };
+
+export default Sentry.withSentry(sentryOptions, handler);
 
 function cors(origin: string, response: Response) {
   const headers = new Headers(response.headers);

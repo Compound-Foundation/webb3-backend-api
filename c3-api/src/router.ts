@@ -1,3 +1,5 @@
+import * as Sentry from '@sentry/cloudflare';
+
 import * as Eth      from '../lib/eth-constants.js';
 import * as Fallible from '../lib/fallible/fallible.js';
 
@@ -143,6 +145,7 @@ async function route(
   } catch (e: unknown) {
     context.debug.clearDanglingGroups();
     context.debug.error(e, (e as any).cause);
+    Sentry.captureException(e);
     return new Response((e as Error).message, { status: 500 });
   }
 }

@@ -28,6 +28,22 @@ Each of the secrets vars have the following descriptions:
 - `quicknodeXXXMainnetSubdomain` - Quicknode RPC Subdomian (configurable) - Used in conjuction with a Quicknode RPC keys.
 
 
+## Error Monitoring
+
+The proxy reports errors and traces to the Sentry project
+[`webb3-node-provider-proxy-server`](https://compound-foundation.sentry.io/projects/webb3-node-provider-proxy-server/).
+`SENTRY_DSN` and `SENTRY_ENVIRONMENT` in `wrangler.toml` turn reporting on for
+each environment, and [`src/sentry.ts`](./src/sentry.ts) holds the SDK options.
+It samples every trace locally and 10% in production, leaves out client IP
+addresses and HTTP bodies, and replaces the app key and every provider secret
+with `[Filtered]` in everything it sends.
+
+The `npm run deploy:*` scripts deploy through
+[`../scripts/deploy-with-sentry.sh`](../scripts/deploy-with-sentry.sh), which
+tags the release with the git commit and uploads source maps so stack traces
+show the TypeScript source. Set `SENTRY_AUTH_TOKEN` to a Sentry organization
+auth token before deploying; never commit it.
+
 ## Running Locally
 
 To start a local server for the Web3 Worker, run:

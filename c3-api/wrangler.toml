@@ -23,6 +23,10 @@ kv_namespaces = [
 # developing locally, we can just invoke other workers over the network
 services = []
 
+# Sentry reads the release from this binding
+[version_metadata]
+binding = "CF_VERSION_METADATA"
+
 [vars]
 DEBUG = "fetch"
 ENVIRONMENT = "local"
@@ -32,6 +36,7 @@ NODE_PROXY_HOST = "node-proxy-endpoint_XXX"
 NODE_PROXY_KEY = "optional-node-proxy-key_XXX"
 BLOCK_NATIVE_API_KEY = "optional-BN-key_XXX"
 FLAGS_ETH_COMPUTATION_INDEX_BIAS = "default"
+SENTRY_DSN = "https://bd18d24a035a933dd276b6b667ee5d1d@o4512414468669440.ingest.us.sentry.io/4512421119524864"
 
 [[vars.URL_SERVICE_BINDING_OVERRIDES]]
 # we don't need to map any URLs to service bindings, there are none [1]
@@ -40,6 +45,7 @@ FLAGS_ETH_COMPUTATION_INDEX_BIAS = "default"
 DEBUG = ""
 ENVIRONMENT = "stage"
 MEMORY_CACHE_SEED = "stage"
+SENTRY_DSN = "https://bd18d24a035a933dd276b6b667ee5d1d@o4512414468669440.ingest.us.sentry.io/4512421119524864"
 
 [[env.stage.vars.URL_SERVICE_BINDING_OVERRIDES]]
 host    = "node-provider-v3-api.compound.xyz"
@@ -58,10 +64,15 @@ services = [
     { binding = "node_provider_proxy", service = "node-provider-v3-api" }
 ]
 
+# Sentry reads the release from this binding
+[env.stage.version_metadata]
+binding = "CF_VERSION_METADATA"
+
 [env.production.vars]
 DEBUG = ""
 ENVIRONMENT = "production"
 MEMORY_CACHE_SEED = "production"
+SENTRY_DSN = "https://bd18d24a035a933dd276b6b667ee5d1d@o4512414468669440.ingest.us.sentry.io/4512421119524864"
 
 [[env.production.vars.URL_SERVICE_BINDING_OVERRIDES]]
 host    = "node-provider-v3-api.compound.xyz"
@@ -79,3 +90,7 @@ kv_namespaces = [
 services = [
     { binding = "node_provider_proxy", service = "node-provider-v3-api" }
 ]
+
+# Sentry reads the release from this binding
+[env.production.version_metadata]
+binding = "CF_VERSION_METADATA"
