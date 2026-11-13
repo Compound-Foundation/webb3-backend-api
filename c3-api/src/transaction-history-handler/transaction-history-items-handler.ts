@@ -151,6 +151,7 @@ function GetAllStreamEvents(): { network: KnownNetwork.Name, marketContractAddre
        * addressed here.
        */
       Eth.wellKnownContractsByNetwork['ethereum-mainnet']['Comet']['ciUSDCv3'].address,
+      Eth.wellKnownContractsByNetwork['ethereum-mainnet']['Comet']['ciUSDGv3'].address,
     ],
     rewardsContractAddress: Eth.wellKnownContractsByNetwork['ethereum-mainnet']['Comet']['cUSDCv3'].rewards.contract.address,
   });
