@@ -114,7 +114,7 @@ The worker reports errors and traces to the Sentry project
 `production`; local development reports nothing. To try Sentry locally, put
 `SENTRY_DSN` in `.dev.vars`, and every trace is sampled.
 [`lib/sentry.ts`](./lib/sentry.ts) holds the SDK options. Deployed, it samples
-10% of traces, leaves out client IP addresses and HTTP bodies, and replaces the node-proxy, Tally and Blocknative keys with
+10% of traces, leaves out client IP addresses, HTTP bodies and console output, and replaces the node-proxy, Tally and Blocknative keys with
 `[Filtered]` in everything it sends. Only requests to the node-provider proxy
 carry Sentry trace headers, so traces continue into the proxy.
 

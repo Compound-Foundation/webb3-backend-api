@@ -37,7 +37,7 @@ The proxy reports errors and traces to the Sentry project
 `production-v2` report nothing. To try Sentry locally, put `SENTRY_DSN` in
 `.dev.vars`, and every trace is sampled. [`src/sentry.ts`](./src/sentry.ts)
 holds the SDK options. Deployed, it samples 10% of traces, leaves out client IP
-addresses and HTTP bodies, and replaces the app key and every provider secret
+addresses, HTTP bodies and console output, and replaces the app key and every provider secret
 with `[Filtered]` in everything it sends. Requests to node providers carry no
 Sentry trace headers.
 

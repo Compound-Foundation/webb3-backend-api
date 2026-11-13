@@ -1,3 +1,5 @@
+import * as Sentry from '@sentry/cloudflare';
+
 import * as Eth         from '../../lib/eth-constants.js';
 import * as Fallible    from '../../lib/fallible/fallible.js';
 import { BigFixnum    } from '../../lib/bigfixnum.js';
@@ -13,6 +15,14 @@ import * as KnownNetwork from '../../lib/well-known/networks/network.js';
 import { AllContracts, GovernanceRouteData } from '../router.js';
 
 import { Context } from './handlers.js';
+
+/*
+ * A failed Tally query becomes a 500 here, before the router or the Sentry
+ * wrapper sees the error, so report it as unhandled.
+ */
+function reportTallyError(error: unknown) {
+  Sentry.captureException(error, { mechanism: { handled: false, type: 'c3-api.tally' } });
+}
 
 function parseBigFixnum(value: BigNumberish) {
   return BigFixnum.from({ value, decimals: 18 });
@@ -86,6 +96,7 @@ async function getAccounts(
       );
     } catch (error) {
       console.error(`Tally API Error`, error);
+      reportTallyError(error);
       return new Response(`Tally API Error: ${(error as Error).message}`, { status: 500 });
     }
 
@@ -109,6 +120,7 @@ async function getAccounts(
     );
   } catch (error) {
     console.error(`Tally API Error`, error);
+    reportTallyError(error);
     return new Response(`Tally API Error: ${(error as Error).message}`, { status: 500 });
   }
 

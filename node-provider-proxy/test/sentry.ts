@@ -12,6 +12,7 @@ import { rewriteBundleFrame, sentryOptions } from '../src/sentry.js';
 
 const APP_KEY = 'app-key-1234567890';
 const ALCHEMY_KEY = 'alchemy-key-1234567890';
+const BODY_MARKER = 'rpc-body-marker';
 
 test('rewriteBundleFrame names bundle frames after the uploaded map', () => {
   assert.deepEqual(
@@ -51,6 +52,8 @@ test('a wrapped worker sends no secrets and no trace headers upstream', async ()
     async fetch(_request: Request, _env: typeof env, _ctx: unknown): Promise<Response> {
       await fetch(logged.url, { method: 'POST', body: '{}' });
       console.warn('calling', logged);
+      // As handler.ts logRpcError does.
+      console.warn('json-rpc error:', { rpc: JSON.stringify({ method: 'eth_call', params: [BODY_MARKER] }) });
       throw new Error(`upstream failed: ${logged.url}`);
     },
   };
@@ -81,6 +84,7 @@ test('a wrapped worker sends no secrets and no trace headers upstream', async ()
   for (const body of envelopes) {
     assert.ok(!body.includes(APP_KEY), 'no app key in envelope');
     assert.ok(!body.includes(ALCHEMY_KEY), 'no Alchemy key in envelope');
+    assert.ok(!body.includes(BODY_MARKER), 'no logged RPC body in envelope');
   }
   const upstream = outgoing.find(request => request.url.includes('alchemy'));
   assert.equal(upstream?.headers['sentry-trace'], undefined, 'no trace header upstream');

@@ -6,6 +6,7 @@ import { makeRedactor, rewriteBundleFrame, sentryOptions } from '../../lib/sentr
 const PROXY_HOST = 'node-proxy.example';
 const PROXY_KEY = 'proxy-key-1234567890';
 const TALLY_KEY = 'tally-key-1234567890';
+const BODY_MARKER = 'upstream-body-marker';
 
 const testEnv = {
   SENTRY_DSN: 'https://public@o1.ingest.sentry.io/1',
@@ -103,7 +104,9 @@ t.test('a wrapped worker sends no secrets and no trace headers to vendors', asyn
       await fetch(logged.url, { method: 'POST', body: '{}' });
       await fetch('https://api.tally.xyz/query', { headers: { 'Api-Key': TALLY_KEY } });
       console.warn('calling', logged);
-      throw new Error(`upstream failed: ${logged.url}`);
+      // As json-rpc.ts does for a non-JSON upstream response.
+      console.warn('Invalid JSON-RPC response: not JSON', { text: `<html>${BODY_MARKER}</html>` });
+      throw new Error(`upstream failed: ${logged.url}`, { cause: `<html>${BODY_MARKER}</html>` });
     },
   };
   const worker = Sentry.withSentry(
@@ -126,6 +129,7 @@ t.test('a wrapped worker sends no secrets and no trace headers to vendors', asyn
   for (const body of envelopes) {
     t.notOk(body.includes(PROXY_KEY), 'no proxy key in envelope');
     t.notOk(body.includes(TALLY_KEY), 'no Tally key in envelope');
+    t.notOk(body.includes(BODY_MARKER), 'no logged upstream body in envelope');
   }
   const toProxy = outgoing.find(request => request.url.includes(PROXY_HOST));
   const toTally = outgoing.find(request => request.url.includes('tally'));

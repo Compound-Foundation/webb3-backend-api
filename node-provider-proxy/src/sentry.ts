@@ -163,7 +163,14 @@ function sentryOptions(env: SentryEnv): CloudflareOptions {
       // RPC request and response bodies are large and add little to errors.
       httpBodies: [],
     },
-    integrations: [rewriteFramesIntegration({ iteratee: rewriteBundleFrame })],
+    // The workers log whole RPC requests and upstream responses with console.*,
+    // and the Console integration would attach them to every error as
+    // breadcrumbs. Dropping it keeps those bodies out, as httpBodies does for
+    // the SDK's own request data.
+    integrations: (defaults) => [
+      ...defaults.filter((integration) => integration.name !== 'Console'),
+      rewriteFramesIntegration({ iteratee: rewriteBundleFrame }),
+    ],
     beforeSend: (event) => redactEvent(event),
     beforeSendSpan: (span) => redact(span),
     beforeSendLog: (log) => redact(log),
