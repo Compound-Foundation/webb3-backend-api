@@ -5,6 +5,7 @@ import * as Fallible from '../../fallible/fallible.js';
 import * as Index from '../../symbolic/index.js';
 import * as Compute from '../../symbolic/computation.js';
 import * as Key from '../../symbolic/key.js';
+import { firstBlockOf, strideOf } from '../../symbolic/index/transaction-history-index.js';
 
 import * as cometModel from '../../model/comet.js';
 import * as cometRewardsModel from '../../model/comet-rewards.js';
@@ -309,14 +310,16 @@ function createTransactionAction({
 };
 
 const rawTransactionHistoryItems = implement({
-  // 6: keyed by what history reads, so a change to a feed or an exception keeps the items
-  version: 6,
+  // 7: ranges sized by time, named by their size, and read from the block after the range below
+  version: 7,
   index: Index.TransactionHistoryIndex,
   /*
    * The items read one network's markets and tokens, so a change elsewhere
    * keeps them. The contracts are named by address: their creation blocks
    * are in the network's history key, and a market's own cache key also
-   * covers its feeds and exceptions, which no item reads.
+   * covers its feeds and exceptions, which no item reads. A range is named by
+   * the block it ends at and its size, since in ranges of another size the
+   * same block ends another range.
    */
   key(name, { catalog, marketContracts, rewardsContract, ...context }) {
     return Key.toKey(name, {
@@ -324,6 +327,7 @@ const rawTransactionHistoryItems = implement({
       marketContracts: marketContracts.map(contract => contract.address.toLowerCase()),
       rewardsContract: rewardsContract.address.toLowerCase(),
       registry:        catalog.historyKeyFor(context.network),
+      stride:          strideOf(context.network),
     });
   },
   compute({ 
@@ -339,6 +343,7 @@ const rawTransactionHistoryItems = implement({
     catalog,
   }) {
     const contracts: Contract[] = [...marketContracts, rewardsContract];
+    const firstBlock = firstBlockOf({ marketContracts, rewardsContract });
     const precedingResult = Index.TransactionHistoryIndex.preceding({
       network,
       blockNumber,
@@ -346,22 +351,15 @@ const rawTransactionHistoryItems = implement({
       marketContracts,
       rewardsContract,
     });
-    const previousBlockNumber = (() => {
-      if (Fallible.isFailure(precedingResult)) {
-        // If there is no preceding result, just return the earliest creation block number of the contracts
-        const earliestCreationBlockNumber = contracts.reduce((earliestCreationBlockNumber, contract) => {
-          const creationBlockNumber = contract.creation.block.number;
-          if (creationBlockNumber < earliestCreationBlockNumber) {
-            return creationBlockNumber;
-          } else {
-            return earliestCreationBlockNumber;
-          }
-        }, Infinity);
-        return earliestCreationBlockNumber;
-      } else {
-        return precedingResult.blockNumber;
-      }
-    })();
+    /*
+     * A range runs from the block after the point below it up to the block it
+     * ends at, so the block a range ends at is read by that range alone, and
+     * an item there is answered once. The oldest range starts at the first
+     * block itself, which no range below it reads.
+     */
+    const fromBlock = Fallible.isFailure(precedingResult) || precedingResult.blockNumber === firstBlock
+      ? firstBlock
+      : precedingResult.blockNumber + 1;
 
     return join([
       [
@@ -372,7 +370,7 @@ const rawTransactionHistoryItems = implement({
             nodeKey,
             network,
             addresses: contracts.map(contract => contract.address),
-            blockRange: [ previousBlockNumber, blockNumber ],
+            blockRange: [ fromBlock, blockNumber ],
             filter: [
               [
                 coders.topics.Supply,             // [from] dst
@@ -394,7 +392,7 @@ const rawTransactionHistoryItems = implement({
             nodeKey,
             network,
             addresses: contracts.map(contract => contract.address),
-            blockRange: [previousBlockNumber, blockNumber],
+            blockRange: [ fromBlock, blockNumber ],
             filter: [
               [
                 coders.topics.Supply,             // from [dst]

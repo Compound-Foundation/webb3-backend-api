@@ -23,9 +23,10 @@ import '../../../shim/node-self.js';
  *
  * Mainnet's markets share one rewards contract, so they are read as one
  * stream, in ranges of a million blocks counted from the earliest creation
- * block among them: USDC's, 15,331,586, in the fixture. With the latest block
- * at 16,500,000, the newest range is [16,331,586, 16,500,000], and the one
- * below it [15,331,586, 16,331,586].
+ * block among them: USDC's, 15,331,586, in the fixture. A range starts one
+ * block above the range below it, and the oldest at that first block. With
+ * the latest block at 16,500,000, the newest range is [16,331,587,
+ * 16,500,000], and the one below it [15,331,586, 16,331,586].
  */
 const ACCOUNT = '0x420f253087044b8BCf028dd89F8fe83Ba6275E84';
 const USDC    = '0xc3d688b66703497daa19211eedff47f25384cdc3';
@@ -173,8 +174,8 @@ t.test('a version that moves no stream\'s first block keeps its cursors going', 
  * A cursor holds its place in a stream as the block that ends the range it
  * was reading, and the last transaction it answered there; the range below a
  * block is counted from the stream's first block. A version that corrects
- * that block by one reads the cursor's block as the end of a range two blocks
- * long, [16,331,585, 16,331,586], which does not hold the transaction the
+ * that block by one reads the cursor's block as the end of a range one block
+ * long, [16,331,586, 16,331,586], which does not hold the transaction the
  * cursor answered last. Resumed there, the cursor would answer that
  * transaction again, and everything it answered before it in the range below.
  * It is ended instead, as a cursor of a version that reads other streams is.
@@ -234,4 +235,39 @@ t.test('a cursor whose streams name no first block is ended', async t => {
   await activateSeeded(registry.db, versionId);
   t.equal((await page(env, before)).status, 409, 'and so does a version that counts its ranges from where they were');
   t.equal((await page(env, cursor)).status, 200, 'which goes on with the cursor that names its block');
+});
+
+/*
+ * A cursor holds its place as the block that ends a range, and a range's end
+ * is one only in ranges of the size the cursor was read in. A cursor kept
+ * before its streams named that size, read in ranges of 50,000 blocks, or one
+ * that names another size, is ended as one of a version that reads other
+ * streams is: by its own version too, since the size is the code's, not the
+ * version's. The client starts over once.
+ */
+t.test('a cursor whose streams name no size of their ranges, or another size, is ended', async t => {
+  const fixture  = loadRegistrySnapshotFixture();
+  const registry = await activeRegistryDatabase({ snapshot: fixture });
+  t.teardown(() => registry.dispose());
+  const env = makeTestEnv({ MEMORY_CACHE_SEED: 'cursor-across-versions', APP_DB: registry.db });
+
+  const cursor = await twoPages(t, env);
+  const kept   = await env.kv_mainnet.get(cursor, 'json') as { streamEvents: Array<{ stride?: number }> };
+  t.same(kept.streamEvents.map(stream => stream.stride), [ 1_000_000 ], 'a cursor names the size of its stream\'s ranges');
+
+  for (const [ streamEvents, what ] of [
+    [ kept.streamEvents.map(({ stride: _stride, ...stream }) => stream), 'a cursor kept before streams named the size of their ranges' ],
+    [ kept.streamEvents.map(stream => ({ ...stream, stride: 50_000 })),  'a cursor of ranges of another size' ],
+  ] as const) {
+    const id = createHash('sha256').update(what).digest('hex');
+    await env.kv_mainnet.put(id, JSON.stringify({ ...kept, streamEvents }));
+
+    const own = await page(env, id);
+    t.equal(own.status, 409, `${what} is ended by its own version`);
+    const body = await own.json() as { error?: { code: string, details?: unknown } };
+    t.equal(body.error?.code, 'REGISTRY_VERSION_CHANGED', 'with the code that tells the client to restart pagination');
+    t.same(body.error?.details, { cursorRegistryVersionId: registry.versionId, registryVersionId: registry.versionId },
+      'naming its version twice');
+  }
+  t.equal((await page(env, cursor)).status, 200, 'while the cursor that names the size goes on');
 });
