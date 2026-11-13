@@ -52,7 +52,7 @@
     "clean": "rm -rf dist",
     "build": "tsc",
     "postbuild": "corepack npm test",
-    "deploy:production-v2": "../scripts/deploy-with-sentry.sh webb3-node-provider-proxy-server src/index.ts --env production-v2",
+    "deploy:production-v2": "wrangler deploy src/index.ts --env production-v2",
     "deploy:production-v3-app": "../scripts/deploy-with-sentry.sh webb3-node-provider-proxy-server src/index.ts --env production-v3-app",
     "deploy:production-v3-api": "../scripts/deploy-with-sentry.sh webb3-node-provider-proxy-server src/index.ts --env production-v3-api"
   }
