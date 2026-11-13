@@ -92,9 +92,10 @@ defaultRetryAfterUpstreamErrorSeconds = 10    # 30s backoff Retry-After
 
 [env.production-v3-api]
 name = "node-provider-v3-api"
-routes = [
-    { pattern = "node-provider-v3-api.compound.xyz", custom_domain = true },
-]
+# Intentionally NO public route / custom domain: this worker is only reachable
+# through the `node_provider_proxy` service binding from c3-api (see
+# c3-api/wrangler.toml). It has no origin allowlist or app key, so exposing it
+# publicly would let anyone spend our Alchemy quota.
 kv_namespaces = [
     { binding = "kv", id = "f3f191a18c474989b97755cd2a938089" },
 ]
