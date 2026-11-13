@@ -326,7 +326,9 @@ about them in places; labels and presentation data — asset display overrides
 and unwrapped collateral pairs — existed nowhere but the frontend, and were
 copied once from it at a named commit. Nothing in this API reads the
 presentation, but the first version already serves it, and the frontend stops
-being where it is decided.
+being where it is decided. The seed also turns on the transaction history of
+eight markets that had none: each shares its rewards contract with a market
+whose history was served, so its logs come in the same requests.
 
 Each document is complete, in the form the registry stores it, which is how
 `GET …/overlay` answers. The `PUT` writes all of them or none, in one D1

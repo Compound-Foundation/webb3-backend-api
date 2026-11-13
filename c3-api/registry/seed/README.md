@@ -126,7 +126,7 @@ as the file was frozen from them, at `56d75ff`.
 | `contractName`, `creationBlock` | The Comet's display name and creation block in the static constants (`lib/well-known/contracts`) |
 | `status` | `enabled`: every market here was served |
 | `isDefault` | `1/usdc` alone, the market the application opens |
-| `capabilities.transactionHistory` | The markets whose history was served, which `transaction-history-items-handler.ts` listed by hand: `1/usdc`, `1/weth`, `1/usdt`, `1/institutional_usdc`, `10/usdc`, `10/usdt`, `10/weth`, `137/usdc`, `8453/usdc`, `8453/usdbc`, `8453/weth`, `42161/usdc` and `42161/usdc.e`. No other market had reachable history |
+| `capabilities.transactionHistory` | The markets whose history was served, which `transaction-history-items-handler.ts` listed by hand: `1/usdc`, `1/weth`, `1/usdt`, `1/institutional_usdc`, `10/usdc`, `10/usdt`, `10/weth`, `137/usdc`, `8453/usdc`, `8453/usdbc`, `8453/weth`, `42161/usdc` and `42161/usdc.e`. No other market had reachable history. Eight more are on, whose logs come in the same requests (below) |
 | `capabilities.rewards`, `capabilities.accountRewards` | On, but on Scroll and Ronin, which the rewards computations skipped by name because no reward feed answers there, and on `1/institutional_usdc` (below) |
 | `collateralValueQuote` | The unit the Comet's base token feed answers in, read from its `description()` on chain: `base` for every WETH market and mainnet wstETH ("Constant price feed") and for mainnet WBTC ("WBTC / BTC"), `usd` for the rest. The constants are wrong about it both ways: they put mainnet WBTC on the BTC / USD feed, and give AERO and USDe a USD feed although both markets' own feeds answer in USD |
 | `baseAsset.usdPriceFeedAddress` | On a market quoted in its base asset, the feed that turns that asset into USD: the `usdPriceFeed` the constants carry beside the base feed, or the feed the rewards APR computations converted the market through. A market quoted in USD carries none |
@@ -136,11 +136,13 @@ as the file was frozen from them, at `56d75ff`.
 | `assetDisplayOverrides`, `unwrappedCollateralAssets` | How the frontend shows a network's assets, and the collateral a user may supply unwrapped for the bulker to wrap: copied from the same frontend commit's `src/constants/chains.ts`, the only place they existed. Nothing in the API reads them; the registry serves them so the frontend stops deciding them on its own. A display address of zero shows a wrapped native token as the chain's own |
 | `priceExceptions` | The feeds `asset-price.ts` refused to read, each with the provenance it was added with. None expires |
 
-Where a value departs from those rules, or they need saying for one market:
+Where a value departs from those rules, or from what the API acted on, or
+they need saying for one market:
 
 | Scope | Field | Value | Why |
 |---|---|---|---|
 | `1/institutional_usdc` | `capabilities.rewards`, `capabilities.accountRewards`, `rewardPriceFeed` | `false`, `false`, `null` | Its rewards contract answers the zero address for the market's reward token, and both tracking speeds are zero, though the constants declare COMP rewards for it — only to keep one CometRewards for the network |
+| `1/usds`, `1/wbtc`, `1/wsteth`, `137/usdt`, `8453/aero`, `8453/usds`, `42161/usdt`, `42161/weth` | `capabilities.transactionHistory` | `true` | Their history was not served, but each shares its rewards contract with a market whose history was. History reads the markets of one rewards contract together: each range of blocks is two `eth_getLogs` requests that name all their Comets. So reading their logs adds no request. The other eight, on Linea, Unichain, Mantle, Scroll and Ronin, stay off: no market of those networks has history, so each network would be read on its own, with requests of its own |
 | `1/wbtc` | `baseAsset.usdPriceFeedAddress` | `0xf4030086522a5beea4988f8ca5b36dbc97bee88c` | WBTC / USD, which the rewards APR computations converted the market through |
 | `1/weth` | `baseAsset.usdPriceFeedAddress` | `0x5f4ec3df9cbd43714fe2740f5e3616155c5b8419` | The `usdPriceFeed` the constants carry beside the base feed |
 | `1/wsteth` | `baseAsset.usdPriceFeedAddress` | `0x164b276057258d81941e97b0a900d4c7b358bce0` | The same |
@@ -170,14 +172,15 @@ decision: every document is as the overlay parsers return it, which reorders
 the lists of five network documents (1, 137, 5000, 42161 and 534352) and
 changes no overlay digest; `reason` is fixed text, where the proposal named
 its source and commit, and its digest left the reason out; and
-`expectedDigests` is `null` for every document. It departs from the proposal
-in no decision.
+`expectedDigests` is `null` for every document. It departed from the proposal
+in no decision. Since then, eight markets have had their history turned on by
+hand ([Why each value is what it is](#why-each-value-is-what-it-is)).
 
 The script that froze it is kept outside the repository; the pull request
 that checked the file in gives its command. It builds the file from that
 proposal, so it runs only on a tree that has `src/registry/bootstrap.ts`. It
-last ran at `fb34295`, the commit that checked the file in, and gave this
-file byte for byte. At that commit,
+last ran at `fb34295`, the commit that checked the file in, and gave the
+file of that commit byte for byte. At that commit,
 `tests/lib/registry/seed-from-bootstrap.test.ts` held the file to the
 proposal after parsing. `bootstrap.ts` and the proposal routes were removed
 after that commit, so the file is now changed by hand
