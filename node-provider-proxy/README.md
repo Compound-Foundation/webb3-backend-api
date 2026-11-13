@@ -28,6 +28,28 @@ Each of the secrets vars have the following descriptions:
 - `quicknodeXXXMainnetSubdomain` - Quicknode RPC Subdomian (configurable) - Used in conjuction with a Quicknode RPC keys.
 
 
+## Error Monitoring
+
+The proxy reports errors and traces to the Sentry project
+[`webb3-node-provider-proxy-server`](https://compound-foundation.sentry.io/projects/webb3-node-provider-proxy-server/).
+`SENTRY_DSN` and `SENTRY_ENVIRONMENT` in `wrangler.toml` turn reporting on for
+`production-v3-app` and `production-v3-api`; local development and the retired
+`production-v2` report nothing. To try Sentry locally, put `SENTRY_DSN` in
+`.dev.vars`, and every trace is sampled. [`src/sentry.ts`](./src/sentry.ts)
+holds the SDK options. Deployed, it samples 10% of traces, leaves out client IP
+addresses, HTTP bodies and console output, and replaces the app key and every provider secret
+with `[Filtered]` in everything it sends. Requests to node providers carry no
+Sentry trace headers.
+
+`npm run deploy:production-v3-app` and `npm run deploy:production-v3-api` deploy
+through [`../scripts/deploy-with-sentry.sh`](../scripts/deploy-with-sentry.sh),
+which tags the release with the git commit and uploads source maps so stack
+traces show the TypeScript source. The script reads the Sentry auth token from
+1Password (`op://Engineering/sentry-deployments-auth-token/credential`) with the
+[1Password CLI](https://developer.1password.com/docs/cli/get-started/), so sign
+in with `op signin` first. Set `SENTRY_AUTH_TOKEN` instead to skip 1Password, or
+`SENTRY_AUTH_TOKEN_OP_REF` to read another item. Never commit the token.
+
 ## Running Locally
 
 To start a local server for the Web3 Worker, run:

@@ -1,7 +1,10 @@
+import * as Sentry from '@sentry/cloudflare';
+
 import fetch      from './lib/request-counting-fetch.js';
 import Quota      from './lib/quota.js';
 import * as Flags from './lib/flags.js';
 import * as Debug from './lib/debug-log.js';
+import { sentryOptions } from './lib/sentry.js';
 
 import { route }      from './src/router.js';
 import * as Evaluator from './src/evaluator.js';
@@ -39,6 +42,8 @@ interface Env extends Flags.Env, ServiceBindings {
   V3_API_HOST: string,
   NODE_PROXY_HOST: string,
   NODE_PROXY_KEY: string,
+  // error and trace reporting; Sentry stays disabled when unset
+  SENTRY_DSN?: string,
 
   /*
    * for worker-to-worker requests we need to override fetch() requests to
@@ -78,7 +83,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Cross-Origin-Resource-Policy': 'cross-origin',
 };
 
-export default {
+const handler = {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method === 'OPTIONS') {
       return new Response(null, {
@@ -129,3 +134,5 @@ export default {
     return response;
   },
 };
+
+export default Sentry.withSentry(sentryOptions, handler);

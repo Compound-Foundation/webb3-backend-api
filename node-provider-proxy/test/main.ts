@@ -66,6 +66,7 @@ import * as KnownNetwork from '@compound-finance/well-known-networks';
 import * as providers from '../src/providers.js';
 
 import Api, { Env } from '../src/index.js';
+import { sentryOptions } from '../src/sentry.js';
 
 import * as mock from 'testutil.mock';
 
@@ -643,4 +644,37 @@ test('eth_chainId is pre-empted (no upstream)', async (_) => {
   assert.deepEqual(json, { id: 43, jsonrpc: '2.0', result: '0x1' },
     `response should contain expected JSON-RPC response`
   );
+});
+
+test('sentry options redact every non-Sentry string binding', () => {
+  const options = sentryOptions({
+    SENTRY_DSN: 'https://public@o0.ingest.sentry.io/0',
+    SENTRY_ENVIRONMENT: 'production-v3-api',
+    allowedAppKey: 'app-key-123456',
+    alchemyEthMainnet: 'alchemy-key-123456',
+  } as Parameters<typeof sentryOptions>[0]);
+  assert.equal(options.environment, 'production-v3-api');
+  assert.equal(options.tracesSampleRate, 0.1);
+  const breadcrumb = options.beforeBreadcrumb!({
+    category: 'fetch',
+    data: {
+      url: 'https://eth-mainnet.g.alchemy.com/v2/alchemy-key-123456',
+      from: '/mainnet/app-key-123456',
+      dsn: 'https://public@o0.ingest.sentry.io/0',
+    },
+  });
+  assert.deepEqual(breadcrumb, {
+    category: 'fetch',
+    data: {
+      url: 'https://eth-mainnet.g.alchemy.com/v2/[Filtered]',
+      from: '/mainnet/[Filtered]',
+      dsn: 'https://public@o0.ingest.sentry.io/0',
+    },
+  });
+});
+
+test('sentry options default to the local environment', () => {
+  const options = sentryOptions({});
+  assert.equal(options.environment, 'local');
+  assert.equal(options.tracesSampleRate, 1.0);
 });
