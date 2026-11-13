@@ -33,9 +33,10 @@ Each of the secrets vars have the following descriptions:
 The proxy reports errors and traces to the Sentry project
 [`webb3-node-provider-proxy-server`](https://compound-foundation.sentry.io/projects/webb3-node-provider-proxy-server/).
 `SENTRY_DSN` and `SENTRY_ENVIRONMENT` in `wrangler.toml` turn reporting on for
-each environment, and [`src/sentry.ts`](./src/sentry.ts) holds the SDK options.
-It samples every trace locally and 10% in production, leaves out client IP
-addresses and HTTP bodies, and replaces the app key and every provider secret
+the production environments; local development reports nothing. To try Sentry
+locally, put `SENTRY_DSN` in `.dev.vars`, and every trace is sampled.
+[`src/sentry.ts`](./src/sentry.ts) holds the SDK options. Deployed, it samples
+10% of traces, leaves out client IP addresses and HTTP bodies, and replaces the app key and every provider secret
 with `[Filtered]` in everything it sends. Requests to node providers carry no
 Sentry trace headers.
 

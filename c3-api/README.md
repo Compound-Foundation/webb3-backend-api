@@ -110,10 +110,11 @@ After setting that up, you can now run the sync script. This will update the fil
 
 The worker reports errors and traces to the Sentry project
 [`webb3-c3-api-server`](https://compound-foundation.sentry.io/projects/webb3-c3-api-server/).
-`SENTRY_DSN` in `wrangler.toml` turns reporting on for each environment, and
-[`lib/sentry.ts`](./lib/sentry.ts) holds the SDK options. It samples every trace
-locally and 10% in `stage` and `production`, leaves out client IP addresses and
-HTTP bodies, and replaces the node-proxy, Tally and Blocknative keys with
+`SENTRY_DSN` in `wrangler.toml` turns reporting on for `stage` and
+`production`; local development reports nothing. To try Sentry locally, put
+`SENTRY_DSN` in `.dev.vars`, and every trace is sampled.
+[`lib/sentry.ts`](./lib/sentry.ts) holds the SDK options. Deployed, it samples
+10% of traces, leaves out client IP addresses and HTTP bodies, and replaces the node-proxy, Tally and Blocknative keys with
 `[Filtered]` in everything it sends. Only requests to the node-provider proxy
 carry Sentry trace headers, so traces continue into the proxy.
 

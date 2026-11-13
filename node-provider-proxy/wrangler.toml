@@ -17,10 +17,6 @@ kv_namespaces = [
     { binding = "kv", preview_id = "preview:kv", id = "nil" },
 ]
 
-# Sentry reads the release from this binding
-[version_metadata]
-binding = "CF_VERSION_METADATA"
-
 [vars]
 # secrets
 allowedAppKey = ''
@@ -37,9 +33,8 @@ alchemyUnichainMainnet = 'ALCHEMY_XXX'
 alchemyRoninMainnet = 'ALCHEMY_XXX'
 quicknodeEthMainnet = 'QUICK_NODE_XXX'
 quicknodeEthMainnetSubdomain = 'QUICK_NODE_XXX'
-# error and trace reporting
-SENTRY_DSN = 'https://cf950b4a513253ff3822b58ee4eb5fa5@o4512414468669440.ingest.us.sentry.io/4512421119655936'
-SENTRY_ENVIRONMENT = 'local'
+# Sentry stays off locally: SENTRY_DSN is set only for the production
+# environments. To try it locally, put SENTRY_DSN in .dev.vars (gitignored).
 
 [vars.settings]
 maskUpstreamErrors                    = false # show errors for debugging
