@@ -336,7 +336,7 @@
       "capabilities": {
         "rewards": true,
         "accountRewards": true,
-        "transactionHistory": false
+        "transactionHistory": true
       },
       "baseAsset": {
         "displayName": "USDS",
@@ -384,7 +384,7 @@
       "capabilities": {
         "rewards": true,
         "accountRewards": true,
-        "transactionHistory": false
+        "transactionHistory": true
       },
       "baseAsset": {
         "displayName": "Wrapped BTC",
@@ -432,7 +432,7 @@
       "capabilities": {
         "rewards": true,
         "accountRewards": true,
-        "transactionHistory": false
+        "transactionHistory": true
       },
       "baseAsset": {
         "displayName": "Lido Wrapped Staked ETH",
@@ -600,7 +600,7 @@
       "capabilities": {
         "rewards": true,
         "accountRewards": true,
-        "transactionHistory": false
+        "transactionHistory": true
       },
       "baseAsset": {
         "displayName": "Tether",
@@ -690,7 +690,7 @@
       "capabilities": {
         "rewards": true,
         "accountRewards": true,
-        "transactionHistory": false
+        "transactionHistory": true
       },
       "baseAsset": {
         "displayName": "Aero",
@@ -762,7 +762,7 @@
       "capabilities": {
         "rewards": true,
         "accountRewards": true,
-        "transactionHistory": false
+        "transactionHistory": true
       },
       "baseAsset": {
         "displayName": "USDS",
@@ -858,7 +858,7 @@
       "capabilities": {
         "rewards": true,
         "accountRewards": true,
-        "transactionHistory": false
+        "transactionHistory": true
       },
       "baseAsset": {
         "displayName": "Tether",
@@ -882,7 +882,7 @@
       "capabilities": {
         "rewards": true,
         "accountRewards": true,
-        "transactionHistory": false
+        "transactionHistory": true
       },
       "baseAsset": {
         "displayName": "Ether",
