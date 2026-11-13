@@ -29,8 +29,7 @@ import {
   formatTransactionHistoryResponse,
 } from '../../lib/model/transaction-history/history.js';
 
-import * as Index         from '../../lib/symbolic/index.js';
-import { firstBlockOf   } from '../../lib/symbolic/index/transaction-history-index.js';
+import { firstBlockOf, precedingRangeEnd, strideOf } from '../../lib/symbolic/index/transaction-history-index.js';
 import * as Evaluator     from '../../lib/symbolic/evaluator.js';
 import { WorkersKvCache } from '../../lib/symbolic/cache.js';
 
@@ -57,6 +56,47 @@ const MAX_ENRICH_TRANSACTION_HISTORY_ITEMS = 50;
 const PARALLEL_BATCH_SIZE = 10;
 
 /*
+ * The ranges of logs one page loads, across its streams, whether KV holds
+ * them or the node is asked for them. A stream is read on toward its next
+ * item however long it has been quiet, so a quiet history costs ranges, not
+ * items, and this is what bounds them. A range costs at most one KV read, two
+ * calls to the node and one KV write, so a page stays inside the KV
+ * operations an invocation may make, with its enrichment beside it (README,
+ * "Workers Plan"). It also covers every stream served in November 2026 read
+ * back to its first block, about 130 to 145 ranges, which grow by about 60 a
+ * year: the first page of an account without history is done. An environment
+ * may lower it (rangesPerPageOf).
+ */
+const MAX_LOG_RANGES_PER_PAGE = 200;
+
+/*
+ * The ranges a page loads as an environment sets them, in
+ * TRANSACTION_HISTORY_RANGES_PER_PAGE: a whole number from 1 to
+ * MAX_LOG_RANGES_PER_PAGE, which it is when unset or blank, and when set to
+ * anything else, which is logged. An environment can lower the budget, as in
+ * the hours after a release when every account reads its ranges from the
+ * node again, but not raise it past what KV allows an invocation.
+ */
+function rangesPerPageOf(value: unknown, debug: Debug.Logger): number {
+  const text = value === undefined || value === null ? '' : String(value).trim();
+  if (text.length === 0) {
+    return MAX_LOG_RANGES_PER_PAGE;
+  }
+  const parsed = /^[0-9]+$/.test(text) ? Number(text) : NaN;
+  if (Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_LOG_RANGES_PER_PAGE) {
+    return parsed;
+  }
+  debug.warn(`TRANSACTION_HISTORY_RANGES_PER_PAGE takes a whole number from 1 to ${MAX_LOG_RANGES_PER_PAGE}, not ${text}: a page reads ${MAX_LOG_RANGES_PER_PAGE} ranges`);
+  return MAX_LOG_RANGES_PER_PAGE;
+}
+
+// A range of a stream's logs as it loads: the block it ends at, which a cursor keeps, and its items
+type LoadingRange = { end: Eth.BlockNumber, rawItems: Promise<RawTransactionHistoryItem[]> };
+
+// An item of a stream, with the block that ends the range it was read in
+type InRange<Item> = { rangeEnd: Eth.BlockNumber, item: Item };
+
+/*
  * One log stream: the markets whose events are read together, and the rewards
  * contract whose claim events belong with them. Markets are grouped by their
  * rewards contract, because a stream is read as one range of logs and the
@@ -72,6 +112,11 @@ type StreamEvent = {
    * counted from this one.
    */
   firstBlock: Eth.BlockNumber;
+  /*
+   * The blocks each of the stream's ranges spans (strideOf): the same block
+   * ends another range in ranges of another size.
+   */
+  stride: number;
 };
 
 function streamKeyOf({ network, rewardsContractAddress }: Pick<StreamEvent, 'network' | 'rewardsContractAddress'>): string {
@@ -80,12 +125,12 @@ function streamKeyOf({ network, rewardsContractAddress }: Pick<StreamEvent, 'net
 
 /*
  * The streams a cursor reads, as one value two lists of streams can be
- * compared by: each stream with the block its ranges are counted from and
- * every market it reads, in no particular order.
+ * compared by: each stream with the block its ranges are counted from, the
+ * size of its ranges and every market it reads, in no particular order.
  */
 function streamsOf(streams: StreamEvent[]): string {
   return streams
-    .map(stream => `${streamKeyOf(stream)}@${stream.firstBlock}:${stream.marketContractAddresses.map(address => address.toLowerCase()).sort().join(',')}`)
+    .map(stream => `${streamKeyOf(stream)}@${stream.firstBlock}/${stream.stride}:${stream.marketContractAddresses.map(address => address.toLowerCase()).sort().join(',')}`)
     .sort()
     .join(';');
 }
@@ -96,13 +141,16 @@ interface Cursor {
   marketContractAddresses: Eth.Address[];
   rewardsContractAddress: Eth.Address;
   transactionHash: Eth.TransactionHash;
+  // the stream is read back to its first block, so no page reads it again
+  ended?: boolean;
 };
 
 type CursorPayload = {
   /*
    * The registry version this page was read against. A cursor is meaningful
-   * for as long as the version that answers reads the same streams from the
-   * same first blocks, which are what the version's markets define.
+   * for as long as the streams are read as it read them: the same streams
+   * from the same first blocks, which the version's markets define, in ranges
+   * of the same size, which strideOf defines.
    */
   registryVersionId: string;
   profilesByAddress: { [key: Eth.Address]: governanceModel.Profile };
@@ -124,15 +172,15 @@ type CursorPayload = {
  * A cursor as KV holds it. KV keeps cursors without an expiry, and a client
  * may keep one across visits, so a cursor issued before the registry, which
  * carries no version, can still be sent, and so can one kept before its
- * streams named their first blocks.
+ * streams named their first blocks, or the size of their ranges.
  */
 type StoredCursor = Omit<CursorPayload, 'registryVersionId' | 'streamEvents'> & {
   registryVersionId?: string;
-  streamEvents: Array<Omit<StreamEvent, 'firstBlock'> & { firstBlock?: Eth.BlockNumber }>;
+  streamEvents: Array<Omit<StreamEvent, 'firstBlock' | 'stride'> & { firstBlock?: Eth.BlockNumber, stride?: number }>;
 };
 
-function namesFirstBlocks(payload: StoredCursor): payload is StoredCursor & { streamEvents: StreamEvent[] } {
-  return payload.streamEvents.every(stream => typeof stream.firstBlock === 'number');
+function namesRanges(payload: StoredCursor): payload is StoredCursor & { streamEvents: StreamEvent[] } {
+  return payload.streamEvents.every(stream => typeof stream.firstBlock === 'number' && typeof stream.stride === 'number');
 }
 
 /*
@@ -186,7 +234,7 @@ function Api({ env, debug, flags = {} }: Context) {
  * filter what these streams had already fetched.
  */
 function streamEventsOf(catalog: Catalog): StreamEvent[] {
-  const streams = new Map<string, Omit<StreamEvent, 'firstBlock'>>();
+  const streams = new Map<string, Omit<StreamEvent, 'firstBlock' | 'stride'>>();
 
   for (const entry of catalog.markets()) {
     const comet   = entry.market.contracts.comet;
@@ -204,8 +252,12 @@ function streamEventsOf(catalog: Catalog): StreamEvent[] {
     }
   }
 
-  // the first block as the reads count it, from the contracts they read
-  return [ ...streams.values() ].map(stream => ({ ...stream, firstBlock: firstBlockOf(contractsOf(catalog, stream)) }));
+  // the first block as the reads count it, from the contracts they read, and the size of the ranges they read
+  return [ ...streams.values() ].map(stream => ({
+    ...stream,
+    firstBlock: firstBlockOf(contractsOf(catalog, stream)),
+    stride:     strideOf(stream.network),
+  }));
 }
 
 /*
@@ -213,7 +265,7 @@ function streamEventsOf(catalog: Catalog): StreamEvent[] {
  * address in a stream came from this same catalog, so a market that the
  * version does not describe cannot appear here.
  */
-function contractsOf(catalog: Catalog, stream: Omit<StreamEvent, 'firstBlock'>): {
+function contractsOf(catalog: Catalog, stream: Omit<StreamEvent, 'firstBlock' | 'stride'>): {
   marketContracts: Eth.Contract[],
   rewardsContract: Eth.Contract,
 } {
@@ -251,7 +303,7 @@ function getDefiSaverProxyRegistryContract(): { [key: string]: Eth.Contract }{
 /*
  * Whether a cursor's positions still mean what they meant against the
  * streams a version reads: the version reads the same streams, and counts
- * their ranges from the same blocks.
+ * their ranges from the same blocks, in ranges of the same size.
  */
 function readsSameStreams(payload: Pick<CursorPayload, 'streamEvents'>, streams: StreamEvent[]): boolean {
   return streamsOf(payload.streamEvents) === streamsOf(streams);
@@ -328,6 +380,8 @@ async function getTransactionHistory(
 ): Promise<Response> {
   // ****************** HELPER FUNCTIONS ******************
   const { evaluate, pull1 } = Api(context);
+  // the ranges of logs a page of this request may load (MAX_LOG_RANGES_PER_PAGE)
+  const rangesPerPage = rangesPerPageOf(context.env.TRANSACTION_HISTORY_RANGES_PER_PAGE, context.debug);
   /*
    * Cursors are kept in the namespace history is cached in, but they are not
    * a cache: a value KV cannot read or keep is computed again, and a cursor
@@ -411,16 +465,23 @@ async function getTransactionHistory(
     const { actions, initiatedBy, contractAddresses, networks } = filter;
     // Merge sort across trxHistItemsQueuesByMarket by blockNumber
     const mergedItems = [];
-    const rawItemsLoadingBatch: { [key: string]: Promise<RawTransactionHistoryItem[]>[] } = {};
+    // The ranges each stream loads in parallel, newest first
+    const rawItemsLoadingBatch: { [key: string]: LoadingRange[] } = {};
     // Each queue is sorted with block number, but it won't be enrich until the last moment
-    const rawItemsQueue: { [key: string]: RawTransactionHistoryItem[] } = {};
+    const rawItemsQueue: { [key: string]: InRange<RawTransactionHistoryItem>[] } = {};
     // Immediate item queue which contains enriched items, so we can merge it with different network items via timestamp
     const immediateEnrichedItem: { [key: string]: TransactionHistoryItem } = {};
     // Batch promises run in parallel
-    const enrichingBatch: { [key: string]: Promise<TransactionHistoryItem>[] } = {};
+    const enrichingBatch: { [key: string]: InRange<Promise<TransactionHistoryItem>>[] } = {};
 
-    // Block number anchor tracking, to track the last raw items loaded block number according to the index projected block number
-    const blockNumberAnchor: { [key: string]: Eth.BlockNumber[] } = {};
+    /*
+     * The block the next range of each stream ends at, or null once the range
+     * it loaded last starts at its first block, below which it has nothing.
+     */
+    const nextRangeEnd: { [key: string]: Eth.BlockNumber | null } = {};
+    // The ranges this page has loaded, across its streams (rangesPerPage)
+    let rangesLoaded = 0;
+    let enrichedItemCount = 0;
 
     /*
      * The contracts of every stream, resolved once. They are fixed for the
@@ -437,56 +498,112 @@ async function getTransactionHistory(
     // Proxies that associate with account address in each network
     const defiSaverProxies: { [key: string]: Promise<Eth.Address[]> } = {};
 
+    // The items of the range of a stream that ends at a block
+    function loadRange(stream: StreamEvent, end: Eth.BlockNumber): Promise<RawTransactionHistoryItem[]> {
+      const { marketContracts, rewardsContract } = streamContracts.get(streamKeyOf(stream))!;
+      return defiSaverProxies[stream.network].then(proxies => getRawTransactionHistoryItems(
+        accountAddress,
+        [ ...proxies ],
+        end,
+        stream.network,
+        marketContracts,
+        rewardsContract,
+      ));
+    }
+
+    // The block the range below the one that ends at a block ends at, or null below the stream's oldest range
+    function precedingEnd(stream: StreamEvent, end: Eth.BlockNumber): Eth.BlockNumber | null {
+      const { marketContracts, rewardsContract } = streamContracts.get(streamKeyOf(stream))!;
+      return precedingRangeEnd({
+        accountAddress,
+        network: stream.network,
+        marketContracts,
+        rewardsContract,
+        blockNumber: end,
+      });
+    }
+
+    // Fill/Refill the PARALLEL_BATCH_SIZE ranges a stream loads in parallel, while the page's budget lasts
+    function loadRanges(stream: StreamEvent): void {
+      const streamId = streamKeyOf(stream);
+      while (rawItemsLoadingBatch[streamId].length < PARALLEL_BATCH_SIZE && rangesLoaded < rangesPerPage) {
+        const end = nextRangeEnd[streamId];
+        if (end === null) {
+          break;
+        }
+        rawItemsLoadingBatch[streamId].push({ end, rawItems: loadRange(stream, end) });
+        nextRangeEnd[streamId] = precedingEnd(stream, end);
+        rangesLoaded += 1;
+      }
+    }
+
+    // Whether a stream is read back to its first block, with nothing of it left to answer
+    function ended(streamId: string): boolean {
+      return true
+        && immediateEnrichedItem[streamId] === undefined
+        && rawItemsQueue[streamId].length === 0
+        && enrichingBatch[streamId].length === 0
+        && rawItemsLoadingBatch[streamId].length === 0
+        && nextRangeEnd[streamId] === null;
+    }
+
+    // Whether a stream can still read on toward its next item within the page's budgets
+    function canProgress(streamId: string): boolean {
+      return enrichedItemCount <= MAX_ENRICH_TRANSACTION_HISTORY_ITEMS && (false
+        || rawItemsQueue[streamId].length > 0
+        || enrichingBatch[streamId].length > 0
+        || rawItemsLoadingBatch[streamId].length > 0
+        || (nextRangeEnd[streamId] !== null && rangesLoaded < rangesPerPage)
+      );
+    }
+
     // Initialize queues on first run
-    streamEvents.map((stream) => {
+    for (const stream of streamEvents) {
       const { network } = stream;
       const streamId = streamKeyOf(stream);
-      const { marketContracts: targetMarketContracts, rewardsContract: targetRewardsContract } =
-        streamContracts.get(streamId)!;
       const cursor = cursors[streamId];
       if (cursor === undefined) {
         throw new Error('Cursor is undefined, cursor may failed on initialization');
       }
-      if (rawItemsLoadingBatch[streamId] === undefined) {
-        rawItemsLoadingBatch[streamId] = [];
+      rawItemsLoadingBatch[streamId] = [];
+      rawItemsQueue[streamId] = [];
+      enrichingBatch[streamId] = [];
+      nextRangeEnd[streamId] = null;
+      // a stream an earlier page read back to its first block has nothing left to read
+      if (cursor.ended === true) {
+        continue;
       }
 
-      // Promise to get latest block
-      const latestBlockNumber = latestBlockPromises[network] !== undefined ?
-        latestBlockPromises[network].then(block => block.number) :
-        Promise.resolve(cursor.blockNumber);
+      // The block the stream is read from: the latest block on a first page, and where its cursor stopped after that
+      const startBlockNumber = latestBlockPromises[network] !== undefined ?
+        await latestBlockPromises[network].then(block => block.number) :
+        cursor.blockNumber;
+      cursors[streamId] = {
+        ...cursor,
+        blockNumber: startBlockNumber,
+      };
 
       // Promise to get all proxy addresses
       // Each network find all proxies associate with the account address, and save in defiSaverProxies map
       if (defiSaverProxies[network] === undefined) {
         defiSaverProxies[network] = defiSaverProxyRegistryContract[network] !== undefined ?
-          latestBlockNumber.then(blockNumber => (
-            evaluate(pull1({
-              getAllProxies: {
-                apiHost,
-                nodeHost,
-                nodeKey,
-                network,
-                contract: defiSaverProxyRegistryContract[network],
-                address: accountAddress,
-                blockNumber,
-              },
-            }))
-          )) : Promise.resolve([]);
+          evaluate(pull1({
+            getAllProxies: {
+              apiHost,
+              nodeHost,
+              nodeKey,
+              network,
+              contract: defiSaverProxyRegistryContract[network],
+              address: accountAddress,
+              blockNumber: startBlockNumber,
+            },
+          })) : Promise.resolve([]);
       }
 
       // Initialize and populate the first loading batch job to include the offset settings from query
-      rawItemsLoadingBatch[streamId].push(
-        Promise.all([latestBlockNumber, defiSaverProxies[network]]).then(([latestBlockNum, proxies]) => {
-          return getRawTransactionHistoryItems(
-            accountAddress,
-            proxies,
-            latestBlockNum,
-            network,
-            targetMarketContracts,
-            targetRewardsContract
-          );
-        }).then((rawItems) => {
+      rawItemsLoadingBatch[streamId].push({
+        end: startBlockNumber,
+        rawItems: loadRange(stream, startBlockNumber).then((rawItems) => {
           // Hash offset
           const offset = rawItems.findIndex(item => (
             item.transactionHash === cursor.transactionHash
@@ -497,37 +614,20 @@ async function getTransactionHistory(
           } else {
             return rawItems;
           }
-        })
-      );
-    });
-
-    let enrichedItemCount = 0;
-    let done = false;
+        }),
+      });
+      rangesLoaded += 1;
+      nextRangeEnd[streamId] = precedingEnd(stream, startBlockNumber);
+    }
 
     while (mergedItems.length < itemsLimit && enrichedItemCount <= MAX_ENRICH_TRANSACTION_HISTORY_ITEMS) {
-      let maxTimestamp = Number.MIN_SAFE_INTEGER;
-      let maxTimestampItem: TransactionHistoryItem | undefined = undefined;
-      let maxTimestampStream: string | undefined = undefined;
       for (const stream of streamEvents) {
         const { network } = stream;
         const streamId = streamKeyOf(stream);
-        const { marketContracts: targetMarketContracts, rewardsContract: targetRewardsContract } =
-          streamContracts.get(streamId)!;
-
-        // Initialize blockNumberAnchor to populate the first anchor number
-        if (blockNumberAnchor[streamId] === undefined) {
-          if (latestBlockPromises[network] === undefined) {
-            blockNumberAnchor[streamId] = [cursors[streamId].blockNumber];
-          } else {
-            // This means the anchor should be initialized from async promise input
-            blockNumberAnchor[streamId] = [await latestBlockPromises[network].then(block => block.number)];
-            // Also update cursor blocknumber for later uses
-            cursors[streamId] = {
-              ...cursors[streamId],
-              blockNumber: blockNumberAnchor[streamId][0],
-            };
-          }
+        if (ended(streamId)) {
+          continue;
         }
+
         // Immediate item is undefined, need to load more items from raw queue and enrich it
         let reachedEnd = false;
         while (true
@@ -535,49 +635,17 @@ async function getTransactionHistory(
           && !reachedEnd
           && enrichedItemCount <= MAX_ENRICH_TRANSACTION_HISTORY_ITEMS
         ) {
-          // Fill/Refill the PARALLEL_BATCH_SIZE raw items queue to load all raw items in parallel
-          if (false
-            || rawItemsLoadingBatch[streamId] === undefined
-            || rawItemsLoadingBatch[streamId].length < PARALLEL_BATCH_SIZE) {
-            if (rawItemsLoadingBatch[streamId] === undefined) {
-              rawItemsLoadingBatch[streamId] = [];
-            }
-            while (rawItemsLoadingBatch[streamId].length < PARALLEL_BATCH_SIZE) {
-              const blockNumber = blockNumberAnchor[streamId][blockNumberAnchor[streamId].length - 1];
-              const newPrecedingBlockResult = Index.TransactionHistoryIndex.preceding(
-                {
-                  accountAddress,
-                  network,
-                  marketContracts: targetMarketContracts,
-                  rewardsContract: targetRewardsContract,
-                  blockNumber
-                });
-              if (Fallible.isFailure(newPrecedingBlockResult)) {
-                break;
-              }
-              const newPrecedingBlockNumber = Fallible.unwrap(newPrecedingBlockResult).blockNumber;
-              blockNumberAnchor[streamId].push(newPrecedingBlockNumber);
-              rawItemsLoadingBatch[streamId].push(getRawTransactionHistoryItems(
-                accountAddress,
-                [ ...await defiSaverProxies[network] ],
-                newPrecedingBlockNumber,
-                network,
-                targetMarketContracts,
-                targetRewardsContract
-              ));
-            }
-          }
+          // Fill/Refill the PARALLEL_BATCH_SIZE ranges, to load their raw items in parallel
+          loadRanges(stream);
 
           // If rawItemsQueue is empty, load more raw items
-          if (false
-            || rawItemsQueue[streamId] === undefined
-            || rawItemsQueue[streamId].length === 0
-          ) {
-            let moreRawTransactionHistory = [];
+          if (rawItemsQueue[streamId].length === 0) {
+            const moreRawTransactionHistory: InRange<RawTransactionHistoryItem>[] = [];
             while (moreRawTransactionHistory.length < 1 && rawItemsLoadingBatch[streamId].length > 0) {
-              const rawItems = await rawItemsLoadingBatch[streamId].shift()!;
-              moreRawTransactionHistory.push(...rawItems);
+              const { end, rawItems } = rawItemsLoadingBatch[streamId].shift()!;
+              moreRawTransactionHistory.push(...(await rawItems).map(item => ({ rangeEnd: end, item })));
             }
+            // Every range it was loading is taken: the other streams are read before this one loads more
             if (rawItemsLoadingBatch[streamId].length === 0) {
               reachedEnd = true;
             }
@@ -585,38 +653,32 @@ async function getTransactionHistory(
           }
 
           // Fill/Refill up to PARALLEL_BATCH_SIZE items into enrichingBatch to process in parallel
-          if (false
-            || enrichingBatch[streamId] === undefined
-            || enrichingBatch[streamId].length < PARALLEL_BATCH_SIZE) {
-            if (enrichingBatch[streamId] === undefined) {
-              enrichingBatch[streamId] = [];
-            }
-            // Keep moving items from raw queue until the batch is filled back to BATCH_SIZE or raw queue is empty
-            while (enrichingBatch[streamId].length < PARALLEL_BATCH_SIZE && rawItemsQueue[streamId].length > 0) {
-              const rawItem = rawItemsQueue[streamId].pop()!;
-              if (filterRawTransactionHistoryItem(networks, contractAddresses, rawItem)) {
-                enrichingBatch[streamId].push(
-                  enrichRawTransactionHistoryItem(accountAddress, network, rawItem)
-                );
-              }
+          // Keep moving items from raw queue until the batch is filled back to BATCH_SIZE or raw queue is empty
+          while (enrichingBatch[streamId].length < PARALLEL_BATCH_SIZE && rawItemsQueue[streamId].length > 0) {
+            const { rangeEnd, item: rawItem } = rawItemsQueue[streamId].pop()!;
+            if (filterRawTransactionHistoryItem(networks, contractAddresses, rawItem)) {
+              enrichingBatch[streamId].push({
+                rangeEnd,
+                item: enrichRawTransactionHistoryItem(accountAddress, network, rawItem),
+              });
             }
           }
 
           // Pull 1 item from enrichingBatch and filter the enriched item into immediateEnrichedItem
-          if (enrichingBatch[streamId] !== undefined && enrichingBatch[streamId].length > 0) {
-            const itemPromise = enrichingBatch[streamId].shift();
-            if (itemPromise === undefined) {
-              throw new Error('Queue shall not be empty here');
-            }
-            const enrichedItem = await itemPromise;
+          const enriching = enrichingBatch[streamId].shift();
+          if (enriching !== undefined) {
+            const enrichedItem = await enriching.item;
             enrichedItemCount += 1;
-            while (blockNumberAnchor[streamId].length > 1 && enrichedItem.blockNumber < blockNumberAnchor[streamId][1]) {
-              // Previous index projected block number is not longer needed
-              blockNumberAnchor[streamId].shift();
-              // Update cursor preceding block number
+            /*
+             * The first item taken from a range moves the stream's position
+             * to that range, before any of its items: every range above it
+             * was answered or filtered out to its last item.
+             */
+            if (enriching.rangeEnd !== cursors[streamId].blockNumber) {
               cursors[streamId] = {
                 ...cursors[streamId],
-                blockNumber: blockNumberAnchor[streamId][0],
+                blockNumber: enriching.rangeEnd,
+                transactionHash: '0x0',
               };
             }
             if (filterTransactionHistoryItem(accountAddress, actions, initiatedBy, enrichedItem)) {
@@ -630,54 +692,86 @@ async function getTransactionHistory(
             }
           }
         }
+      }
 
-        // Compare immediate item with max block number
-        if (immediateEnrichedItem[streamId] !== undefined) {
-          const item = immediateEnrichedItem[streamId];
-          if (item.timestamp > maxTimestamp) {
-            maxTimestamp = item.timestamp;
-            maxTimestampItem = item;
-            maxTimestampStream = streamId;
-          }
+      /*
+       * Nothing is answered while a stream without an item can still read on
+       * toward its next one, which may be newer than every item the other
+       * streams hold: so items come newest first across the streams. Once the
+       * page's budget is spent, the streams that hold an item answer it, and
+       * a stream cut short goes on from where it stopped on the next page.
+       */
+      if (streamEvents.some((stream) => {
+        const streamId = streamKeyOf(stream);
+        return immediateEnrichedItem[streamId] === undefined && !ended(streamId) && canProgress(streamId);
+      })) {
+        continue;
+      }
+
+      // Compare immediate items by timestamp
+      let maxTimestamp = Number.MIN_SAFE_INTEGER;
+      let maxTimestampItem: TransactionHistoryItem | undefined = undefined;
+      let maxTimestampStream: string | undefined = undefined;
+      for (const stream of streamEvents) {
+        const streamId = streamKeyOf(stream);
+        const item = immediateEnrichedItem[streamId];
+        if (item !== undefined && item.timestamp > maxTimestamp) {
+          maxTimestamp = item.timestamp;
+          maxTimestampItem = item;
+          maxTimestampStream = streamId;
         }
       }
 
-      if (maxTimestampItem !== undefined && maxTimestampStream !== undefined) {
-        // Add max item cadidate to mergedTrxHistItems
-        mergedItems.push(maxTimestampItem);
-
-        // Delete immediate item
-        delete immediateEnrichedItem[maxTimestampStream];
-
-        // Update cursor
-        const currentCursor = cursors[maxTimestampStream];
-        if (currentCursor === undefined) {
-          throw new Error('Cursor is undefined, cursor may failed on initialization');
-        }
-
-        const newCursor = {
-          ...currentCursor,
-          transactionHash: maxTimestampItem.transactionHash,
-        };
-
-        cursors[maxTimestampStream] = newCursor;
-      } else {
-        // No more items to load, break and return
-        done = true;
-        // TODO: hans: A little hacky one off update cursor to the last block number
-        // But now the cursor block# is tracked along the items getting loaded, which no item will be able to trigger this when it's on contract creation time
-        for (const stream of streamEvents) {
-          const streamId = streamKeyOf(stream);
-          if (blockNumberAnchor[streamId] !== undefined) {
-            cursors[streamId] = {
-              ...cursors[streamId],
-              blockNumber: blockNumberAnchor[streamId][0],
-            };
-          }
-        }
+      if (maxTimestampItem === undefined || maxTimestampStream === undefined) {
+        // No more items to answer on this page
         break;
       }
+
+      // Add max item cadidate to mergedTrxHistItems
+      mergedItems.push(maxTimestampItem);
+
+      // Delete immediate item
+      delete immediateEnrichedItem[maxTimestampStream];
+
+      // Update cursor
+      cursors[maxTimestampStream] = {
+        ...cursors[maxTimestampStream],
+        transactionHash: maxTimestampItem.transactionHash,
+      };
     }
+
+    /*
+     * Where each stream goes on from. One read back to its first block is
+     * ended. One that holds nothing it has read but not answered goes on from
+     * the first range it has not taken: every range it took was answered or
+     * filtered out to its last item, or held nothing, and the next page need
+     * not read them again.
+     */
+    for (const stream of streamEvents) {
+      const streamId = streamKeyOf(stream);
+      if (ended(streamId)) {
+        cursors[streamId] = {
+          ...cursors[streamId],
+          ended: true,
+        };
+      } else if (true
+        && immediateEnrichedItem[streamId] === undefined
+        && rawItemsQueue[streamId].length === 0
+        && enrichingBatch[streamId].length === 0
+      ) {
+        const next = rawItemsLoadingBatch[streamId][0]?.end ?? nextRangeEnd[streamId];
+        if (next !== null && next !== cursors[streamId].blockNumber) {
+          cursors[streamId] = {
+            ...cursors[streamId],
+            blockNumber: next,
+            transactionHash: '0x0',
+          };
+        }
+      }
+    }
+
+    // The history is done only once every stream is read back to its first block
+    const done = streamEvents.every(stream => ended(streamKeyOf(stream)));
 
     // Upsert cursor info before return
     const cursorHash = await sha256(JSON.stringify(cursorPayload));
@@ -798,21 +892,25 @@ async function getTransactionHistory(
   /*
    * A cursor holds a position in each stream it reads: a block and a
    * transaction in the logs of those contracts. The block ends one of the
-   * ranges the stream is read in, which are counted from its first block.
-   * The positions stay true for as long as the version that answers reads
-   * the same streams from the same first blocks, so a rollback, a re-import
-   * of the same markets, or a new label on one leaves pagination going; what
-   * each page says about its items is the version that answered that page,
-   * which the headers name. A version that reads other streams, or counts
-   * one from another block, as a corrected creation block can, leaves the
-   * positions meaning nothing: resumed, the cursor would answer again what
-   * it has answered. The client is told to start over.
+   * ranges the stream is read in, which are counted from its first block,
+   * in a size its network sets. The positions stay true for as long as the
+   * same streams are read from the same first blocks in ranges of the same
+   * size, so a rollback, a re-import of the same markets, or a new label on
+   * one leaves pagination going; what each page says about its items is the
+   * version that answered that page, which the headers name. A version that
+   * reads other streams, or counts one from another block, as a corrected
+   * creation block can, leaves the positions meaning nothing: resumed, the
+   * cursor would answer again what it has answered. So does a release that
+   * sizes a network's ranges anew, under any version, which is why the
+   * streams are compared for a cursor of the version that answers too. The
+   * client is told to start over.
    *
    * A cursor issued before the registry names no version, and keeps its
    * positions by network rather than by stream. It is ended as one of
    * another version is, whatever it reads, and the client starts over. So is
-   * one kept before its streams named their first blocks, by its own
-   * version too, so that every cursor that goes on names them.
+   * one kept before its streams named their first blocks and the size of
+   * their ranges, by its own version too, so that every cursor that goes on
+   * names them.
    *
    * The cursor is judged before the request's markets are resolved against
    * this version: they were resolved against the version that issued it,
@@ -827,8 +925,8 @@ async function getTransactionHistory(
     if (storedPayload === null) {
       return new Response('Cursor is invalid', { status: 400 });
     }
-    if (typeof storedPayload.registryVersionId !== 'string' || !namesFirstBlocks(storedPayload)
-      || (storedPayload.registryVersionId !== catalog.versionId && !readsSameStreams(storedPayload, streamEvents))) {
+    if (typeof storedPayload.registryVersionId !== 'string' || !namesRanges(storedPayload)
+      || !readsSameStreams(storedPayload, streamEvents)) {
       throw new ApiError(
         'REGISTRY_VERSION_CHANGED',
         'the markets of the registry changed; restart pagination without a cursor',
@@ -994,6 +1092,7 @@ export type {
 };
 
 export {
+  MAX_LOG_RANGES_PER_PAGE,
   getTransactionHistory,
   streamEventsOf,
   streamKeyOf,

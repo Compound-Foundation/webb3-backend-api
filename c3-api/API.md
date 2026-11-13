@@ -863,21 +863,25 @@ Query parameters:
 A cursor holds a position in the logs of every market whose history its
 version serves, whatever `markets[]` keeps. Markets that share a rewards
 contract are read together, in ranges of blocks counted from the earliest
-creation block among them. A cursor stays valid across registry versions that
-read the same markets from the same blocks — a rollback, a new import of the
-same source, a market given a new label — and each page names the version
-that answered it. A version that reads other markets ends it, and so does one
-that counts their ranges from another block, as a corrected creation block
-can; every version ends a cursor issued before the registry, whatever that
-one reads. The request answers `409`, and the client restarts pagination
-without a cursor. `markets[]` is checked first as far as it can be without
-the registry, so a testnet market is refused as above, cursor or not. The
-cursor is then judged before the filter's markets are resolved against the
-active version: a version that no longer serves the history of a market the
-filter names ends the cursor with this `409` too, and the first page of the
-new pagination refuses that market. `cursorRegistryVersionId` names the
-version the cursor was issued against, and is `null` for a cursor issued
-before the registry:
+creation block among them: 1,000,000 blocks on Ethereum and Optimism,
+2,000,000 on Polygon, and 10,000,000 on Arbitrum and Base, the networks whose
+history is served. A cursor holds those sizes. It stays valid across registry
+versions that read the same markets from the same blocks — a rollback, a new
+import of the same source, a market given a new label — and each page names
+the version that answered it. A version that reads other markets ends it, and
+so does one that counts their ranges from another block, as a corrected
+creation block can; every version ends a cursor issued before the registry,
+whatever that one reads. A cursor that holds other sizes, or none, is ended
+by every version, its own included, so every cursor issued before ranges were
+sized by time is ended once. The request answers `409`, and the client
+restarts pagination without a cursor. `markets[]` is checked first as far as
+it can be without the registry, so a testnet market is refused as above,
+cursor or not. The cursor is then judged before the filter's markets are
+resolved against the active version: a version that no longer serves the
+history of a market the filter names ends the cursor with this `409` too, and
+the first page of the new pagination refuses that market.
+`cursorRegistryVersionId` names the version the cursor was issued against,
+and is `null` for a cursor issued before the registry:
 
 ```json
 {
@@ -895,6 +899,15 @@ before the registry:
 
 A value that is not a cursor this API handed out is a `400` with the text
 `Cursor is invalid`.
+
+A page reads a bounded number of ranges of blocks and enriches a bounded
+number of items, so it can hold fewer items than `limit`, or none, while
+`done` is `false`: ask again with its `cursor` until `done` is `true`. Only
+then has the history of every market been read back to its creation block.
+Items come newest first across networks. When a page spends its budget before
+every network has been read back to its next item, the items it has read are
+answered first, and a later page can hold an item newer than some that were
+answered before it.
 
 ```sh
 $ curl 'localhost:8787/account/0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5/transaction_history?limit=30&actions[]=Borrow&markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3'
