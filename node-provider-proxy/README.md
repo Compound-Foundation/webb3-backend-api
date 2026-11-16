@@ -61,4 +61,4 @@ To test the Web3 Worker, run:
 npm test
 ```
 
-The tests run on the compiled output, so build first; `npm run build` builds and then runs them. CI builds and tests the proxy on every push that changes it, the shared libraries under `c3-api/lib`, the fetch mock its tests use, or what those compile with: `c3-api/tsconfig.json` and the shim under `c3-api/shim`.
+The tests run on the compiled output, which `npm test` builds first with `tsc`; `npm run build` only builds. When `dist/test` holds no compiled test, `npm test` fails instead of passing with no tests run. tsc rebuilds only what changed since its last build, so after deleting part of `dist`, run `npm run clean` first. CI builds and tests the proxy on every push that changes it, the shared libraries under `c3-api/lib`, the fetch mock its tests use, or what those compile with: `c3-api/tsconfig.json` and the shim under `c3-api/shim`.
