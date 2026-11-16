@@ -348,12 +348,21 @@ function filterTransactionHistoryItem(
 ) {
   // Filter items by initiated by
   if (initiatedBy !== undefined && initiatedBy.length > 0) {
+    /*
+     * The initiator and the account are compared whatever their casing, as
+     * an address in any casing is one account, and initiators are not named
+     * in one casing: a node names the sender of a transaction in lowercase,
+     * as the history names a DeFi Saver proxy, while a migrator is named
+     * checksummed, as a decoded log names it. `me` is the account itself: an
+     * item its DeFi Saver proxy or a migrator initiated is another's.
+     */
+    const initiatedByAccount = historyItem.initiatedBy.address.toLowerCase() === accountAddress.toLowerCase();
     let passedFilter = false;
     if (initiatedBy.includes('me')) {
-      passedFilter = passedFilter || historyItem.initiatedBy.address === accountAddress;
+      passedFilter = passedFilter || initiatedByAccount;
     }
     if (initiatedBy.includes('other')) {
-      passedFilter = passedFilter || historyItem.initiatedBy.address !== accountAddress;
+      passedFilter = passedFilter || !initiatedByAccount;
     }
     if (!passedFilter) {
       return false;
@@ -1093,6 +1102,7 @@ export type {
 
 export {
   MAX_LOG_RANGES_PER_PAGE,
+  filterTransactionHistoryItem,
   getTransactionHistory,
   streamEventsOf,
   streamKeyOf,
