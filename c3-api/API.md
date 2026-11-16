@@ -849,14 +849,34 @@ $ curl 'localhost:8787/legacy/mainnet/gas-price'
 }
 ```
 
+## `/account/{address}/rewards`
+### description:
+
+Retrieves the rewards an account is owed, and its balances, on each market
+whose rewards the active registry version says it can claim.
+
+`{address}` is `0x`, with a lowercase `x`, followed by 40 hexadecimal digits
+whose letters may be in either case; the checksum is not checked. Anything
+else, `0X…` included, is a `400` with the text
+`Error: Bad account address: …` and the value as sent, in plain text,
+answered before anything is read. The account is used in lowercase, so every
+casing of an address shares one set of cached entries.
+
 ## `/account/{account_address}/transaction_history`
 ### description:
 
 Retrieves comet transaction history for a given account address.
 
+`{account_address}` is `0x`, with a lowercase `x`, followed by 40 hexadecimal
+digits whose letters may be in either case; the checksum is not checked.
+Anything else, `0X…` included, is a `400` with the text
+`Error: Bad account address: …` and the value as sent, in plain text,
+answered before anything is read. The account is used in lowercase, so every
+casing of an address shares one set of cached entries.
+
 Query parameters:
 - `limit` (optional): number of max items to retrieve. Default and max is 15.
-- `markets[]` (optional): array of markets filter to be included in the response. Default is every market whose history the active version serves. A market of a testnet is refused with `TESTNET_NOT_SERVED` ([The market registry](#the-market-registry)), and one whose history the active version does not serve with a `400`, `Invalid market address …`. (e.g. filter only Ethereum cUSDCv3 market `markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3`)
+- `markets[]` (optional): array of markets filter to be included in the response. Default is every market whose history the active version serves. A market of a testnet is refused with `TESTNET_NOT_SERVED` ([The market registry](#the-market-registry)), one whose address is not `0x` followed by 40 hexadecimal digits with a `400`, `Invalid address …`, and one whose history the active version does not serve with a `400`, `Invalid market address …`. (e.g. filter only Ethereum cUSDCv3 market `markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3`)
 - `actions[]` (optional): array of actions to filter transactions by. Default is all actions. (e.g. filter only borrow actions `actions[]=Borrow`)
 - `cursor` (optional): The first response (with no cursor parameter) will return with a cursor value, to pass that cursor value will allow request to get more transaction history further in the past.
 

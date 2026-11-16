@@ -120,6 +120,7 @@ interface TransactionHistoryRouteData {
   apiHost: string;
   nodeHost: string;
   nodeKey: string;
+  // in lowercase, whatever case the path named it in (accountOf)
   accountAddress: Eth.Address;
   queryParams: URL['searchParams'];
   /*
@@ -133,6 +134,7 @@ interface AccountRouteData {
   apiHost: string;
   nodeHost: string;
   nodeKey: string;
+  // in lowercase, whatever case the path named it in (accountOf)
   account: Eth.Address;
   catalog: Catalog;
 }
@@ -278,10 +280,11 @@ async function unsafeRoute(
       && accountPathMatch !== null
       && accountPathMatch[2] === 'transaction_history'
     ) {
-      const accountAddress = accountPathMatch[1];
-      if (!Eth.parseAddress(accountAddress)) {
+      const segment        = accountPathMatch[1];
+      const accountAddress = accountOf(segment);
+      if (accountAddress === null) {
         return new Response(
-          `Error: Bad account address: ${accountAddress}`,
+          `Error: Bad account address: ${segment}`,
           { status: 400 }
         );
       }
@@ -306,10 +309,11 @@ async function unsafeRoute(
       && accountPathMatch !== null
       && accountPathMatch[2] === 'rewards'
     ) {
-      const accountAddress = accountPathMatch[1];
-      if (!Eth.parseAddress(accountAddress)) {
+      const segment        = accountPathMatch[1];
+      const accountAddress = accountOf(segment);
+      if (accountAddress === null) {
         return new Response(
-          `Error: Bad account address: ${accountAddress}`,
+          `Error: Bad account address: ${segment}`,
           { status: 400 }
         );
       }
@@ -499,6 +503,18 @@ function isValidMarketEndpointSuffix(endpointSuffix: string): endpointSuffix is 
 
 function isValidGovernanceEndpointSuffix(endpointSuffix: string): endpointSuffix is ResourceEndpoint<'governance'> {
   return Object.keys(handlerMappings['governance']).includes(endpointSuffix);
+}
+
+/*
+ * The account an account route names, as its handler is given it: a segment
+ * that is an address (Eth.parseAddress), in lowercase whatever case it was
+ * sent in. The history and the rewards cache what they compute by the
+ * account, so every casing of an address is one account, with one set of
+ * entries. Anything else names no account, and the route refuses it before
+ * the registry or a node is read.
+ */
+function accountOf(segment: string): Eth.Address | null {
+  return Eth.parseAddress(segment) ? segment.toLowerCase() as Eth.Address : null;
 }
 
 export {

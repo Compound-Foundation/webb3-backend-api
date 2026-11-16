@@ -5,8 +5,8 @@
  * tests/fixtures/registry/registry-snapshot-v1.json.
  *
  * Addresses are stored and compared lowercase. The registry validates them
- * with the anchored validator below rather than Eth.parseAddress, whose
- * pattern is unanchored and so accepts an address embedded in other text.
+ * with the anchored validator below, which takes what Eth.parseAddress takes,
+ * so that this module does not import the runtime constants for it.
  */
 
 import { keccak256 } from '../hash.js';
