@@ -488,10 +488,16 @@ t.test('a cursor issued before the registry is ended, as one of another version 
     registryVersionId:       registry.versionId,
   }, 'naming no version for the cursor, and the version that is active now');
 
-  t.equal((await page(cursors.upgraded)).status, 409,
+  const upgraded = await page(cursors.upgraded);
+  t.equal(upgraded.status, 409,
     'one an earlier release upgraded is ended by a version that reads a stream it does not');
-  t.equal((await page(cursors.ofTheRegistry)).status, 409, 'as a cursor the registry issued for a version without Base is');
-  t.equal((await page(cursors.changed)).status, 409, 'and as one that reads other streams on its networks is');
+  t.equal((await envelopeOf(t, upgraded)).code, 'REGISTRY_VERSION_CHANGED');
+  const ofTheRegistry = await page(cursors.ofTheRegistry);
+  t.equal(ofTheRegistry.status, 409, 'as a cursor the registry issued for a version without Base is');
+  t.equal((await envelopeOf(t, ofTheRegistry)).code, 'REGISTRY_VERSION_CHANGED');
+  const changed = await page(cursors.changed);
+  t.equal(changed.status, 409, 'and as one that reads other streams on its networks is');
+  t.equal((await envelopeOf(t, changed)).code, 'REGISTRY_VERSION_CHANGED');
 });
 
 /*
@@ -557,8 +563,10 @@ t.test('a cursor is ended before its filter is resolved against the version now 
     `/account/0x420f253087044b8BCf028dd89F8fe83Ba6275E84/transaction_history?markets[]=1_${market}`
       + (cursor === undefined ? '' : `&cursor=${cursor}`));
 
-  t.equal((await page(USDC, cursors.usdc)).status, 409,
+  const usdc = await page(USDC, cursors.usdc);
+  t.equal(usdc.status, 409,
     'a cursor of a market the version still serves is ended, since the version reads other streams');
+  t.equal((await envelopeOf(t, usdc)).code, 'REGISTRY_VERSION_CHANGED');
 
   const ended = await page(weth, cursors.weth);
   t.equal(ended.status, 409, 'and so is one of the market whose history the version no longer serves');
@@ -580,10 +588,9 @@ t.test('a cursor is ended before its filter is resolved against the version now 
 
 /*
  * The history names a cursor by the hex SHA-256 of what it holds, and hands
- * out no other. A value of any other form is no cursor: it is invalid as one
- * KV does not hold is, and KV is not asked for it, since workerd refuses some
- * such keys outright — '', '.' and '..' — and the request would fail with
- * that instead.
+ * out no other. A value of any other form is no cursor: it is invalid, and KV
+ * is not asked for it, since workerd refuses some such keys outright — '',
+ * '.' and '..' — and the request would fail with that instead.
  */
 t.test('a cursor of another form than the history hands out is invalid, without asking KV', async t => {
   const registry = await activeRegistryDatabase();
@@ -618,8 +625,8 @@ t.test('a cursor of another form than the history hands out is invalid, without 
   t.same(asked, [], 'and KV was asked for none of them');
 
   const unknown = await page(issued);
-  t.same([ unknown.status, await unknown.text() ], [ 400, 'Cursor is invalid' ],
-    'while a cursor of the form the history hands out is invalid when KV does not hold it');
+  t.equal(unknown.status, 409, 'while a cursor of the form the history hands out that KV does not hold has expired');
+  t.equal((await envelopeOf(t, unknown)).code, 'CURSOR_EXPIRED', 'with the code that tells the client to restart pagination');
   t.same(asked, [ issued ], 'which KV was asked for');
 });
 

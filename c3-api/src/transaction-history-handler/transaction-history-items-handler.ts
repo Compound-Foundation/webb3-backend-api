@@ -169,10 +169,11 @@ type CursorPayload = {
 };
 
 /*
- * A cursor as KV holds it. KV keeps cursors without an expiry, and a client
- * may keep one across visits, so a cursor issued before the registry, which
- * carries no version, can still be sent, and so can one kept before its
- * streams named their first blocks, or the size of their ranges.
+ * A cursor as KV holds it. KV keeps a cursor for CURSOR_LIFETIME_SECONDS from
+ * its last write, but one written before cursors had a lifetime has no expiry,
+ * and a client may keep one across visits, so a cursor issued before the
+ * registry, which carries no version, can still be sent, and so can one kept
+ * before its streams named their first blocks, or the size of their ranges.
  */
 type StoredCursor = Omit<CursorPayload, 'registryVersionId' | 'streamEvents'> & {
   registryVersionId?: string;
@@ -190,6 +191,18 @@ function namesRanges(payload: StoredCursor): payload is StoredCursor & { streamE
  * '..', and the request would fail with that.
  */
 const CURSOR_ID = /^[0-9a-f]{64}$/;
+
+/*
+ * How long KV keeps a cursor after the page that wrote it, in seconds: 30
+ * days. A cursor is read again only by the next page of its pagination, so
+ * without an expiry every cursor a client has moved on from would stay in KV
+ * for good, and nearly every page writes a new one. The lifetime is
+ * Compound's choice: the app opens a new first page on every load and every
+ * 5 minutes, so no pagination it holds lasts nearly as long. A cursor KV no
+ * longer holds is answered with 409 CURSOR_EXPIRED, and the client starts
+ * over without one.
+ */
+const CURSOR_LIFETIME_SECONDS = 30 * 24 * 60 * 60;
 
 interface Context {
   env: Env;
@@ -386,8 +399,9 @@ async function getTransactionHistory(
    * Cursors are kept in the namespace history is cached in, but they are not
    * a cache: a value KV cannot read or keep is computed again, and a cursor
    * cannot be. So a cursor KV cannot read or keep fails the request, as it
-   * always has, rather than being answered as invalid, or handed out without
-   * being kept.
+   * always has, rather than being answered as expired, or handed out without
+   * being kept. A cursor is read from KV itself on every page, and no copy of
+   * it is kept in the isolate's memory, so none is resumed after KV drops it.
    */
   const cursorStore = new WorkersKvCache(context.env[`kv_mainnet`], [
     BigNumber.JsonReviver,
@@ -399,11 +413,12 @@ async function getTransactionHistory(
    * same page asked twice, or the first pages of two accounts without history
    * at one block, keep one cursor under one id. KV refuses the second write of
    * a key within a second with 429: what it refuses then is the same cursor,
-   * written a moment before, and the page is answered with it.
+   * written a moment before, and the page is answered with it. Each write
+   * keeps the cursor for CURSOR_LIFETIME_SECONDS from then.
    */
   async function keepCursor(id: string, payload: CursorPayload): Promise<void> {
     try {
-      await cursorStore.write(id, payload);
+      await cursorStore.write(id, payload, { expirationTtl: CURSOR_LIFETIME_SECONDS });
     } catch (error) {
       if (!(error instanceof Error && /^KV PUT failed: 429\b/.test(error.message))) {
         throw error;
@@ -874,7 +889,7 @@ async function getTransactionHistory(
     }
     namedMarkets.push({ network: networkAlias, address });
   }
-  // a cursor of another form than the history hands out names none (CURSOR_ID), and is refused the same way
+  // a cursor of another form than the history hands out names none (CURSOR_ID), and is invalid without asking KV
   if (cursor !== null && !CURSOR_ID.test(cursor)) {
     return new Response('Cursor is invalid', { status: 400 });
   }
@@ -922,8 +937,17 @@ async function getTransactionHistory(
   let resumed: CursorPayload | null = null;
   if (cursor !== null) {
     const storedPayload = await cursorStore.read<StoredCursor>(cursor);
+    /*
+     * A cursor of the form the history hands out that KV does not hold has
+     * outlived CURSOR_LIFETIME_SECONDS, or was never handed out: KV cannot
+     * tell the two apart. Either way the client starts over without it, as it
+     * does when the registry ends a cursor.
+     */
     if (storedPayload === null) {
-      return new Response('Cursor is invalid', { status: 400 });
+      throw new ApiError(
+        'CURSOR_EXPIRED',
+        'the cursor has expired or was never issued; restart pagination without a cursor',
+      );
     }
     if (typeof storedPayload.registryVersionId !== 'string' || !namesRanges(storedPayload)
       || !readsSameStreams(storedPayload, streamEvents)) {
