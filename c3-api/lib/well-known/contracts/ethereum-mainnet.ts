@@ -1240,9 +1240,12 @@ const market01iusdc = <const>[Comet_01iusdc];
  * The second institutionally-operated market, deployed on the same
  * institutional infrastructure as ciUSDCv3 above: same Gnosis Safe governor
  * (0x4f05F11ca5DE8946958d58AD765F16755F23b113), same non-Timelock proxy admin
- * (0x362739f84FFE4e5f06395301617a90f62Ee1f4cf), same collateral set (WETH,
- * wstETH, cbBTC, WBTC) and parameters, but with USDG (Global Dollar) as the
- * base asset, priced by the Chainlink "USDG / USD" feed.
+ * (0x362739f84FFE4e5f06395301617a90f62Ee1f4cf) and same collateral set (WETH,
+ * wstETH, cbBTC, WBTC), but with USDG (Global Dollar) as the base asset,
+ * priced by the Chainlink "USDG / USD" feed. Its risk parameters are assessed
+ * independently of ciUSDCv3's (uniform 0.80/0.85 collateral factors and
+ * per-asset liquidation factors and supply caps, per the published launch
+ * plan), so the two markets' parameters should not be assumed to match.
  *
  * Everything in the ciUSDCv3 comment above applies here too: parameters can
  * change without a governance proposal, and no rewards are configured
