@@ -40,10 +40,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # the build's postbuild hook runs the tests through corepack, which
-      # fetches an npm release of its own; CI runs them as a step instead
-      - name: Build
-        run: npm run build --ignore-scripts
-
-      - name: Test
+      # npm test builds the proxy and its tests with tsc first, through its
+      # pretest script, and fails when the build leaves no compiled test
+      - name: Build and test
         run: npm test

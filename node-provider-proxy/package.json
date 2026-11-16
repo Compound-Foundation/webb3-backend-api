@@ -46,10 +46,10 @@
   "scripts": {
     "preinstall": "cd .. && npm install-clean --workspaces && npm run build --workspaces && npm test --workspaces",
     "start": "wrangler dev --local",
-    "test": "node --enable-source-maps --test 'dist/test/**/*.js'",
+    "pretest": "tsc",
+    "test": "find dist/test -name '*.js' 2>/dev/null | grep -q . || { echo 'No compiled test file under dist/test. tsc rebuilds only what changed, so after deleting part of dist, run npm run clean and then npm test.' >&2; exit 1; }; node --enable-source-maps --test 'dist/test/**/*.js'",
     "clean": "rm -rf dist",
     "build": "tsc",
-    "postbuild": "corepack npm test",
     "deploy:production-v2": "wrangler deploy src/index.ts --env production-v2",
     "deploy:production-v3-app": "wrangler deploy src/index.ts --env production-v3-app",
     "deploy:production-v3-api": "wrangler deploy src/index.ts --env production-v3-api"
