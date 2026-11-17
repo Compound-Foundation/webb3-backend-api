@@ -22,13 +22,13 @@ import '../../../shim/node-self.js';
  * two streams, mainnet's counted from 15,331,586 in ranges of a million
  * blocks, and Base's from 20,852,405 in ranges of ten million.
  *
- * A page reads each stream on toward its next item, however long the stream
- * has been quiet, within a budget of ranges, and it is done only once every
- * stream is read back to its first block. Before, a page took a stream whose
- * next ten ranges held nothing for ended, and a page without an item for the
- * end of the history: Base was read in ranges of 50,000 blocks, so an account
- * quiet there for ten of them, about a day at five blocks a second, had no
- * history before that.
+ * A page reads each stream `markets[]` keeps on toward its next item, however
+ * long the stream has been quiet, within a budget of ranges, and it is done
+ * only once each of them is read back to its first block. Before, a page took
+ * a stream whose next ten ranges held nothing for ended, and a page without
+ * an item for the end of the history: Base was read in ranges of 50,000
+ * blocks, so an account quiet there for ten of them, about a day at five
+ * blocks a second, had no history before that.
  */
 type Network = 'ethereum-mainnet' | 'base-mainnet' | 'scroll-mainnet';
 
@@ -406,9 +406,9 @@ t.test('a stream read back to its first block is not read again', async t => {
   const { pages, asked, env } = await walk(t, 'ended', { latest: { 'ethereum-mainnet': MAINNET_LATEST, 'base-mainnet': latest }, items }, 'limit=1');
 
   t.equal(pages.length, 3, 'three pages');
-  const kept = await env.kv_mainnet.get(pages[0]!.cursor, 'json') as { cursors: Record<string, { network: Network, ended?: boolean }> };
-  t.same(Object.values(kept.cursors).map(cursor => [ cursor.network, cursor.ended === true ]),
-    [ [ 'ethereum-mainnet', true ], [ 'base-mainnet', false ] ], 'the first page\'s cursor holds mainnet\'s stream ended');
+  const kept = await env.kv_mainnet.get(pages[0]!.cursor, 'json') as { cursors: Record<string, { network: Network, ended: boolean }> };
+  t.same(Object.values(kept.cursors).map(cursor => [ cursor.network, cursor.ended ]),
+    [ [ 'ethereum-mainnet', true ], [ 'base-mainnet', false ] ], 'the first page\'s cursor holds mainnet\'s stream ended, and Base\'s not');
   t.ok(rangesAsked(asked, 1, 'ethereum-mainnet').length > 0, 'once the first page has read it');
   for (const page of [ 2, 3 ]) {
     t.same((asked.get(page) ?? []).filter(call => call.network === 'ethereum-mainnet'), [], `page ${page} asks the node nothing of mainnet`);
@@ -416,11 +416,11 @@ t.test('a stream read back to its first block is not read again', async t => {
 });
 
 /*
- * An environment can lower the ranges a page reads, as in the hours after a
- * release in which every account reads its ranges from the node again, but
- * not raise them: a value above the default, or one that is no whole number,
- * leaves the default. An account without history, on mainnet's eight ranges
- * and Base's 70, or 250.
+ * An environment can lower the ranges a page reads, but not raise them: a
+ * value above the default, or one that is no whole number, leaves the
+ * default. Lowered, the first pages of an account without history are empty
+ * and not done until its streams are read back to their first blocks: on
+ * mainnet's eight ranges and Base's 70, or 250.
  */
 t.test('an environment can lower the ranges a page reads, and only lower them', async t => {
   const short = { 'ethereum-mainnet': MAINNET_LATEST, 'base-mainnet': FIRST['base-mainnet'] + 70 * BASE - 1 };
@@ -439,6 +439,35 @@ t.test('an environment can lower the ranges a page reads, and only lower them', 
   const raised = await walk(t, 'raised', { latest: long, items: [] }, 'limit=15', { vars: { TRANSACTION_HISTORY_RANGES_PER_PAGE: '500' } });
   t.same(raised.pages.map(page => [ page.status, page.done ]), [ [ 200, false ], [ 200, true ] ],
     `set above ${MAX_LOG_RANGES_PER_PAGE}, a page still reads no more than that`);
+});
+
+/*
+ * Mainnet's USDC market alone, while Base's stream, 31 ranges above its first
+ * block, holds nothing: a page reads no stream whose items the filter drops
+ * whole, and the node is never asked about Base. Before, a first page read
+ * Base back to its first block before it answered, within the budget it
+ * shares with mainnet: with a budget of ten ranges, which mainnet's eight fit
+ * in, three empty pages followed the first, not done while they read Base on.
+ */
+t.test('a page reads no stream the markets filter drops whole', async t => {
+  const latest = { 'ethereum-mainnet': MAINNET_LATEST, 'base-mainnet': FIRST['base-mainnet'] + 30 * BASE + 5_000_000 };
+  const items: Item[] = [
+    { network: 'ethereum-mainnet', block: 22_900_000 },
+    { network: 'ethereum-mainnet', block: 22_500_000 },
+    { network: 'ethereum-mainnet', block: 21_000_000 },
+  ];
+  const usdc = `markets[]=1_${MARKET['ethereum-mainnet']}`;
+  const askedOfBase = (asked: History['asked']) => [ ...asked.values() ].flat().filter(call => call.network === 'base-mainnet');
+
+  const paged = await walk(t, 'filtered', { latest, items }, `limit=1&${usdc}`);
+  t.same(paged.pages.map(page => page.items), [ ...items.map(item => [ hashOf(item) ]), [] ], 'the pages answer mainnet\'s items, newest first');
+  t.same(paged.pages.map(page => page.done), [ false, false, false, true ], 'and only the last is done');
+  t.same(askedOfBase(paged.asked), [], 'the node is never asked about Base');
+
+  const budget = await walk(t, 'budgeted', { latest, items }, `limit=15&${usdc}`, { vars: { TRANSACTION_HISTORY_RANGES_PER_PAGE: '10' } });
+  t.same(budget.pages.map(page => [ page.items, page.done ]), [ [ items.map(hashOf), true ] ],
+    'with a budget mainnet\'s eight ranges fit in, one page answers every item and is done');
+  t.same(askedOfBase(budget.asked), [], 'and Base takes none of the budget');
 });
 
 /*

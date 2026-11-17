@@ -9,17 +9,14 @@ import {
   TransactionHistoryIndex,
   firstBlockOf,
   precedingRangeEnd,
-  strideOf,
 } from '../../../lib/symbolic/index/transaction-history-index.js';
-
-import * as KnownNetwork from '../../../lib/well-known/networks/network.js';
 
 import type { EthGetLogs } from '../../../lib/computations/evm/eth-get-logs.js';
 import { rawTransactionHistoryItems, type RawTransactionHistoryItems } from '../../../lib/computations/account/raw-transaction-history-items.js';
 import type { RegistrySnapshotV1 } from '../../../lib/model/comet-registry.js';
 
 import { catalogOf } from '../../../src/registry/catalog.js';
-import { streamEventsOf } from '../../../src/transaction-history-handler/transaction-history-items-handler.js';
+import { streamEventsOf } from '../../../src/transaction-history-handler/streams.js';
 
 import { MemoryKv } from '../../util/kv.js';
 import { loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
@@ -29,28 +26,6 @@ import { loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
  * ranges of one stream, read from the newest down, cover its blocks.
  */
 const ACCOUNT = '0x420f253087044b8bcf028dd89f8fe83ba6275e84' as const;
-
-t.test('every mainnet has a range sized by time, and a testnet the old default', async t => {
-  const sizes: Record<string, number> = {
-    'ethereum-mainnet': 1_000_000,
-    'polygon-mainnet':  2_000_000,
-    'arbitrum-mainnet': 10_000_000,
-    'optimism-mainnet': 1_000_000,
-    'base-mainnet':     10_000_000,
-    'mantle-mainnet':   1_000_000,
-    'ronin-mainnet':    1_000_000,
-    'unichain-mainnet': 2_000_000,
-    'linea-mainnet':    250_000,
-    'scroll-mainnet':   250_000,
-  };
-  const names = KnownNetwork.getNames({ includeTestnets: true });
-  t.same(names.filter(name => !KnownNetwork.isNameOfTestnet(name)).sort(), Object.keys(sizes).sort(),
-    'the mainnets are the networks sized here');
-  for (const network of names) {
-    const size = KnownNetwork.isNameOfTestnet(network) ? 50_000 : sizes[network];
-    t.equal(strideOf(network), size, `${network}: ${size} blocks`);
-  }
-});
 
 /*
  * The fixture with Base's AERO market reading history too: mainnet's stream,
@@ -149,9 +124,9 @@ for (const [ network, latest, what ] of [
  * cached in one size is never read as a range of another.
  */
 t.test('a range is cached under its size as well as its end block', async t => {
-  const { context } = streamOf('base-mainnet');
+  const { stream, context } = streamOf('base-mainnet');
   const name = Compute.versionedName('rawTransactionHistoryItems', rawTransactionHistoryItems.version);
-  t.match(await rawTransactionHistoryItems.key(name, context(20_852_405 + 30_000_000)), /;stride:10000000[;)]/, 'the key names the size');
+  t.match(await rawTransactionHistoryItems.key(name, context(20_852_405 + 30_000_000)), new RegExp(`;stride:${stream.stride}[;)]`), 'the key names the size');
 });
 
 t.test('a stream younger than one range is read in one range, from its first block to the latest', async t => {

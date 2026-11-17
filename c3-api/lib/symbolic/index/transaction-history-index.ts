@@ -43,24 +43,33 @@ function firstBlockOf({ marketContracts, rewardsContract }: {
  *
  * Mantle, Ronin, Unichain, Linea and Scroll serve no history yet. Their node
  * reads at most 10,000 blocks a call, so they need ranges split, or another
- * source, before they do: every first page reads every stream, so one whose
- * ranges the node refuses fails the history of every account.
+ * source, before they do: a first page without `markets[]` reads every
+ * stream, so one whose ranges the node refuses fails the history of every
+ * account.
  */
+const STRIDES: { [N in KnownNetwork.Name]: number } = {
+  'ethereum-mainnet': 1_000_000,  // 12 s: about 20 weeks
+  'polygon-mainnet':  2_000_000,  // 1.5 s: about 5 weeks
+  'arbitrum-mainnet': 10_000_000, // 0.28 s: about 5 weeks
+  'optimism-mainnet': 1_000_000,  // 2 s: about 23 days
+  'base-mainnet':     10_000_000, // 0.2 s since 2026-11-05: about 23 days (231 at the 2 s before)
+  'mantle-mainnet':   1_000_000,  // 2 s: about 23 days
+  'ronin-mainnet':    1_000_000,  // 2 s: about 23 days
+  'unichain-mainnet': 2_000_000,  // 1 s: about 23 days
+  'linea-mainnet':    250_000,    // 8.5 to 9.3 s: about 25 days
+  'scroll-mainnet':   250_000,    // 7.7 to 8.1 s: about 23 days
+  // testnets, whose history is never served
+  'ethereum-sepolia': 50_000,
+  'polygon-mumbai':   50_000,
+  'arbitrum-goerli':  50_000,
+  'optimism-goerli':  50_000,
+  'base-goerli':      50_000,
+  'base-sepolia':     50_000,
+  'linea-goerli':     50_000,
+};
+
 function strideOf(network: KnownNetwork.Name): number {
-  switch (network) {
-    case 'ethereum-mainnet': return 1_000_000;  // 12 s: about 20 weeks
-    case 'polygon-mainnet':  return 2_000_000;  // 1.5 s: about 5 weeks
-    case 'arbitrum-mainnet': return 10_000_000; // 0.28 s: about 5 weeks
-    case 'optimism-mainnet': return 1_000_000;  // 2 s: about 23 days
-    case 'base-mainnet':     return 10_000_000; // 0.2 s since 2026-11-05: about 23 days (231 at the 2 s before)
-    case 'mantle-mainnet':   return 1_000_000;  // 2 s: about 23 days
-    case 'ronin-mainnet':    return 1_000_000;  // 2 s: about 23 days
-    case 'unichain-mainnet': return 2_000_000;  // 1 s: about 23 days
-    case 'linea-mainnet':    return 250_000;    // 8.5 to 9.3 s: about 25 days
-    case 'scroll-mainnet':   return 250_000;    // 7.7 to 8.1 s: about 23 days
-    // testnets, whose history is never served
-    default: return 50_000;
-  }
+  return STRIDES[network];
 }
 
 type TransactionHistoryContext = {
@@ -80,8 +89,8 @@ const TransactionHistoryIndex = Index.BlockNumberRange<TransactionHistoryContext
 /*
  * The block the range below the one that ends at `blockNumber` ends at, or
  * null when the range that ends there is the oldest, which starts at the
- * first block (rawTransactionHistoryItems): read from the newest range down,
- * a history is read to its first block once this is null.
+ * first block (rangeStartOf): read from the newest range down, a history is
+ * read to its first block once this is null.
  */
 function precedingRangeEnd(context: TransactionHistoryContext): Eth.BlockNumber | null {
   const preceding = TransactionHistoryIndex.preceding(context);
@@ -90,4 +99,15 @@ function precedingRangeEnd(context: TransactionHistoryContext): Eth.BlockNumber 
     : preceding.blockNumber;
 }
 
-export { TransactionHistoryIndex, firstBlockOf, precedingRangeEnd, strideOf };
+/*
+ * The block the range that ends at `blockNumber` starts at: the block after
+ * the end of the range below it, so the block a range ends at is read by
+ * that range alone, and an item there is answered once. The oldest range
+ * starts at the first block itself, which no range below it reads.
+ */
+function rangeStartOf(context: TransactionHistoryContext): Eth.BlockNumber {
+  const below = precedingRangeEnd(context);
+  return below === null ? firstBlockOf(context) : below + 1;
+}
+
+export { TransactionHistoryIndex, firstBlockOf, precedingRangeEnd, rangeStartOf, strideOf };

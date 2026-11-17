@@ -37,7 +37,7 @@ import type { MarketRouteData } from '../../../src/router.js';
 import {
   streamEventsOf,
   streamKeyOf,
-} from '../../../src/transaction-history-handler/transaction-history-items-handler.js';
+} from '../../../src/transaction-history-handler/streams.js';
 
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
 import { fakeNode } from '../../util/fake-node.js';

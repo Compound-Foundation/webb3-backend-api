@@ -1,11 +1,10 @@
 import * as Eth from '../../eth-constants.js';
 import { BigFixnum } from '../../bigfixnum.js';
-import * as Fallible from '../../fallible/fallible.js';
 
 import * as Index from '../../symbolic/index.js';
 import * as Compute from '../../symbolic/computation.js';
 import * as Key from '../../symbolic/key.js';
-import { firstBlockOf, strideOf } from '../../symbolic/index/transaction-history-index.js';
+import { rangeStartOf, strideOf } from '../../symbolic/index/transaction-history-index.js';
 
 import * as cometModel from '../../model/comet.js';
 import * as cometRewardsModel from '../../model/comet-rewards.js';
@@ -343,23 +342,7 @@ const rawTransactionHistoryItems = implement({
     catalog,
   }) {
     const contracts: Contract[] = [...marketContracts, rewardsContract];
-    const firstBlock = firstBlockOf({ marketContracts, rewardsContract });
-    const precedingResult = Index.TransactionHistoryIndex.preceding({
-      network,
-      blockNumber,
-      accountAddress,
-      marketContracts,
-      rewardsContract,
-    });
-    /*
-     * A range runs from the block after the point below it up to the block it
-     * ends at, so the block a range ends at is read by that range alone, and
-     * an item there is answered once. The oldest range starts at the first
-     * block itself, which no range below it reads.
-     */
-    const fromBlock = Fallible.isFailure(precedingResult) || precedingResult.blockNumber === firstBlock
-      ? firstBlock
-      : precedingResult.blockNumber + 1;
+    const fromBlock = rangeStartOf({ accountAddress, network, blockNumber, marketContracts, rewardsContract });
 
     return join([
       [
