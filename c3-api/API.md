@@ -903,7 +903,8 @@ A value that is not a cursor this API handed out is a `400` with the text
 A page reads a bounded number of ranges of blocks and enriches a bounded
 number of items, so it can hold fewer items than `limit`, or none, while
 `done` is `false`: ask again with its `cursor` until `done` is `true`. Only
-then has the history of every market been read back to its creation block.
+then has the history of every market `markets[]` keeps been read back to its
+creation block.
 Items come newest first across networks. When a page spends its budget before
 every network has been read back to its next item, the items it has read are
 answered first, and a later page can hold an item newer than some that were

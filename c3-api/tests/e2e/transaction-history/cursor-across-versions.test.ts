@@ -238,6 +238,39 @@ t.test('a cursor whose streams name no first block is ended', async t => {
 });
 
 /*
+ * A cursor kept before every stream named whether it had ended leaves that
+ * out of a stream it has not ended. It goes on as the cursor that says so
+ * does: the next page answers the same, and hands out the same cursor.
+ */
+t.test('a cursor that leaves out whether its stream has ended goes on as one that says it has not', async t => {
+  const fixture  = loadRegistrySnapshotFixture();
+  const registry = await activeRegistryDatabase({ snapshot: fixture });
+  t.teardown(() => registry.dispose());
+  const env = makeTestEnv({ MEMORY_CACHE_SEED: 'cursor-across-versions', APP_DB: registry.db });
+
+  const cursor = await twoPages(t, env);
+  const kept   = await env.kv_mainnet.get(cursor, 'json') as { cursors: Record<string, { ended?: boolean }> };
+  t.same(Object.values(kept.cursors).map(stream => stream.ended), [ false ], 'a cursor says its stream has not ended');
+
+  // the same position, as a cursor was kept before
+  const before = createHash('sha256').update('a cursor kept before streams named whether they had ended').digest('hex');
+  await env.kv_mainnet.put(before, JSON.stringify({
+    ...kept,
+    cursors: Object.fromEntries(Object.entries(kept.cursors).map(([ id, { ended: _ended, ...stream } ]) => [ id, stream ])),
+  }));
+
+  type Answer = { done: boolean, cursor: string, items: Array<{ transaction_hash: string }> };
+  const says   = await page(env, cursor);
+  const leaves = await page(env, before);
+  t.same([ says.status, leaves.status ], [ 200, 200 ], 'both go on');
+  const said = await says.json() as Answer;
+  const left = await leaves.json() as Answer;
+  t.same(left.items.map(item => item.transaction_hash), [ transactionIn(15_500_000) ],
+    'the one that leaves it out answers the transaction after the last one it answered');
+  t.same(left, said, 'as the one that says it has not ended does, down to the cursor it hands out');
+});
+
+/*
  * A cursor holds its place as the block that ends a range, and a range's end
  * is one only in ranges of the size the cursor was read in. A cursor kept
  * before its streams named that size, read in ranges of 50,000 blocks, or one

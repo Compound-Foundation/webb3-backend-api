@@ -9,7 +9,7 @@ import { BigFixnum } from '../../lib/bigfixnum.js';
 import * as KnownNetwork  from '../../lib/well-known/networks/network.js';
 
 import { ApiError } from '../http/errors.js';
-import type { Catalog } from '../registry/catalog.js';
+import { numberOf } from '../registry/config.js';
 import { refuseTestnet } from '../testnets.js';
 
 import * as governanceModel from '../../lib/model/governance.js';
@@ -29,7 +29,7 @@ import {
   formatTransactionHistoryResponse,
 } from '../../lib/model/transaction-history/history.js';
 
-import { firstBlockOf, precedingRangeEnd, strideOf } from '../../lib/symbolic/index/transaction-history-index.js';
+import { precedingRangeEnd } from '../../lib/symbolic/index/transaction-history-index.js';
 import * as Evaluator     from '../../lib/symbolic/evaluator.js';
 import { WorkersKvCache } from '../../lib/symbolic/cache.js';
 
@@ -41,6 +41,8 @@ import * as defisaver from '../../lib/computations/defisaver.js';
 import { Env } from '../../entrypoint.js';
 
 import type { TransactionHistoryRouteData } from '../router.js';
+
+import { contractsOf, filterCanKeepItemsOf, readsSameStreams, streamEventsOf, streamKeyOf, type StreamEvent } from './streams.js';
 
 // Default max items setting for transaction history query
 const MAX_ITEMS_LIMIT = 15;
@@ -57,15 +59,17 @@ const PARALLEL_BATCH_SIZE = 10;
 
 /*
  * The ranges of logs one page loads, across its streams, whether KV holds
- * them or the node is asked for them. A stream is read on toward its next
- * item however long it has been quiet, so a quiet history costs ranges, not
- * items, and this is what bounds them. A range costs at most one KV read, two
- * calls to the node and one KV write, so a page stays inside the KV
- * operations an invocation may make, with its enrichment beside it (README,
- * "Workers Plan"). It also covers every stream served in November 2026 read
- * back to its first block, about 130 to 145 ranges, which grow by about 60 a
- * year: the first page of an account without history is done. An environment
- * may lower it (rangesPerPageOf).
+ * them or the node is asked for them: the first range of each stream it reads
+ * whatever the budget, and more only while it has loaded fewer than this. A
+ * stream is read on toward its next item however long it has been quiet, so
+ * a quiet history costs ranges, not items, and this is what bounds them. A
+ * range costs at most one KV read, two calls to the node and one KV write, so
+ * a page stays inside the KV operations an invocation may make, with its
+ * enrichment beside it (README, "Workers Plan"). It also covers every stream
+ * served in November 2026 read back to its first block, about 130 to 145
+ * ranges, which grow by about 60 a year: until about the end of 2027, the
+ * first page of an account without history is done. An environment may lower
+ * it (rangesPerPageOf).
  */
 const MAX_LOG_RANGES_PER_PAGE = 200;
 
@@ -73,21 +77,19 @@ const MAX_LOG_RANGES_PER_PAGE = 200;
  * The ranges a page loads as an environment sets them, in
  * TRANSACTION_HISTORY_RANGES_PER_PAGE: a whole number from 1 to
  * MAX_LOG_RANGES_PER_PAGE, which it is when unset or blank, and when set to
- * anything else, which is logged. An environment can lower the budget, as in
- * the hours after a release when every account reads its ranges from the
- * node again, but not raise it past what KV allows an invocation.
+ * anything else, which is logged. An environment can lower the budget, not
+ * raise it past what KV allows an invocation. A page whose streams reach
+ * neither an item nor their first blocks within it answers nothing and is
+ * not done, as every first page of an account without history does without
+ * `markets[]` below what MAX_LOG_RANGES_PER_PAGE covers, even once KV holds
+ * its ranges: they count as well.
  */
 function rangesPerPageOf(value: unknown, debug: Debug.Logger): number {
-  const text = value === undefined || value === null ? '' : String(value).trim();
-  if (text.length === 0) {
-    return MAX_LOG_RANGES_PER_PAGE;
+  const ranges = numberOf(value, { minimum: 1, maximum: MAX_LOG_RANGES_PER_PAGE });
+  if (ranges === null) {
+    debug.warn(`TRANSACTION_HISTORY_RANGES_PER_PAGE takes a whole number from 1 to ${MAX_LOG_RANGES_PER_PAGE}, not ${String(value).trim()}: a page reads ${MAX_LOG_RANGES_PER_PAGE} ranges`);
   }
-  const parsed = /^[0-9]+$/.test(text) ? Number(text) : NaN;
-  if (Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= MAX_LOG_RANGES_PER_PAGE) {
-    return parsed;
-  }
-  debug.warn(`TRANSACTION_HISTORY_RANGES_PER_PAGE takes a whole number from 1 to ${MAX_LOG_RANGES_PER_PAGE}, not ${text}: a page reads ${MAX_LOG_RANGES_PER_PAGE} ranges`);
-  return MAX_LOG_RANGES_PER_PAGE;
+  return ranges ?? MAX_LOG_RANGES_PER_PAGE;
 }
 
 // A range of a stream's logs as it loads: the block it ends at, which a cursor keeps, and its items
@@ -96,53 +98,14 @@ type LoadingRange = { end: Eth.BlockNumber, rawItems: Promise<RawTransactionHist
 // An item of a stream, with the block that ends the range it was read in
 type InRange<Item> = { rangeEnd: Eth.BlockNumber, item: Item };
 
-/*
- * One log stream: the markets whose events are read together, and the rewards
- * contract whose claim events belong with them. Markets are grouped by their
- * rewards contract, because a stream is read as one range of logs and the
- * rewards contract is part of that range.
- */
-type StreamEvent = {
-  network: KnownNetwork.Name; // Will change to chain-id later
-  marketContractAddresses: Eth.Address[];
-  rewardsContractAddress: Eth.Address;
-  /*
-   * The block the stream's ranges of logs are counted from (firstBlockOf): a
-   * block a cursor keeps for the stream ends one of its ranges only as
-   * counted from this one.
-   */
-  firstBlock: Eth.BlockNumber;
-  /*
-   * The blocks each of the stream's ranges spans (strideOf): the same block
-   * ends another range in ranges of another size.
-   */
-  stride: number;
-};
-
-function streamKeyOf({ network, rewardsContractAddress }: Pick<StreamEvent, 'network' | 'rewardsContractAddress'>): string {
-  return `${network}|${rewardsContractAddress.toLowerCase()}`;
-}
-
-/*
- * The streams a cursor reads, as one value two lists of streams can be
- * compared by: each stream with the block its ranges are counted from, the
- * size of its ranges and every market it reads, in no particular order.
- */
-function streamsOf(streams: StreamEvent[]): string {
-  return streams
-    .map(stream => `${streamKeyOf(stream)}@${stream.firstBlock}/${stream.stride}:${stream.marketContractAddresses.map(address => address.toLowerCase()).sort().join(',')}`)
-    .sort()
-    .join(';');
-}
-
 interface Cursor {
   network: KnownNetwork.Name;
   blockNumber: number;
   marketContractAddresses: Eth.Address[];
   rewardsContractAddress: Eth.Address;
   transactionHash: Eth.TransactionHash;
-  // the stream is read back to its first block, so no page reads it again
-  ended?: boolean;
+  // no page reads the stream again: it is read back to its first block, or the filter drops its items whole
+  ended: boolean;
 };
 
 type CursorPayload = {
@@ -174,9 +137,11 @@ type CursorPayload = {
  * carries no version, can still be sent, and so can one kept before its
  * streams named their first blocks, or the size of their ranges.
  */
-type StoredCursor = Omit<CursorPayload, 'registryVersionId' | 'streamEvents'> & {
+type StoredCursor = Omit<CursorPayload, 'registryVersionId' | 'streamEvents' | 'cursors'> & {
   registryVersionId?: string;
   streamEvents: Array<Omit<StreamEvent, 'firstBlock' | 'stride'> & { firstBlock?: Eth.BlockNumber, stride?: number }>;
+  // a cursor kept before every stream named whether it had ended leaves `ended` out of one that had not
+  cursors: { [key: string]: Omit<Cursor, 'ended'> & { ended?: boolean } };
 };
 
 function namesRanges(payload: StoredCursor): payload is StoredCursor & { streamEvents: StreamEvent[] } {
@@ -223,69 +188,6 @@ function Api({ env, debug, flags = {} }: Context) {
   });
 }
 
-/*
- * The log streams of one registry version.
- *
- * A market is readable here when the version says its transaction history is
- * served, and markets that share a rewards contract are read as one stream.
- * Before the registry this list was written out by hand, which meant a market
- * missing from it had no reachable history at all — indistinguishable from a
- * market with no activity — while the `markets[]` query parameter could only
- * filter what these streams had already fetched.
- */
-function streamEventsOf(catalog: Catalog): StreamEvent[] {
-  const streams = new Map<string, Omit<StreamEvent, 'firstBlock' | 'stride'>>();
-
-  for (const entry of catalog.markets()) {
-    const comet   = entry.market.contracts.comet;
-    const rewards = entry.market.contracts.rewards;
-    if (!entry.market.capabilities.transactionHistory || rewards === null) {
-      continue;
-    }
-    const stream = { network: entry.network, marketContractAddresses: [ comet ], rewardsContractAddress: rewards };
-    const key    = streamKeyOf(stream);
-    const known  = streams.get(key);
-    if (known === undefined) {
-      streams.set(key, stream);
-    } else {
-      known.marketContractAddresses.push(comet);
-    }
-  }
-
-  // the first block as the reads count it, from the contracts they read, and the size of the ranges they read
-  return [ ...streams.values() ].map(stream => ({
-    ...stream,
-    firstBlock: firstBlockOf(contractsOf(catalog, stream)),
-    stride:     strideOf(stream.network),
-  }));
-}
-
-/*
- * The contracts of a stream, as the pinned version materializes them. Every
- * address in a stream came from this same catalog, so a market that the
- * version does not describe cannot appear here.
- */
-function contractsOf(catalog: Catalog, stream: Omit<StreamEvent, 'firstBlock' | 'stride'>): {
-  marketContracts: Eth.Contract[],
-  rewardsContract: Eth.Contract,
-} {
-  const markets = stream.marketContractAddresses
-    .map(address => catalog.marketAt(stream.network, address))
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== null);
-  if (markets.length === 0) {
-    throw new Error(`stream ${streamKeyOf(stream)} has no market in the active registry`);
-  }
-  // every market of a stream shares one rewards contract, by construction
-  const rewards = markets[0]!.comet.rewards;
-  if (rewards === undefined) {
-    throw new Error(`invariant violated: stream ${streamKeyOf(stream)} reads a market without its rewards contract`);
-  }
-  return {
-    marketContracts: markets.map(entry => entry.comet),
-    rewardsContract: rewards.contract,
-  };
-}
-
 function GetAllMigratorsAddresses(): Eth.Address[] {
   const migrators: Eth.Address[] = [];
   migrators.push(Eth.wellKnownContractsByNetwork['ethereum-mainnet']['CompoundMigrator']['V1'].address);
@@ -298,15 +200,6 @@ function getDefiSaverProxyRegistryContract(): { [key: string]: Eth.Contract }{
   const proxyRegistryContract: { [key: string]: Eth.Contract } = {};
   proxyRegistryContract['ethereum-mainnet'] = Eth.wellKnownContractsByNetwork['ethereum-mainnet']['DFSProxyRegistry']['default'];
   return proxyRegistryContract;
-}
-
-/*
- * Whether a cursor's positions still mean what they meant against the
- * streams a version reads: the version reads the same streams, and counts
- * their ranges from the same blocks, in ranges of the same size.
- */
-function readsSameStreams(payload: Pick<CursorPayload, 'streamEvents'>, streams: StreamEvent[]): boolean {
-  return streamsOf(payload.streamEvents) === streamsOf(streams);
 }
 
 // Filter to apply before history items get enriched, if filter it before we can save some API calls in enrichment
@@ -412,31 +305,6 @@ async function getTransactionHistory(
     }
   }
 
-  async function getRawTransactionHistoryItems(
-    accountAddress: Eth.Address,
-    proxyAddresses: Eth.Address[],
-    startBlockNumber: Eth.BlockNumber,
-    network: KnownNetwork.Name,
-    marketContracts: Eth.Contract[],
-    rewardsContract: Eth.Contract,
-  ) {
-    return evaluate(pull1(
-      {
-        rawTransactionHistoryItems: {
-          apiHost,
-          nodeHost,
-          nodeKey,
-          accountAddress,
-          proxyAddresses,
-          network,
-          marketContracts,
-          rewardsContract,
-          catalog,
-          blockNumber: startBlockNumber,
-        }
-      }));
-  }
-
   async function enrichRawTransactionHistoryItem(
     accountAddress: Eth.Address,
     network: KnownNetwork.Name,
@@ -501,14 +369,20 @@ async function getTransactionHistory(
     // The items of the range of a stream that ends at a block
     function loadRange(stream: StreamEvent, end: Eth.BlockNumber): Promise<RawTransactionHistoryItem[]> {
       const { marketContracts, rewardsContract } = streamContracts.get(streamKeyOf(stream))!;
-      return defiSaverProxies[stream.network].then(proxies => getRawTransactionHistoryItems(
-        accountAddress,
-        [ ...proxies ],
-        end,
-        stream.network,
-        marketContracts,
-        rewardsContract,
-      ));
+      return defiSaverProxies[stream.network].then(proxies => evaluate(pull1({
+        rawTransactionHistoryItems: {
+          apiHost,
+          nodeHost,
+          nodeKey,
+          accountAddress,
+          proxyAddresses: [ ...proxies ],
+          network: stream.network,
+          marketContracts,
+          rewardsContract,
+          catalog,
+          blockNumber: end,
+        },
+      })));
     }
 
     // The block the range below the one that ends at a block ends at, or null below the stream's oldest range
@@ -537,14 +411,24 @@ async function getTransactionHistory(
       }
     }
 
-    // Whether a stream is read back to its first block, with nothing of it left to answer
+    // Whether a stream holds an item it has read but not answered
+    function holds(streamId: string): boolean {
+      return false
+        || immediateEnrichedItem[streamId] !== undefined
+        || rawItemsQueue[streamId].length > 0
+        || enrichingBatch[streamId].length > 0;
+    }
+
+    // Whether a stream has nothing left to read or to answer
     function ended(streamId: string): boolean {
-      return true
-        && immediateEnrichedItem[streamId] === undefined
-        && rawItemsQueue[streamId].length === 0
-        && enrichingBatch[streamId].length === 0
-        && rawItemsLoadingBatch[streamId].length === 0
-        && nextRangeEnd[streamId] === null;
+      return !holds(streamId) && rawItemsLoadingBatch[streamId].length === 0 && nextRangeEnd[streamId] === null;
+    }
+
+    // Moves a stream's position to the range that ends at a block, before any of its items, unless it is in that range already
+    function moveTo(streamId: string, end: Eth.BlockNumber): void {
+      if (end !== cursors[streamId].blockNumber) {
+        cursors[streamId] = { ...cursors[streamId], blockNumber: end, transactionHash: '0x0' };
+      }
     }
 
     // Whether a stream can still read on toward its next item within the page's budgets
@@ -569,8 +453,8 @@ async function getTransactionHistory(
       rawItemsQueue[streamId] = [];
       enrichingBatch[streamId] = [];
       nextRangeEnd[streamId] = null;
-      // a stream an earlier page read back to its first block has nothing left to read
-      if (cursor.ended === true) {
+      // a stream read back to its first block has nothing left to read, and one whose items the filter drops whole nothing to answer
+      if (cursor.ended || !filterCanKeepItemsOf(networks, contractAddresses, stream)) {
         continue;
       }
 
@@ -635,7 +519,6 @@ async function getTransactionHistory(
           && !reachedEnd
           && enrichedItemCount <= MAX_ENRICH_TRANSACTION_HISTORY_ITEMS
         ) {
-          // Fill/Refill the PARALLEL_BATCH_SIZE ranges, to load their raw items in parallel
           loadRanges(stream);
 
           // If rawItemsQueue is empty, load more raw items
@@ -653,7 +536,6 @@ async function getTransactionHistory(
           }
 
           // Fill/Refill up to PARALLEL_BATCH_SIZE items into enrichingBatch to process in parallel
-          // Keep moving items from raw queue until the batch is filled back to BATCH_SIZE or raw queue is empty
           while (enrichingBatch[streamId].length < PARALLEL_BATCH_SIZE && rawItemsQueue[streamId].length > 0) {
             const { rangeEnd, item: rawItem } = rawItemsQueue[streamId].pop()!;
             if (filterRawTransactionHistoryItem(networks, contractAddresses, rawItem)) {
@@ -674,13 +556,7 @@ async function getTransactionHistory(
              * to that range, before any of its items: every range above it
              * was answered or filtered out to its last item.
              */
-            if (enriching.rangeEnd !== cursors[streamId].blockNumber) {
-              cursors[streamId] = {
-                ...cursors[streamId],
-                blockNumber: enriching.rangeEnd,
-                transactionHash: '0x0',
-              };
-            }
+            moveTo(streamId, enriching.rangeEnd);
             if (filterTransactionHistoryItem(accountAddress, actions, initiatedBy, enrichedItem)) {
               immediateEnrichedItem[streamId] = enrichedItem;
             } else {
@@ -701,10 +577,7 @@ async function getTransactionHistory(
        * page's budget is spent, the streams that hold an item answer it, and
        * a stream cut short goes on from where it stopped on the next page.
        */
-      if (streamEvents.some((stream) => {
-        const streamId = streamKeyOf(stream);
-        return immediateEnrichedItem[streamId] === undefined && !ended(streamId) && canProgress(streamId);
-      })) {
+      if (streamEvents.map(streamKeyOf).some(streamId => immediateEnrichedItem[streamId] === undefined && canProgress(streamId))) {
         continue;
       }
 
@@ -741,36 +614,25 @@ async function getTransactionHistory(
     }
 
     /*
-     * Where each stream goes on from. One read back to its first block is
-     * ended. One that holds nothing it has read but not answered goes on from
-     * the first range it has not taken: every range it took was answered or
-     * filtered out to its last item, or held nothing, and the next page need
-     * not read them again.
+     * Where each stream that holds nothing it has read but not answered goes
+     * on from: the first range it has not taken, or nowhere, once it has none
+     * left. Every range it took was answered or filtered out to its last item,
+     * or held nothing, and the next page need not read them again.
      */
     for (const stream of streamEvents) {
       const streamId = streamKeyOf(stream);
-      if (ended(streamId)) {
-        cursors[streamId] = {
-          ...cursors[streamId],
-          ended: true,
-        };
-      } else if (true
-        && immediateEnrichedItem[streamId] === undefined
-        && rawItemsQueue[streamId].length === 0
-        && enrichingBatch[streamId].length === 0
-      ) {
-        const next = rawItemsLoadingBatch[streamId][0]?.end ?? nextRangeEnd[streamId];
-        if (next !== null && next !== cursors[streamId].blockNumber) {
-          cursors[streamId] = {
-            ...cursors[streamId],
-            blockNumber: next,
-            transactionHash: '0x0',
-          };
-        }
+      if (holds(streamId)) {
+        continue;
+      }
+      const next = rawItemsLoadingBatch[streamId][0]?.end ?? nextRangeEnd[streamId];
+      if (next === null) {
+        cursors[streamId] = { ...cursors[streamId], ended: true };
+      } else {
+        moveTo(streamId, next);
       }
     }
 
-    // The history is done only once every stream is read back to its first block
+    // The history is done only once every stream it can answer from is read back to its first block
     const done = streamEvents.every(stream => ended(streamKeyOf(stream)));
 
     // Upsert cursor info before return
@@ -883,9 +745,10 @@ async function getTransactionHistory(
   const catalog = await registry.load();
 
   /*
-   * The streams this version serves. A `markets[]` filter narrows which items
-   * are kept, not which streams are read: a market is only addressable when
-   * the active version describes it and says its history is served.
+   * The streams this version serves, which a cursor holds a position in
+   * whatever `markets[]` keeps, while a page reads only those it can keep an
+   * item of (filterCanKeepItemsOf). A market is only addressable when the
+   * active version describes it and says its history is served.
    */
   const streamEvents = streamEventsOf(catalog);
 
@@ -936,7 +799,8 @@ async function getTransactionHistory(
         },
       );
     }
-    resumed = { ...storedPayload, registryVersionId: catalog.versionId };
+    const cursors = Object.entries(storedPayload.cursors).map(([ id, kept ]): [ string, Cursor ] => [ id, { ...kept, ended: kept.ended === true } ]);
+    resumed = { ...storedPayload, registryVersionId: catalog.versionId, cursors: Object.fromEntries(cursors) };
   }
 
   const contractAddresses: string[] = [];
@@ -1008,9 +872,12 @@ async function getTransactionHistory(
         rewardsContractAddress: m.rewardsContractAddress,
         transactionHash: '0x0',
         blockNumber: 0,
+        ended: false,
       };
-      // one latest block per network, however many streams it has
-      latestBlocks[m.network] ??= evaluate(pull1({ ethGetBlock: { apiHost, nodeHost, nodeKey, blockReference: 'latest', network: m.network } }));
+      // one latest block per network the page reads a stream of, however many streams it has
+      if (filterCanKeepItemsOf(networks, contractAddresses, m)) {
+        latestBlocks[m.network] ??= evaluate(pull1({ ethGetBlock: { apiHost, nodeHost, nodeKey, blockReference: 'latest', network: m.network } }));
+      }
     });
 
     const [ transactionHistoryResponse, defiSaverProxies ] = await (
@@ -1088,12 +955,9 @@ export type {
   Context,
   CursorPayload,
   Dependencies,
-  StreamEvent,
 };
 
 export {
   MAX_LOG_RANGES_PER_PAGE,
   getTransactionHistory,
-  streamEventsOf,
-  streamKeyOf,
 };
