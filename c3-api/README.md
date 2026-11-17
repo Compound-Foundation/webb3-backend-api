@@ -175,20 +175,29 @@ section changes them for one Worker, for example to a million subrequests
 and 60 seconds of CPU an invocation.
 
 A page of an account's transaction history reads at most 200 ranges of logs
-across its markets, whether KV holds them or not, and
-`TRANSACTION_HISTORY_RANGES_PER_PAGE` lowers that for one Worker. A range
+across its markets, whether KV holds them or not.
+`TRANSACTION_HISTORY_RANGES_PER_PAGE` lowers that for one Worker, but a page
+reads one range of each group of markets it reads whatever it is set to:
+markets that share a rewards contract are read together. A range
 costs at most one KV read, two calls to the proxy and one KV write. An item
 the page enriches costs at most a KV read and a KV write, a call for its
 block, and two calls for each supply, withdrawal or absorbed debt in it. A
 page enriches at most 51 items, with up to ten more in flight for each
 rewards contract it reads, so it makes at most about 650 KV operations, and
 its calls keep it far inside 10,000 subrequests. Cloudflare's KV limits page
-allows an invocation 1,000 KV operations on either plan, fewer than its
-Workers limits page gives the Paid plan; the budget keeps a page under the
-lower figure. A first page, whatever its `limit`, reads every market whose
-history is quiet down to its creation block, which costs a KV read for each
-range KV holds: about 130 to 145 ranges for an account without history, with
-the markets served in November 2026.
+allows an invocation, on either plan, "up to 1,000 operations to external
+services (for example, 500 Workers KV reads and 500 R2 reads)", fewer than
+the 10,000 subrequests its Workers limits page gives the Paid plan; the
+budget keeps a page under the lower figure. A first page, whatever its
+`limit`, reads every market whose history is quiet down to its creation
+block, which costs a KV read for each range KV holds: about 130 to 145 ranges
+for an account without history, with the markets served in November 2026.
+With `markets[]`, a page reads only the markets read together with one it
+names. Lowered below what a first page needs to reach an item, or, for an
+account without history, to read its markets down to their creation blocks,
+the budget leaves the page empty and not `done`, and since the ranges KV
+holds count as well, first pages stay so for as long as the budget is that
+low.
 
 # The Comet Market Registry
 

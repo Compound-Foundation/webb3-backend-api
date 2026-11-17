@@ -10,7 +10,7 @@ import * as Eth from '../../../lib/eth-constants.js';
 import type { RegistrySnapshotV1 } from '../../../lib/model/comet-registry.js';
 import type * as KnownNetwork from '../../../lib/well-known/networks/network.js';
 
-import { streamEventsOf } from '../../../src/transaction-history-handler/transaction-history-items-handler.js';
+import { streamEventsOf } from '../../../src/transaction-history-handler/streams.js';
 
 import { MemoryKv, refusingKv } from '../../util/kv.js';
 import * as mock from '../../util/mock/mock.js';

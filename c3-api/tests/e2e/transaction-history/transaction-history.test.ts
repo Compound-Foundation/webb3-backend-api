@@ -204,21 +204,22 @@ t.test(`transaction history`, async t => {
    * All mocked fetch expectations must be satisfied after each test.
    */
   t.afterEach((t) => fetch.satisfy(t));
-  t.beforeEach(async () => {
-    /*
-     * Mock Tally API governance profiles response from a dump file.
-     */
-    /*
-     * Mock 1 'latest' block request per supported mainnet.
-     */
-    for (const network of historyNetworks) {
+
+  /*
+   * Mock 1 'latest' block request per network a first page reads: each one
+   * the version serves history for, or with `markets[]` those of the markets
+   * it names.
+   */
+  function expectLatestBlocks(networks: Mainnets[]): void {
+    for (const network of networks) {
       mock.rpc.expectPost(fetch, Eth.nodeEndpoint(testEnv.NODE_PROXY_HOST, testEnv.NODE_PROXY_KEY, network),
         mock.rpc.ethGetBlock(testBlocks[network], { reference: 'latest' })
       );
     }
-  });
+  }
 
   t.test('Test on Account#1 0x420f253087044b8BCf028dd89F8fe83Ba6275E84', async t => {
+    expectLatestBlocks(historyNetworks);
     const accountAddress = '0x420f253087044b8BCf028dd89F8fe83Ba6275E84';
     const limit = 15;
     // All mainnet USDC, WETH markets, and polygon USDC market
@@ -284,6 +285,7 @@ t.test(`transaction history`, async t => {
   });
 
   t.test('Test on Account#2 0x49707808908f0C2450B3F2672E012eDBf49eD808', async t => {
+    expectLatestBlocks([ 'ethereum-mainnet' ]);
     const accountAddress = '0x49707808908f0C2450B3F2672E012eDBf49eD808';
     const limit = 15;
     // All market only WETH and USDC on mainnet
@@ -346,6 +348,7 @@ t.test(`transaction history`, async t => {
   });
 
   t.test('Test on Account#1 0x420f253087044b8BCf028dd89F8fe83Ba6275E84 with market filter', async t => {
+    expectLatestBlocks([ 'ethereum-mainnet' ]);
     const accountAddress = '0x420f253087044b8BCf028dd89F8fe83Ba6275E84';
     const limit = 15;
     // All mainnet USDC, WETH markets, and polygon USDC market
@@ -371,6 +374,7 @@ t.test(`transaction history`, async t => {
   });
 
   t.test('Test on Account#3 0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5 with action filter', async t => {
+    expectLatestBlocks(historyNetworks);
     const accountAddress = '0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5';
     const limit = 15;
     const actions = 'borrow';
@@ -393,6 +397,7 @@ t.test(`transaction history`, async t => {
   });
 
   t.test('Test on Account#4 0x11b50686d3983C14C0d0972a5e46e38e0D9B2E14', async t => {
+    expectLatestBlocks([ 'ethereum-mainnet' ]);
     const accountAddress = '0x11b50686d3983C14C0d0972a5e46e38e0D9B2E14';
     const limit = 15;
     const markets = '1_0xc3d688B66703497DAA19211EEdff47f25384cdc3';
@@ -441,6 +446,7 @@ t.test(`transaction history`, async t => {
   });
 
   t.test('Test on Account#5 0xD36Daf280D5F3a972AE77adB451aEBdC87189f67 with defisaver transactions', async t => {
+    expectLatestBlocks([ 'ethereum-mainnet' ]);
     const accountAddress = '0xD36Daf280D5F3a972AE77adB451aEBdC87189f67';
     const limit = 15;
     const markets = '1_0xc3d688B66703497DAA19211EEdff47f25384cdc3';
@@ -470,6 +476,7 @@ t.test(`transaction history`, async t => {
   });
 
   t.test('Test on Account#6 0xa5e6b86b278ae2511518e0837047ae9595777434 with Migrator transactions', async t => {
+    expectLatestBlocks(historyNetworks);
     const accountAddress = '0xa5e6b86b278ae2511518e0837047ae9595777434';
     // Trace all the way to the end of history and make sure block numbers are all in order
     const testUrl = `http://test.local/account/${accountAddress}/transaction_history`;
@@ -491,6 +498,7 @@ t.test(`transaction history`, async t => {
   });
 
   t.skip('Test on Account#7 0x0cC5A715b06C8eCe9F2fa49Cdc75750539255779 that got liquidated', async t => {
+    expectLatestBlocks(historyNetworks);
     const accountAddress = '0x0cC5A715b06C8eCe9F2fa49Cdc75750539255779';
     const limit = 15;
     const testUrl = `http://test.local/account/${accountAddress}/transaction_history?limit=${limit}`;
