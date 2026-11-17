@@ -188,6 +188,12 @@ class WorkersKvCache implements Cache {
 }
 
 /*
+ * What a write leaves to finish after the invocation has answered: the
+ * entrypoint gives ExecutionContext.waitUntil.
+ */
+type Defer = (task: Promise<unknown>) => void;
+
+/*
  * Layers Cache Wrapper
  * Cache wrapper over an ordered preference of underlying caches.
  * Back-propagates values retrieved from lower-ranked to preferred caches.
@@ -196,12 +202,13 @@ class LayersCache implements Cache {
   private constructor(
     public layers: Cache[],
     public debug: Debug.Logger = Debug.MakeLogger([]),
+    private readonly defer?: Defer,
   ) {
     this.debug = this.debug.scope('cache');
   }
-  // Cache.Layers.of([ memorycache, kvcache ])
-  static of(orderedLayers: Cache[], debug?: Debug.Logger) {
-    return new LayersCache(orderedLayers, debug);
+  // Cache.Layers.of([ memorycache, kvcache ], debug, defer)
+  static of(orderedLayers: Cache[], debug?: Debug.Logger, defer?: Defer) {
+    return new LayersCache(orderedLayers, debug, defer);
   }
 
   async get<T>(key: string)
@@ -237,11 +244,19 @@ class LayersCache implements Cache {
   )
     : Promise<Fallible.Outcome.OrJust<void>>
   {
-    /* NOTE(jordan): only wait for the fastest layer to persist. The
-     * others can finish (or fail to persist) on their own time.
+    /*
+     * Only the fastest layer is waited for, so a computation goes on as soon
+     * as its value is in memory, and the slower ones, KV, finish on their own
+     * time. But the runtime ends what an invocation still has pending once it
+     * has answered, a failure included, unless it was handed to waitUntil: a
+     * value computed late in a request, or in one that failed, never reached
+     * KV, and every isolate without it in memory computed it again. So every
+     * write is handed to `defer`, to finish after the answer.
      */
     this.debug.debug(`LayersCache: put: initiate race`);
-    return Promise.race(this.layers.map(l => l.put(key, value, options)));
+    const writes = this.layers.map(l => l.put(key, value, options));
+    this.defer?.(Promise.allSettled(writes));
+    return Promise.race(writes);
   }
 }
 

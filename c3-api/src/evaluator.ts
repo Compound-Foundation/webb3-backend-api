@@ -22,6 +22,8 @@ interface Context {
   flags: Flags.SomeFlags;
   // a custom cache may be passed in, but typically should not be.
   cache?: Cache.Cache;
+  // what the computation cache leaves to finish after the answer: its writes to KV (Cache.Layers)
+  defer?: (task: Promise<unknown>) => void;
 }
 
 /*
@@ -102,7 +104,7 @@ function preInstantiate<Scope extends Compute.Spec>(
           ),
           context.debug,
         ),
-      ], context.debug),
+      ], context.debug, context.defer),
       ...context,   // spread comes last: may overwrite cache value
       ...overrides, // finally, optional overrides may overwrite anything
     });
