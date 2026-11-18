@@ -105,7 +105,16 @@ client address (`CF-Connecting-IP`; an IPv6 client by its /64), so wrong
 tokens and unknown paths are paid for too; `REGISTRY_ADMIN_RATE_LIMITER`
 counts every authenticated one on a route its token's role reaches, reads as
 well as commands, 30 a minute for each admin token and route family. Every
-environment gives each its own namespace id. One invocation imports
+environment gives each its own namespace id. Both are Workers Rate Limiting
+bindings, and count approximately: each Cloudflare location counts on its
+own, and, in the words of Cloudflare's
+[Rate Limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)
+page (last updated Nov 12, 2026), "Counts are eventually consistent: each
+check uses a local count, and updates reach other running instances in the
+background." A fast burst therefore gets past a budget before the refusals
+start ([API.md](./API.md#registry-v1)). A strict count would take a Durable
+Object in front of every administrative request, which tokens of 32 random
+bytes do not need. One invocation imports
 `COMET_SYNC_MARKETS_PER_INVOCATION` markets and leaves the rest to the next
 one, resuming from the checkpoints in `APP_DB`; upstream is checked for a new
 commit once per `COMET_UPSTREAM_CHECK_INTERVAL_S`. The chain is read again for

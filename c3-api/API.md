@@ -721,6 +721,25 @@ Past either budget the answer is `429` `RATE_LIMITED`, saying in
 out: `too many administrative requests from this address`, or
 `too many <family> requests with this token`.
 
+Both budgets are counted by Cloudflare's rate limiter, and its counts are
+approximate. Each Cloudflare location counts on its own, and within one,
+each request is checked against a copy of the count kept where it is
+served, which is brought up to date in the background. Cloudflare's
+[Rate Limiting](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)
+page (last updated Nov 12, 2026): "Rate limits are approximate and apply
+separately in each Cloudflare location. Requests can exceed your configured
+limit while counts update in the background." Requests sent at an even pace
+are refused once they pass a budget, give or take a request or two. A burst
+sent faster than the counts are brought up to date gets more through before
+the first `429` — about twice the address's budget, in a test of 120
+requests from one address in about five seconds — and until the counts settle
+only some of the requests after it are refused: the next one may still be
+answered on its merits, such as a `401` for a wrong token. Wait out the
+`Retry-After` of the first `429`, whatever is answered after it. This brings
+no token within reach of guessing: a token made as
+[the runbook](./REGISTRY_RUNBOOK.md#the-admin-tokens) says is 32 random
+bytes, and twice the guesses come no nearer to one.
+
 A command's body is at most 64 KiB — 512 KiB for `PUT …/overlays` — and a
 larger one is refused with `413`. A `reason`, wherever a command takes one, is
 at most 1,000 characters, and a longer one is refused with `400`.

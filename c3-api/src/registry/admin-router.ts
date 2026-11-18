@@ -213,8 +213,10 @@ function rateLimited(message: string): ApiError {
 
 /*
  * The key of a request that names no client address. A request through
- * Cloudflare's edge always has one; a local run and a test may not, and
- * share this one budget.
+ * Cloudflare's edge always has one, and Miniflare gives one to every request
+ * it serves, under `wrangler dev` and in the workerd harness alike; a test
+ * that calls the worker in Node may have none, and those share this one
+ * budget.
  */
 const NO_ADDRESS = 'no-address';
 
@@ -230,6 +232,17 @@ const NO_ADDRESS = 'no-address';
  * would leave the paths no route takes, which answer 404, free to enumerate.
  * An operator and a monitor polling the status fit inside the budget many
  * times over; a guess at a token at that pace gets nowhere.
+ *
+ * The platform's limiter counts approximately. Cloudflare's Rate Limiting
+ * page (last updated Nov 12, 2026): "Rate limits are approximate and apply
+ * separately in each Cloudflare location. Requests can exceed your configured
+ * limit while counts update in the background." Each check reads a count
+ * kept where it runs, so requests at an even pace are refused once past the
+ * budget, while a burst faster than the counts are brought up to date gets
+ * more through — about twice the budget, in a test — and is then refused only
+ * in part until they settle. That is enough: a token made as the runbook says
+ * is 32 random bytes, and twice the guesses come no nearer to one. A strict
+ * count would take a Durable Object in front of every administrative request.
  */
 async function limitAddress(env: Env, request: Request): Promise<void> {
   const address = request.headers.get('cf-connecting-ip');
@@ -243,7 +256,8 @@ async function limitAddress(env: Env, request: Request): Promise<void> {
 /*
  * The limiter key names the credential, never the token: `fingerprint` is a
  * prefix of the token's SHA-256, which distinguishes two configured tokens
- * without carrying either one into a key that is logged and counted.
+ * without carrying either one into a key that is logged and counted. Its
+ * counts are as approximate as the address's (limitAddress).
  */
 async function limit(env: Env, fingerprint: string, family: string): Promise<void> {
   const allowed = await env.REGISTRY_ADMIN_RATE_LIMITER.limit({ key: `registry-admin:${fingerprint}:${family}` });
