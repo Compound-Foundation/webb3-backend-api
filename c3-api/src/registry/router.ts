@@ -186,6 +186,32 @@ function withHeaders(response: Response, headers: Record<string, string>): Respo
   return response;
 }
 
+/*
+ * That no cache may keep the answer, a browser's own included. An
+ * administrative answer tells the registry's state and the names of the
+ * people who changed it. A shared cache does not keep an answer to a request
+ * with `Authorization` unless told it may, but a browser's own cache does,
+ * and an answer to a request without one, such as a 404 for a path no route
+ * takes, may be kept by either. It is `no-store` that keeps an answer out of
+ * a cache. `Pragma: no-cache` goes beside it, never in its place, for the
+ * HTTP/1.0 caches that look for it: HTTP gave it a meaning on a request
+ * alone, never on an answer (RFC 9111, section 5.4).
+ */
+const NOT_STORED: Record<string, string> = {
+  'Cache-Control': 'no-store',
+  'Pragma':        'no-cache',
+};
+
+/*
+ * What every answer of a kind of registry route carries, whatever it says,
+ * its preflight and its errors included: the CORS headers of the route, and
+ * on an administrative one, that nothing may keep it. A public read decides
+ * its own caching, by the version it served.
+ */
+function routeHeaders(route: 'admin' | 'public', options: { preflight?: boolean } = {}): Record<string, string> {
+  return { ...corsHeaders(route, options), ...(route === 'admin' ? NOT_STORED : {}) };
+}
+
 async function routeRegistry(
   request: Request,
   /*
@@ -202,14 +228,14 @@ async function routeRegistry(
   // an administrative request over plain http is answered with its refusal alone, its preflight too
   const insecure = route === 'admin' ? httpsRefusal(url) : null;
   if (insecure !== null) {
-    return failureResponse(insecure, insecure, { requestId, pathname, debug, label: 'registry route', headers: corsHeaders(route) });
+    return failureResponse(insecure, insecure, { requestId, pathname, debug, label: 'registry route', headers: routeHeaders(route) });
   }
   if (request.method === 'OPTIONS') {
     // administrative routes answer no CORS headers, so a preflight there
     // tells a browser nothing it could use
-    return withHeaders(new Response(null, { status: 204 }), corsHeaders(route, { preflight: true }));
+    return withHeaders(new Response(null, { status: 204 }), routeHeaders(route, { preflight: true }));
   }
-  const cors = corsHeaders(route);
+  const headers = routeHeaders(route);
 
   const deps = cacheDepsOf(env, debug);
   const read = activeReader(deps);
@@ -244,14 +270,14 @@ async function routeRegistry(
     if (response === null) {
       throw new ApiError('NOT_FOUND', `no registry route matches ${pathname}`);
     }
-    return withHeaders(response, cors);
+    return withHeaders(response, headers);
   } catch (error) {
     return failureResponse(asApiError(error), error, {
       requestId,
       pathname,
       debug,
       label:   'registry route',
-      headers: { ...cors, ...(route === 'public' && served !== null ? servedHeaders(served) : {}) },
+      headers: { ...headers, ...(route === 'public' && served !== null ? servedHeaders(served) : {}) },
     });
   }
 }

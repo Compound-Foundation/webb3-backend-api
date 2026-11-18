@@ -11,13 +11,14 @@ import '../../../shim/node-self.js';
 
 /*
  * How the administrative API is reached: over https, and over plain http from
- * this machine alone.
+ * this machine alone; and that what it answers is kept by no cache.
  *
  * The worker runs in Node here, and sees the URL a request was sent to as
  * the test wrote it. The harness the other registry tests run it in reaches
  * it over plain http alone, so it cannot show an https request served.
  */
-const ADMIN_TOKEN = 'registry-admin-token-for-tests';
+const ADMIN_TOKEN   = 'registry-admin-token-for-tests';
+const MONITOR_TOKEN = 'registry-monitor-token-for-tests';
 
 const auth = { 'Authorization': `Bearer ${ADMIN_TOKEN}` };
 
@@ -43,7 +44,8 @@ async function envWith(registry: RegistryDatabase, overrides: Partial<Env> = {})
     MEMORY_CACHE_SEED:                'registry-admin-transport',
     APP_DB:                           registry.db,
     COMET_REGISTRY_ADMIN_TOKENS:      JSON.stringify([
-      { name: 'alice', sha256: await sha256(ADMIN_TOKEN), role: 'admin', notAfter: null },
+      { name: 'alice',   sha256: await sha256(ADMIN_TOKEN),   role: 'admin',   notAfter: null },
+      { name: 'monitor', sha256: await sha256(MONITOR_TOKEN), role: 'monitor', notAfter: null },
     ]),
     REGISTRY_ADMIN_RATE_LIMITER:      limiter,
     REGISTRY_ADMIN_AUTH_RATE_LIMITER: limiter,
@@ -176,4 +178,73 @@ t.test('a public registry read is served over plain http as over https', async t
     t.equal((await send(env, `${origin}/registry/v1/active`, { method: 'OPTIONS' })).status, 204, 'and so is its preflight');
   }
   t.same(limited, [], 'without either administrative limiter');
+});
+
+/*
+ * An administrative answer tells the registry's state and the names of the
+ * people who changed it, and none may be kept by a cache, a browser's own
+ * included: whatever it says, a refusal of any kind and a preflight too.
+ */
+async function notStored(t: Test, response: Response, status: number, what: string): Promise<void> {
+  t.equal(response.status, status, `${what} answers ${status}`);
+  t.equal(response.headers.get('cache-control'), 'no-store', 'which no cache may keep');
+  t.equal(response.headers.get('pragma'), 'no-cache', 'and Pragma, for an HTTP/1.0 cache that looks for it');
+  await response.arrayBuffer();
+}
+
+// a database that answers every statement with a fault, which is a 500, not an outage
+function faulty(): D1Database {
+  const fail = () => { throw new Error('D1_ERROR: no such table: registry_versions: SQLITE_ERROR'); };
+  return { prepare: fail, batch: fail, exec: fail, dump: fail } as unknown as D1Database;
+}
+
+t.test('no administrative answer may be kept by a cache', async t => {
+  warnings(t);
+  const { error } = console;
+  console.error = () => {};
+  t.teardown(() => { console.error = error; });
+
+  const registry = await database(t);
+  const { env } = await envWith(registry);
+  const admin   = 'https://api.test.local/registry/v1/admin';
+  const monitor = { 'Authorization': `Bearer ${MONITOR_TOKEN}` };
+
+  await notStored(t, await send(env, `${admin}/status`, { headers: auth }), 200, 'the status');
+  await notStored(t, await send(env, `${admin}/versions`, { headers: auth }), 200, 'the versions');
+  await notStored(t, await send(env, `${admin}/status`), 401, 'a request without a token');
+  await notStored(t, await send(env, `${admin}/status`, { headers: { 'Authorization': 'Bearer wrong' } }), 401, 'a wrong token');
+  await notStored(t, await send(env, `${admin}/versions`, { headers: monitor }), 403, 'a token whose role does not reach the route');
+  await notStored(t, await send(env, 'http://api.test.local/registry/v1/admin/status', { headers: auth }), 403, 'a request over plain http');
+  await notStored(t, await send(env, `${admin}/nothing-here`, { headers: auth }), 404, 'a path no route takes');
+  await notStored(t, await send(env, `${admin}/nothing-here`), 404, 'and the same without a token');
+  await notStored(t, await send(env, `${admin}/versions/00000000-0000-4000-8000-000000000000`, { headers: auth }), 404,
+    'a version no row has');
+  await notStored(t, await send(env, `${admin}/status`, { method: 'DELETE', headers: auth }), 405, 'a method the route does not take');
+  await notStored(t, await send(env, `${admin}/status`, { method: 'OPTIONS' }), 204, 'a preflight');
+
+  const refusing = { limit: async () => ({ success: false }) };
+  const { env: crowded } = await envWith(registry, { REGISTRY_ADMIN_AUTH_RATE_LIMITER: refusing });
+  await notStored(t, await send(crowded, `${admin}/status`, { headers: auth }), 429, 'an address past its budget');
+  const { env: spent } = await envWith(registry, { REGISTRY_ADMIN_RATE_LIMITER: refusing });
+  await notStored(t, await send(spent, `${admin}/status`, { headers: auth }), 429, 'a token past its budget');
+
+  const { env: broken } = await envWith(registry, { APP_DB: faulty() });
+  await notStored(t, await send(broken, `${admin}/versions`, { headers: auth }), 500, 'a database that answers with a fault');
+});
+
+t.test('a public registry answer keeps caching as it decides', async t => {
+  const registry = await database(t);
+  const { env } = await envWith(registry);
+
+  const active = await send(env, 'https://api.test.local/registry/v1/active');
+  t.equal(active.status, 200);
+  t.match(active.headers.get('cache-control'), /^public, max-age=\d+$/, 'the active version may be kept, for as long as it says');
+  t.match(active.headers.get('etag'), /^"/, 'and asked about again by its tag');
+  t.equal(active.headers.get('pragma'), null, 'without the administrative routes\' Pragma');
+
+  for (const [ path, method, status ] of [ [ '/registry/v1/nothing-here', 'GET', 404 ], [ '/registry/v1/active', 'OPTIONS', 204 ] ] as const) {
+    const response = await send(env, `https://api.test.local${path}`, { method });
+    t.equal(response.status, status, `${method} ${path} answers ${status}`);
+    t.same([ response.headers.get('cache-control'), response.headers.get('pragma') ], [ null, null ], 'and says nothing of caching');
+  }
 });

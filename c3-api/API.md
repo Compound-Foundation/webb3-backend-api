@@ -640,6 +640,12 @@ that may have leaked, not rotated out, and its holder is given a new one
 A worker run on one's own machine takes `http` at `localhost`, `127.0.0.1`
 and `[::1]`.
 
+What they answer is kept by no cache: every answer under
+`/registry/v1/admin`, whatever it says, a refusal and a preflight included,
+carries `Cache-Control: no-store` and `Pragma: no-cache`, so neither a
+browser nor anything between it and the worker keeps a copy of the
+registry's state or of who changed it.
+
 Each token has a name and a role. The name is who holds the token, and every
 change the token makes is recorded under it: the `actor` of an approval, an
 activation, a rollback or an overlay event, the `requestedBy` of an import it

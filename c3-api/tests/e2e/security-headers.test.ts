@@ -220,7 +220,8 @@ t.test(`every response carries the CORS headers of its route, and no others`, as
 /*
  * Every header of an answer, as a client reads it: the security headers, the
  * CORS headers of its route, and what the route itself said. An answer that
- * read no registry version names none.
+ * read no registry version names none, and an administrative answer, whatever
+ * it says, that nothing may keep it.
  */
 t.test(`an answer carries exactly the headers of its route`, async t => {
   quiet(t);
@@ -229,6 +230,7 @@ t.test(`an answer carries exactly the headers of its route`, async t => {
   );
   const secured = lowercased(EXPECTED_SECURITY_HEADERS);
   const json    = { 'content-type': 'application/json; charset=utf-8' };
+  const unkept  = { 'cache-control': 'no-store', 'pragma': 'no-cache' };
   const headersOf = async (path: string, method: string, status: number, origin: string = 'https://test.local') => {
     const response = await C3Api.fetch(new Request(`${origin}${path}`, { method }), testEnv);
     t.equal(response.status, status, `${method} ${origin}${path} answers ${status}`);
@@ -255,12 +257,14 @@ t.test(`an answer carries exactly the headers of its route`, async t => {
     'a public registry preflight');
   t.same(await headersOf('/registry/v1/nothing-here', 'GET', 404), { ...secured, ...lowercased(CORS.public), ...json },
     'a registry path no route takes');
-  t.same(await headersOf('/registry/v1/admin/versions', 'GET', 403), { ...secured, ...json },
+  t.same(await headersOf('/registry/v1/admin/versions', 'GET', 403), { ...secured, ...json, ...unkept },
     'an administrative route refusing a caller');
-  t.same(await headersOf('/registry/v1/admin/versions', 'OPTIONS', 204), secured,
+  t.same(await headersOf('/registry/v1/admin/versions', 'OPTIONS', 204), { ...secured, ...unkept },
     'and an administrative preflight');
-  t.same(await headersOf('/registry/v1/admin/versions', 'GET', 403, 'http://test.local'), { ...secured, ...json },
+  t.same(await headersOf('/registry/v1/admin/versions', 'GET', 403, 'http://test.local'), { ...secured, ...json, ...unkept },
     'an administrative route refusing a request over plain http');
+  t.same(await headersOf('/registry/v1/admin/nothing-here', 'GET', 404), { ...secured, ...json, ...unkept },
+    'and a path under the administrative prefix that no route takes');
 
   t.end();
 });
