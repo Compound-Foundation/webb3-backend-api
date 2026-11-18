@@ -622,6 +622,24 @@ the scheme in `WWW-Authenticate` — and answer no CORS headers at all. The
 scheme is read in any case, and one space or more may follow it; a header
 with anything after the token is answered as one without a token.
 
+They take requests over `https` only. A request under `/registry/v1/admin`
+that comes over plain `http` — a preflight, or a path no route takes, among
+them — is refused with `403 FORBIDDEN`, `details.code` `HTTPS_REQUIRED` and
+the message `the administrative API takes requests over https only`, before
+its token is read and before its address spends anything of its budget
+(below). The worker never redirects it: a redirect would have the client
+send its token again, and let a script given an `http` URL go on working.
+On a custom domain, such a request reaches the worker only while the
+domain's Cloudflare zone does not redirect `http` to `https` itself: the
+zone's Always Use HTTPS setting, or a redirect rule, answers before any
+worker runs ([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#before-you-start)
+says how to check). Either way, a token sent over `http` has crossed the
+network in clear text: its entry is dropped from the list at once, as one
+that may have leaked, not rotated out, and its holder is given a new one
+([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#the-admin-tokens)).
+A worker run on one's own machine takes `http` at `localhost`, `127.0.0.1`
+and `[::1]`.
+
 Each token has a name and a role. The name is who holds the token, and every
 change the token makes is recorded under it: the `actor` of an approval, an
 activation, a rollback or an overlay event, the `requestedBy` of an import it
@@ -676,7 +694,8 @@ no other token.
   `registry route refused`, under the answer's `requestId`, names the entry
   and what is wrong with it.
 
-Every administrative request is rate limited twice, reads as well as
+Every administrative request that comes over `https`, or over `http` to a
+worker run on one's own machine, is rate limited twice, reads as well as
 commands:
 
 - First, before its token is checked or its path is matched, by the address

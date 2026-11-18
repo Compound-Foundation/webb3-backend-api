@@ -73,6 +73,35 @@ export API=https://v3-api-stage.compound.xyz        # the environment you work o
 export TOKEN='<your admin token>'
 ```
 
+Keep the `https://`. The admin API refuses a request sent over plain `http`
+(`403`, `details.code` `HTTPS_REQUIRED`) without reading its token, but the
+token has crossed the network in clear text by then: drop it, as
+[The admin tokens](#the-admin-tokens) says of a token that may have leaked.
+Only a worker on your own machine is reached over `http`, as in
+[the preflight](#the-preflight).
+
+That refusal is the worker's. On a custom domain, such as stage's and
+production's, a request over plain `http` reaches the worker only if the
+domain's Cloudflare zone does not redirect `http` to `https` first, as its
+Always Use HTTPS setting or a redirect rule does
+([Workers with Page Rules](https://developers.cloudflare.com/workers/configuration/workers-with-page-rules/#always-use-https),
+last updated Apr 23, 2026, lists Always Use HTTPS as respected from a client
+to a Worker). A redirect answers before the worker runs: the token crosses
+the network in clear text all the same, and a client that follows the
+redirect and keeps its `Authorization` header goes on working. Check once on
+each custom domain, with no token, so that nothing is sent in clear text:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' "http://${API#https://}/registry/v1/admin/status"
+```
+
+`403` is the worker's refusal. A `301`, or another redirect, is the zone's,
+and it can stay: it keeps every other route on `https`, and a token sent to
+an `http://` address is dropped all the same, though nothing refused its
+request. Only a zone that redirects with a rule of its own can leave
+`/registry/v1/admin/` out of it, for the worker to refuse such a request;
+Always Use HTTPS redirects every request, on every host of the zone.
+
 Every step shows the terminal command, and beside it the same request for
 Postman, written as the request itself: the method and URL on the first line,
 then the headers, then the body. To use them:
@@ -213,6 +242,10 @@ message:
 - `403`, "… is not configured in this environment": the environment has no
   list, or one with no entry, and an unconfigured admin API is a closed one.
   Put the list (step 4).
+- `403`, "the administrative API takes requests over https only": `API`
+  names an `http://` address. The token crossed the network in clear text:
+  drop it, as one that may have leaked (below), and check a new one at the
+  `https://` address.
 
 **Rotating a token.** Make a new token for the same holder (steps 1 and 2),
 add its entry under the same name and role, give the old entry a `notAfter`
@@ -220,7 +253,9 @@ a few days ahead, and put the list (step 4). Both tokens are taken until
 then: the holder switches, and after it the old one is refused as expired.
 Drop its entry the next time you put the list. A token that may have leaked
 is not rotated: drop its entry and put the list, which refuses it from then
-on.
+on. One sent over plain `http` may have: the worker refused the request
+(`403`, `HTTPS_REQUIRED`), but the token crossed the network in clear text to
+get there.
 
 ### Announcing changes
 
@@ -1393,8 +1428,9 @@ whose reasons are in the draft it names.
 | `401`, "the bearer token has expired" | Your token's `notAfter` has passed: it was rotated out | Use the token that replaced it, or ask the environment's owner for one |
 | `403`, "the token … has the role …, and this route needs …" | Your token's role does not reach the route; `details.requiredRole` names the role that does | Ask for a token with that role, or ask its holder to make the change |
 | `403`, "the administrative API is misconfigured in this environment: …", or "… is not configured …" | The environment has no token in its list, or a list the worker cannot read, so every token is refused | Step 5 of [The admin tokens](#the-admin-tokens) says what each message means and what to do |
+| `403`, `details.code` `HTTPS_REQUIRED`, "the administrative API takes requests over https only", or a `301` to the `https://` address | The request was sent to an `http://` address. The worker refused it without reading its token — or, on a custom domain whose zone redirects `http` itself, Cloudflare redirected it before the worker ran — but the token crossed the network in clear text to get there | Send it to the `https://` address ([Before you start](#before-you-start)), and drop the token as one that may have leaked ([The admin tokens](#the-admin-tokens)): its holder is given a new one. A redirect is the zone's, and may stay ([Before you start](#before-you-start)) |
 | `413` | The request body is larger than the route takes | Send less: a directory of overlays in several requests |
-| `429`, "too many administrative requests from this address" | More than 60 administrative requests in a minute from your address — over IPv6, from your /64 — whatever they were: every request under `/registry/v1/admin/` is counted by address before its token is checked, a wrong token or a path no route takes included, and the right token is refused too once the address has spent its budget | Wait the seconds its `Retry-After` names — a minute at most. A script in a loop, or a monitor sharing your address, is what spends it |
+| `429`, "too many administrative requests from this address" | More than 60 administrative requests in a minute from your address — over IPv6, from your /64 — whatever they were: every request under `/registry/v1/admin/` that comes over `https`, or over `http` to a worker on your own machine, is counted by address before its token is checked, a wrong token or a path no route takes included, and the right token is refused too once the address has spent its budget | Wait the seconds its `Retry-After` names — a minute at most. A script in a loop, or a monitor sharing your address, is what spends it |
 | `429`, "too many … requests with this token" | More than 30 administrative requests in a minute with your token, counted per family of routes. Reads count too, and every read shares one budget, while each kind of command has its own; anyone using your token spends it with you | Wait the seconds its `Retry-After` names. A monitor polls with a `monitor` token of its own, which spends nothing of yours |
 | `422`, `details.code` `OVERLAY_FEED_UNREADABLE`, writing an overlay | A feed the overlay names does not answer its decimals on that chain: it reverts, or nothing is deployed at that address there — most often a feed of another chain | Check the address against the chain's feed; a `503` instead is the node provider not answering, and worth trying again |
 | `409` writing overlays, "… registry version cannot be changed" or "is no longer importing" | The draft is no longer open: it was validated, switched on, or replaced by a newer attempt of its commit (`GET /registry/v1/admin/versions/<id>` says which) | Look for the newest open draft first (`GET /registry/v1/admin/versions?status=importing`) and continue there; start a new attempt (step 1 with `forceNewAttempt`) only if there is none |

@@ -39,10 +39,51 @@ function isRegistryPath(pathname: string): boolean {
  * Whether a registry path is an administrative one, which decides both the
  * router that answers it and the CORS headers it answers with. It is matched
  * as a prefix, so anything that only starts like an administrative path is
- * answered as one: without CORS headers, and after the address limiter.
+ * answered as one: over https alone, without CORS headers, and after the
+ * address limiter.
  */
 function isAdminPath(pathname: string): boolean {
   return pathname.startsWith(`${PREFIX}/admin`);
+}
+
+/*
+ * This machine, as a URL names it: a worker run with `wrangler dev`, and the
+ * one the tests run in workerd, are reached over plain http at one of these.
+ * A request through Cloudflare's edge names the worker's own host instead.
+ */
+const LOOPBACK_HOSTS = new Set([ 'localhost', '127.0.0.1', '[::1]' ]);
+
+/*
+ * The administrative API takes requests over https alone. One that came over
+ * plain http is refused before anything else is done with it — before its
+ * preflight is answered, before its address spends anything of its budget,
+ * and before its token is read — whatever its path, one no route takes too.
+ * The scheme is that of the URL the request was sent to: Cloudflare invokes
+ * the worker over either, and on workers.dev nothing refuses http before it.
+ * On a custom domain, a zone that redirects http itself answers before the
+ * worker runs (REGISTRY_RUNBOOK.md, "Before you start").
+ *
+ * It is refused, never redirected. Its token has crossed the network in
+ * clear text by then, and a redirect would have the client send it again,
+ * and let a script given the wrong URL go on working, sending its token in
+ * the clear with every request. A refusal fails that script at its first
+ * request, and the token is dropped as one that may have leaked
+ * (REGISTRY_RUNBOOK.md, "The admin tokens"). The line logged for it names the
+ * scheme, which tells it from every other 403, so the operator who reads it
+ * knows there is a token to drop. A worker on this machine is reached over
+ * http alone, and takes it.
+ */
+function httpsRefusal(url: URL): ApiError | null {
+  if (url.protocol === 'https:' || LOOPBACK_HOSTS.has(url.hostname)) {
+    return null;
+  }
+  return new ApiError(
+    'FORBIDDEN',
+    `the administrative API takes requests over https only`,
+    { code: 'HTTPS_REQUIRED' },
+    {},
+    { scheme: url.protocol },
+  );
 }
 
 /*
@@ -154,9 +195,15 @@ async function routeRegistry(
    */
   { env, debug, requestId, defer }: Evaluator.Context & { requestId: string, defer: (task: Promise<void>) => void },
 ): Promise<Response> {
-  const pathname = withoutTrailingSlash(new URL(request.url).pathname);
+  const url      = new URL(request.url);
+  const pathname = withoutTrailingSlash(url.pathname);
   const route    = isAdminPath(pathname) ? 'admin' : 'public';
 
+  // an administrative request over plain http is answered with its refusal alone, its preflight too
+  const insecure = route === 'admin' ? httpsRefusal(url) : null;
+  if (insecure !== null) {
+    return failureResponse(insecure, insecure, { requestId, pathname, debug, label: 'registry route', headers: corsHeaders(route) });
+  }
   if (request.method === 'OPTIONS') {
     // administrative routes answer no CORS headers, so a preflight there
     // tells a browser nothing it could use

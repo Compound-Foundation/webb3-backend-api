@@ -57,7 +57,9 @@ function creationReader(env: Env): CreationReader {
 }
 
 /*
- * The authenticated administrative routes, behind two rate limiters.
+ * The authenticated administrative routes, behind two rate limiters. A
+ * request reaches them over https alone: one over plain http is refused
+ * before either limiter is asked (routeRegistry).
  *
  * The first counts every request under the administrative prefix by the
  * client's address, before its token is checked or its path matched: a
@@ -217,10 +219,11 @@ function rateLimited(message: string): ApiError {
 const NO_ADDRESS = 'no-address';
 
 /*
- * What every request under the administrative prefix spends first, before
- * its token is checked and before its path is matched, from the budget of
- * the address Cloudflare saw it come from (`CF-Connecting-IP`) — of its /64,
- * for an IPv6 client, which can send from any address of it (clientOf).
+ * What every request under the administrative prefix that came over https
+ * spends first, before its token is checked and before its path is matched,
+ * from the budget of the address Cloudflare saw it come from
+ * (`CF-Connecting-IP`) — of its /64, for an IPv6 client, which can send from
+ * any address of it (clientOf).
  *
  * Counting only the requests that fail would not slow guessing down: a right
  * guess answers 200 and would never be counted. Counting after the match
@@ -465,7 +468,7 @@ async function routeAdmin(
   context: RegistryContext,
   pathname: string,
 ): Promise<Response | null> {
-  // every request spends from its address's budget first, a path no route takes among them
+  // every request that came over https spends from its address's budget first, a path no route takes among them
   await limitAddress(env, request);
 
   const matching = ROUTES

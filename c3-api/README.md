@@ -99,7 +99,8 @@ check of the chain and the last announcement it gave up, two rate limiters
 for its administrative routes, and an hourly Cron trigger for its resumable
 sync.
 `REGISTRY_ADMIN_AUTH_RATE_LIMITER` counts every request under
-`/registry/v1/admin/` before its token is checked, 60 a minute for each
+`/registry/v1/admin/` that comes over `https`, or over `http` to a worker
+run on your own machine, before its token is checked, 60 a minute for each
 client address (`CF-Connecting-IP`; an IPv6 client by its /64), so wrong
 tokens and unknown paths are paid for too; `REGISTRY_ADMIN_RATE_LIMITER`
 counts every authenticated one on a route its token's role reaches, reads as
@@ -271,7 +272,10 @@ validating, approving and activating a version; see the admin routes in
 [./API.md](./API.md). Each administrative token has a name and a role, and
 an environment lists its tokens in the secret `COMET_REGISTRY_ADMIN_TOKENS`
 ([The admin tokens](./REGISTRY_RUNBOOK.md#the-admin-tokens)); without that
-list, the admin API refuses every request. Every change a token makes is
+list, the admin API refuses every request. It takes requests over `https`
+only, and refuses one sent over plain `http` before reading its token —
+anywhere but at `localhost`, `127.0.0.1` and `[::1]`, where a worker run on
+your own machine is reached over `http`. Every change a token makes is
 recorded under its name, but for a validation, which decides nothing and
 records only its checks; its role — `monitor`, `reader`, `operator` or
 `admin` — bounds the routes it may call. The step-by-step procedure, with

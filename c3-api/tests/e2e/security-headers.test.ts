@@ -157,7 +157,8 @@ function quiet(t: Test): void {
 t.test(`every response carries the CORS headers of its route, and no others`, async t => {
   quiet(t);
   const overwritten: string[] = [];
-  const answer = async (path: string, method: string = 'GET') => {
+  // over https, the one scheme an administrative route takes from another host than this machine
+  const answer = async (path: string, method: string = 'GET', origin: string = 'https://test.local') => {
     const { set } = Headers.prototype;
     Headers.prototype.set = function (this: Headers, name: string, value: string) {
       if (/^access-control-/i.test(name) && this.has(name)) {
@@ -166,7 +167,7 @@ t.test(`every response carries the CORS headers of its route, and no others`, as
       set.call(this, name, value);
     };
     try {
-      return await C3Api.fetch(new Request(`http://test.local${path}`, { method }), testEnv);
+      return await C3Api.fetch(new Request(`${origin}${path}`, { method }), testEnv);
     } finally {
       Headers.prototype.set = set;
     }
@@ -197,8 +198,17 @@ t.test(`every response carries the CORS headers of its route, and no others`, as
     t.equal(unknown.status, 404, `${path}, under the administrative prefix, is no route`);
     t.same(corsOf(unknown), CORS.admin, 'and carries none either');
   }
+  // this environment has no token list, so its administrative routes refuse every request: the code says why this one is
+  const insecure = await answer('/registry/v1/admin/versions', 'GET', 'http://test.local');
+  t.equal(insecure.status, 403, 'an administrative route refusing a request over plain http');
+  const { error } = await insecure.json() as { error: { details?: { code?: string } } };
+  t.equal(error.details?.code, 'HTTPS_REQUIRED', 'for its scheme, not for the environment\'s missing token list');
+  t.same(corsOf(insecure), CORS.admin, 'carries none');
+  const insecurePreflight = await answer('/registry/v1/admin/versions', 'OPTIONS', 'http://test.local');
+  t.equal(insecurePreflight.status, 403, 'its preflight is refused too');
+  t.same(corsOf(insecurePreflight), CORS.admin, 'and nor does the refusal of its preflight');
 
-  for (const response of [ read, admin ]) {
+  for (const response of [ read, admin, insecure ]) {
     assertSecurityHeaders(t, response);
   }
 
@@ -219,9 +229,9 @@ t.test(`an answer carries exactly the headers of its route`, async t => {
   );
   const secured = lowercased(EXPECTED_SECURITY_HEADERS);
   const json    = { 'content-type': 'application/json; charset=utf-8' };
-  const headersOf = async (path: string, method: string, status: number) => {
-    const response = await C3Api.fetch(new Request(`http://test.local${path}`, { method }), testEnv);
-    t.equal(response.status, status, `${method} ${path} answers ${status}`);
+  const headersOf = async (path: string, method: string, status: number, origin: string = 'https://test.local') => {
+    const response = await C3Api.fetch(new Request(`${origin}${path}`, { method }), testEnv);
+    t.equal(response.status, status, `${method} ${origin}${path} answers ${status}`);
     return Object.fromEntries(response.headers);
   };
 
@@ -249,6 +259,8 @@ t.test(`an answer carries exactly the headers of its route`, async t => {
     'an administrative route refusing a caller');
   t.same(await headersOf('/registry/v1/admin/versions', 'OPTIONS', 204), secured,
     'and an administrative preflight');
+  t.same(await headersOf('/registry/v1/admin/versions', 'GET', 403, 'http://test.local'), { ...secured, ...json },
+    'an administrative route refusing a request over plain http');
 
   t.end();
 });
