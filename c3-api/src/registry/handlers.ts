@@ -18,8 +18,10 @@ import { registryHeaders } from './version-headers.js';
 import type { VersionRef } from './version-headers.js';
 import {
   activateVersion,
+  approveVersion,
   readActivationHistory,
   readActiveVersionId,
+  readApprovals,
   readMarket,
   readNetworkOverlay,
   readSnapshot,
@@ -369,10 +371,11 @@ async function getVersionDetail(context: RegistryContext, versionId: string): Pr
   if (version === null) {
     throw new ApiError('NOT_FOUND', `no registry version with that id`);
   }
-  // three reads that do not depend on each other, so one round trip of waiting rather than three
-  const [ validation, activations, unreviewed ] = await Promise.all([
+  // reads that do not depend on each other, so one round trip of waiting rather than four
+  const [ validation, activations, approvals, unreviewed ] = await Promise.all([
     readValidationSummary(context.db, versionId),
     readActivationHistory(context.db, versionId),
+    readApprovals(context.db, versionId),
     readUnreviewed(context.db, versionId),
   ]);
   return jsonResponse({
@@ -390,6 +393,7 @@ async function getVersionDetail(context: RegistryContext, versionId: string): Pr
     },
     validation,
     activations,
+    approvals,
     /*
      * The networks and markets this version imported that nobody has
      * reviewed: disabled, with every capability off, until someone decides
@@ -628,6 +632,26 @@ async function postActivation(
   return jsonResponse(result, { headers: registryHeaders(result.registryVersion) });
 }
 
+/*
+ * Approves a validated version for an activation by somebody else, against
+ * the version its giver read the changes against, which must still be on
+ * (approveVersion). Every request records an approval of its own.
+ */
+async function postApproval(
+  context: AdminContext,
+  versionId: string,
+  reason: string,
+  ttlSeconds: number,
+  expectedActiveVersionId: string | null,
+): Promise<Response> {
+  // a version that does not exist is not a state conflict, and answers as every other route does
+  if (await readVersion(context.db, versionId) === null) {
+    throw new ApiError('NOT_FOUND', `no registry version with that id`);
+  }
+  const approval = await approveVersion(context.db, { versionId, actor: context.actor, reason, ttlSeconds, expectedActiveVersionId });
+  return jsonResponse({ approval });
+}
+
 export type { AdminContext, RegistryContext };
 
 export {
@@ -645,5 +669,6 @@ export {
   getVersions,
   getVersionDetail,
   postActivation,
+  postApproval,
   postValidate,
 };

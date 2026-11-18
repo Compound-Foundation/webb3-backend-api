@@ -568,9 +568,10 @@ such as a database error: that is in the log, under the `requestId`.
 `CONFLICT` (409), `PAYLOAD_TOO_LARGE` (413), `UNPROCESSABLE` (422),
 `RATE_LIMITED` (429), `REGISTRY_NOT_ACTIVE` (503), `UPSTREAM_UNAVAILABLE` (503)
 and `INTERNAL` (500). A failure the registry names more precisely — an
-import, a chain read, an overlay — carries its own code in `details.code`,
-such as `SYNC_ALREADY_RUNNING` or `OVERLAY_FEED_UNREADABLE`, under the kind of
-answer it is; a monitor matches `details.code` for those. Besides
+import, a chain read, an overlay, a move of the active version — carries its
+own code in `details.code`, such as `SYNC_ALREADY_RUNNING`,
+`OVERLAY_FEED_UNREADABLE` or `APPROVAL_REQUIRED`, under the kind of answer it
+is; a monitor matches `details.code` for those. Besides
 `REGISTRY_NOT_ACTIVE`, only a source or a node provider that did not answer,
 and a database that could not be reached, are a `503`: those are the answers
 worth trying again.
@@ -622,25 +623,36 @@ scheme is read in any case, and one space or more may follow it; a header
 with anything after the token is answered as one without a token.
 
 Each token has a name and a role. The name is who holds the token, and every
-change the token makes is recorded under it: the `actor` of an activation, a
-rollback or an overlay event, the `requestedBy` of an import it asks for and
-the `createdBy` of that import's version, and the name in a cancelled run's
-`cancelled by <name>: <reason>`. A validation, which decides nothing, is the
-one command that records no name: it records the checks it ran. The role is
-what the token may call, and each role may call everything the one before it
-may:
+change the token makes is recorded under it: the `actor` of an approval, an
+activation, a rollback or an overlay event, the `requestedBy` of an import it
+asks for and the `createdBy` of that import's version, and the name in a
+cancelled run's `cancelled by <name>: <reason>`. A validation, which decides
+nothing, is the one command that records no name: it records the checks it
+ran. The role is what the token may call, and each role may call everything
+the one before it may:
 
 | Role | May call |
 |---|---|
 | `monitor` | `GET /registry/v1/admin/status` |
 | `reader` | every `GET` under `/registry/v1/admin` |
 | `operator` | besides, `POST …/sync`, `POST …/sync-runs/{sync_run_id}/cancel`, and the overlay writes: `PUT …/networks/{chain_id}/overlay`, `PUT …/markets/{chain_id}/{deployment_key}/overlay` and `PUT …/overlays` |
-| `admin` | besides, `POST …/validate`, `POST …/activate` and `POST …/rollback` |
+| `admin` | besides, `POST …/validate`, `POST …/approve`, `POST …/activate` and `POST …/rollback` |
 
 `POST …/validate` is not the only way a version validates: an import that is
 not held for review validates its draft by itself once it completes, whoever
 asked for it. What is served is decided by `POST …/activate` and
 `POST …/rollback` alone.
+
+A version is switched on by two people. An admin approves it
+(`POST …/approve`), and an admin of another name activates it
+(`POST …/activate`): names, not tokens, are people, so two tokens of one
+holder — a token and the one rotated in for it — never approve each other's
+activation. There is no role of its own for approving: any admin may approve
+what another switches on. A rollback (`POST …/rollback`) needs nobody's
+approval, so that undoing a bad version takes one person, but it goes back
+one step only: to the version the one on replaced when it was last
+activated, if that is older. Going further back is another rollback, and
+going anywhere else is an activation.
 
 An environment lists its tokens in the secret `COMET_REGISTRY_ADMIN_TOKENS`
 ([REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#the-admin-tokens)), and takes
@@ -887,8 +899,10 @@ fault, whose `lastError` is `an unexpected error interrupted the import`.
 ## `GET /registry/v1/admin/status`
 ### description:
 
-Whether the registry is healthy, in one answer: the active version and who
-switched it on, whether its bytes are cached (`cache.snapshotCached`) and the
+Whether the registry is healthy, in one answer: the active version, who
+switched it on (`active.activatedBy`) and who approved that
+(`active.approvedBy`, `null` for a rollback, and for a move made before
+approvals existed), whether its bytes are cached (`cache.snapshotCached`) and the
 cache could be read at all (`cache.readable`), when the source was last
 checked, the last import run, the candidates still open, and the registry
 settings the environment sets to something they do not take
@@ -927,17 +941,21 @@ because of it.
 
 Each version under `candidates.validated` carries `unserved`: the markets of
 the active version whose Comet it serves under no key of the same chain, by
-their keys in the active version, or `[]`.
+their keys in the active version, or `[]`; and `approval`: the newest
+approval an activation by another admin could use now, as `id`, `actor` and
+`expiresAt`, or `null` — none given, or each expired, used, or given while
+another version was on.
 
 `alerts` is that state reduced to the conditions worth acting on, so a monitor
 can check that it is empty without knowing the registry's rules:
 
 | Alert | Means |
 |---|---|
-| `configuration-invalid` | a registry setting is set to something it does not take — a number that is not a whole number in its range, or a repository or ref that names no source; `configuration.invalid` names each. The import refuses to start while one of its own is invalid, and a read takes the default in its place |
+| `configuration-invalid` | a registry setting is set to something it does not take — a number that is not a whole number in its range (`COMET_REGISTRY_APPROVAL_TTL_S` is one from 1 to 604800, a week), or a repository or ref that names no source; `configuration.invalid` names each. The import refuses to start while one of its own is invalid, a read takes the default in its place, and an approval given meanwhile lasts the default day |
 | `no-active-version` | nothing is activated, so the registry's public reads answer `503` |
 | `candidate-awaiting-review` | a draft is held for review and no import is running: somebody has to review it and validate it, or discard it |
 | `candidate-awaiting-activation` | a version newer than any ever switched on validated, and is waiting to be — what the scheduled import produces for a new commit; `candidates.validated` lists it. It holds until a version at least that new is switched on |
+| `candidate-awaiting-approval` | the newest version `candidates.validated` lists has no approval an activation could use — none given, or each expired, used, or given while another version was on — so nobody can switch it on until an admin approves it (`POST /registry/v1/admin/versions/{version_id}/approve`). It is raised beside `candidate-awaiting-activation`, clears when the version is approved or a version at least that new is switched on, and comes back when the approval expires unused or another version goes on |
 | `candidate-drops-markets` | a version `candidates.validated` lists would stop serving a market the active version serves: its `unserved` names each, by its key in the active version — a deployment the source dropped, renamed to a key nobody has reviewed, or whose key it gave to another Comet, or a market a review switched off. Nothing holds such a version back, and it can be switched on; `GET /registry/v1/admin/versions/{version_id}/changes` says where each Comet went (`markets.unserved`). It holds until a version at least that new is switched on |
 | `commit-rejected` | the newest version imported every root of its commit and is invalid, so discovery no longer imports that commit by itself; `sync.rejectedCommit` names it. It holds until a newer version exists — a forced attempt, or a new commit |
 | `chain-drift` | the version on stores a price feed or a collateral asset its market's Comet no longer answers with: governance changed the market on chain after the import, and the source did not move; `chainCheck.drifts` names each. It holds until a check of the version on finds it agrees with the chain — a version imported again with `forceNewAttempt`, which reads the chain anew, switched on, and checked at the next hourly invocation — or the chain changes back. A version switched on is taken to drift as the one before it did until it has been checked, and a network the check could not read keeps the drifts last found there |
@@ -961,6 +979,7 @@ $ curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
     "checksum": "1bd74ebe00d845e0fa5e648b22a2c39e60d9a62bf6c58190320fa01cd9a26a4a",
     "activatedAt": "2026-09-21T18:44:02.881Z",
     "activatedBy": "alice",
+    "approvedBy": "bob",
     "ageSeconds": 138518
   },
   "cache": { "snapshotCached": true, "pointerAgeSeconds": 412, "readable": true },
@@ -1128,17 +1147,27 @@ $ curl -s "$API/registry/v1/admin/versions?status=importing" -H "Authorization: 
 ## `GET /registry/v1/admin/versions/{version_id}`
 ### description:
 
-A version with its validation summary and activation history.
+A version with its validation summary, activation history and approvals.
 
 `activations` lists every move that switched the version on or off, newest
 first, and names both versions of each: `targetVersionId` is the one the move
 switched on, and `previousVersionId` the one it switched off — `null` when
 nothing was on before. A record whose `previousVersionId` is this version is
-the move that switched it off.
+the move that switched it off. `approvalId` is the approval an activation
+used, and `null` for a rollback and for a move made before approvals
+existed.
+
+`approvals` lists every approval of the version, newest first: who gave it
+(`actor`) and why, the version that was on when it was given
+(`activeVersionId`, `null` for none), which the activation it lets through
+must replace, when it was given and until when it is in force (`createdAt`,
+`expiresAt`), the activation that used it (`activationId`, `null` until one
+does), and whether an activation by another admin could use it now
+(`usable`).
 
 ```json
 {
-  "version": { "id": "d9698ddd-…", "status": "validated", … },
+  "version": { "id": "c0d77dad-…", "status": "validated", … },
   "validation": { "attempt": 1, "passed": 42, "failed": 0, "checks": [ … ] },
   "activations": [
     {
@@ -1148,16 +1177,22 @@ the move that switched it off.
       "targetVersionId": "c0d77dad-…",
       "actor": "alice",
       "reason": "switch on the new commit",
-      "createdAt": "2026-10-19T08:12:44.019Z"
-    },
+      "createdAt": "2026-10-19T08:12:44.019Z",
+      "approvalId": "5b1f0c2e-…"
+    }
+  ],
+  "approvals": [
     {
-      "id": "90e757e3-…",
-      "action": "activate",
-      "previousVersionId": null,
-      "targetVersionId": "d9698ddd-…",
-      "actor": "alice",
-      "reason": "first activation",
-      "createdAt": "2026-09-23T09:30:02.114Z"
+      "id": "5b1f0c2e-…",
+      "versionId": "c0d77dad-…",
+      "snapshotChecksum": "1bd74ebe…",
+      "activeVersionId": "d9698ddd-…",
+      "actor": "bob",
+      "reason": "read the changes: one market added",
+      "createdAt": "2026-10-19T07:58:10.402Z",
+      "expiresAt": "2026-10-20T07:58:10.402Z",
+      "activationId": "3e96812b-…",
+      "usable": false
     }
   ],
   "unreviewed": { "networks": [], "markets": [] }
@@ -1183,28 +1218,95 @@ them is recorded; validate it again.
 
 It takes no body. Validation decides nothing: it checks the stored candidate
 and records every check it ran, and not who asked for it, exactly as the
-scheduled import does unattended. The decision a person makes about a
-version, with its reason, is the activation.
+scheduled import does unattended. The decisions people make about a version,
+each with its reason, are the approval and the activation.
+
+## `POST /registry/v1/admin/versions/{version_id}/approve`
+### description:
+
+Approves a validated version, so that an admin of another name may switch it
+on. Requires a `reason`, stored with the approval, and
+`expectedActiveVersionId`: the version on that the approver read the changes
+against (`GET …/versions/{version_id}/changes`), or `null` when nothing is
+on. An approval is of the version — whose bytes no longer change once it is
+validated, so it covers exactly what goes live — against that version, and
+is given only while it is on: one decided against a version somebody has
+replaced since is refused, rather than given for a change nobody read. It
+lets an activation through only while that version is on.
+
+```json
+{ "reason": "read the changes: one market added", "expectedActiveVersionId": "d9698ddd-ab86-46bc-a412-c71df7d20414" }
+```
+
+It answers `200` with the approval, as `GET …/versions/{version_id}` lists
+it under `approvals`:
+
+```json
+{
+  "approval": {
+    "id": "5b1f0c2e-…",
+    "versionId": "c0d77dad-…",
+    "snapshotChecksum": "1bd74ebe…",
+    "activeVersionId": "d9698ddd-…",
+    "actor": "bob",
+    "reason": "read the changes: one market added",
+    "createdAt": "2026-10-19T07:58:10.402Z",
+    "expiresAt": "2026-10-20T07:58:10.402Z",
+    "activationId": null,
+    "usable": true
+  }
+}
+```
+
+An approval is in force for `COMET_REGISTRY_APPROVAL_TTL_S` after it is given
+— a day unless the environment sets otherwise, and a week at most — an expiry
+stored with it, so changing the setting changes no approval already given.
+It lets one activation through. It no longer counts once it has expired,
+once an activation has used it, or once any move has switched its version on
+after it was given: switching a version on again after a rollback needs a
+new approval. It cannot be withdrawn: one given by mistake, or by a token
+that turns out to have leaked, stays usable by any other admin until it
+expires, is used, or another version goes on.
+
+Every request records an approval of its own. A version that does not exist
+is `404`; a version that is not validated, the version that is on — which is
+no change to approve — and an `expectedActiveVersionId` that is no longer
+what is on are `409` with `details.code` `CANDIDATE_STATE_CONFLICT`; a body
+without a `reason` or without `expectedActiveVersionId`, or with another
+property, is `400`.
 
 ## `POST /registry/v1/admin/versions/{version_id}/activate`
 ### description:
 
-Makes a validated version the one the registry serves. Requires a `reason`,
-which is stored with the audit event. Activating the version that is already
-active changes nothing.
+Makes a validated version the one the registry serves, once an admin of
+another name has approved it. Requires a `reason`, which is stored with the
+audit event. Activating the version that is already active changes nothing,
+and needs no approval.
+
+The activation uses the newest approval of the version that is in force, was
+given by another name than the activating token's, was given while the
+version now on was on, and has not been used, or overtaken by a move that
+switched the version on after it was given. Without one it is refused with
+`409` and `details.code` `APPROVAL_REQUIRED`, and nothing moves. The first
+activation of an environment needs an approval too, given while nothing was
+on.
 
 `expectedActiveVersionId` — [optional] — the version the move is decided
 against, or `null` when nothing is on yet. When it is no longer the version
 that is on, the move is refused with `409` naming the one that is, instead of
 silently undoing a move somebody else made in the meantime. A move whose
-target is already on changes nothing, whatever it expected.
+target is already on changes nothing, whatever it expected. A move made by
+somebody else between the activation's reading of what is on and its write is
+refused the same way, `409` with `details.code` `CANDIDATE_STATE_CONFLICT`,
+and records nothing: read the status and decide again.
 
 ```json
 { "reason": "switch on the new commit", "expectedActiveVersionId": "d9698ddd-ab86-46bc-a412-c71df7d20414" }
 ```
 
-It answers with the move it made. One that changed nothing answers
-`changed: false`, with `activationId` and `previousVersionId` null.
+It answers with the move it made, and the approval it used. One that changed
+nothing answers `changed: false`, with `activationId`, `previousVersionId`
+and `approvalId` null.
 
 ```json
 {
@@ -1213,15 +1315,41 @@ It answers with the move it made. One that changed nothing answers
   "previousVersionId": "d9698ddd-…",
   "targetVersionId": "c0d77dad-…",
   "changed": true,
+  "approvalId": "5b1f0c2e-…",
   "registryVersion": { "id": "c0d77dad-…", "checksum": "1bd74ebe…" }
 }
 ```
+
+From an environment's first approval on, the database refuses an activation
+without an approval it may use, a rollback the rule below does not allow,
+and a move of the active version no activation records, whoever writes it
+(migration `0011`). Before that first approval only the worker holds the
+rule, and the release before approvals keeps working: it is what is live
+while the migration is applied. Someone who can write to the database
+directly can still go around the rule, as around every other.
 
 ## `POST /registry/v1/admin/versions/{version_id}/rollback`
 ### description:
 
 The same move in the other direction, recorded as a rollback, and taking the
 same `expectedActiveVersionId`.
+
+A rollback needs nobody's approval, so that undoing a bad version takes one
+person: break-glass. It goes back one step. It restores only the version the
+one on replaced when an activation last switched it on — in the
+`activations` of the version on (`GET …/versions/{version_id}`), the
+`previousVersionId` of the newest `activate` whose `targetVersionId` is the
+version on — and only when that version is older, in the order
+`GET …/versions` lists them. To go further back, roll back again from the
+version restored: each step is a rollback of its own. Anything else is
+refused with `409` and `details.code` `ROLLBACK_TARGET_INVALID`, whose
+message names the version a rollback may restore now, or says that none
+may: a version two steps back or more, one never on, one newer than the
+version on, any rollback while nothing is on, and any from a version an
+activation switched on in place of a newer one. Such a version is switched
+on with an activation, once another admin has approved it. A rollback to
+the version on changes nothing, as an activation of it does. Its answer's
+`approvalId` is `null`.
 
 ## `PUT /registry/v1/admin/versions/{version_id}/networks/{chain_id}/overlay`
 ### description:

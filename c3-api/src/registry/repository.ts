@@ -3,6 +3,7 @@ import {
   ActivationRecordV1,
   ActivationResultV1,
   Address,
+  ApprovalV1,
   CONTRACT_ROLES,
   CONTRACT_ROLE_KEYS,
   MARKET_KEY_SEPARATOR,
@@ -15,6 +16,7 @@ import {
   NetworkV1,
   PriceExceptionV1,
   PriceQuote,
+  RegistryApprovalRow,
   RegistryNetworkRow,
   RegistrySnapshotV1,
   RegistryTables,
@@ -45,6 +47,10 @@ import { sha256Hex } from '../../lib/hash.js';
  * database owns the invariants: the lifecycle, singleton, and append-only
  * triggers of migrations/0001_comet_registry.sql reject anything this module
  * gets wrong, so these functions stay thin and never re-implement those rules.
+ * The rules of who may switch a version on are the exception: an
+ * environment's database holds them only from its first approval on
+ * (migrations/0011_registry_approvals.sql), so activateVersion checks them
+ * itself before it writes.
  */
 type SqlValue = string | number | null;
 
@@ -907,24 +913,34 @@ async function readRegistrySnapshot(
  * pointer itself. Both carry the same condition, so activating the version
  * that is already active writes neither: it is an idempotent no-op, not a
  * second activation event. `expected`, when given, conditions both as well.
+ * `approvalId` is the approval an activation uses, and null for a rollback.
  *
  * The pointer trigger refuses a target that is not validated, and because
  * both statements run in one batch, a refused pointer change rolls back the
- * audit event with it.
+ * audit event with it. Both are written at one instant, `at`, which is how
+ * migration 0011 tells a move an activation made from any other.
  */
 function activationStatements(
   db: D1Database,
-  move: { activationId: string, versionId: string, action: ActivationAction, actor: string, reason: string, at: string },
+  move: {
+    activationId: string,
+    versionId:    string,
+    action:       ActivationAction,
+    actor:        string,
+    reason:       string,
+    at:           string,
+    approvalId:   string | null,
+  },
   expected?: Condition,
 ): [ D1PreparedStatement, D1PreparedStatement ] {
   return [
     conditioned(
       db,
-      `INSERT INTO registry_activations (id, registry_version_id, previous_version_id, action, actor, reason, created_at)
-       SELECT ?1, ?2, active_version_id, ?3, ?4, ?5, ?6
+      `INSERT INTO registry_activations (id, registry_version_id, previous_version_id, action, actor, reason, created_at, approval_id)
+       SELECT ?1, ?2, active_version_id, ?3, ?4, ?5, ?6, ?7
        FROM registry_state
        WHERE singleton_id = 1 AND active_version_id IS NOT ?2`,
-      [ move.activationId, move.versionId, move.action, move.actor, move.reason, move.at ],
+      [ move.activationId, move.versionId, move.action, move.actor, move.reason, move.at, move.approvalId ],
       expected,
     ),
     conditioned(
@@ -937,14 +953,234 @@ function activationStatements(
   ];
 }
 
+// that the pointer still names `active`, null for nothing on; undefined expects nothing
+function pointerAt(active: string | null | undefined): Condition | undefined {
+  return active === undefined ? undefined : { sql: first => `active_version_id IS ?${first}`, values: [ active ] };
+}
+
+/*
+ * Whether an approval may still let its version be switched on, as SQL over
+ * the approval's alias: it is in force at `at`, it was made while `active`
+ * was on — the version an activation would replace — and no move has used
+ * it, or switched its version on since it was made. Going back to a version
+ * and forward again is a new decision, which needs a new approval. Every
+ * reader of approvals asks this one question: an activation before it is
+ * written, the status of a version waiting to be switched on, and the
+ * history of a version; migration 0011's trigger asks it of every
+ * activation, with the activator's name besides.
+ */
+function approvalUsable(approval: string, active: string, at: string): string {
+  return `${approval}.expires_at > ${at}
+    AND ${approval}.active_version_id IS ${active}
+    AND NOT EXISTS (SELECT 1 FROM registry_activations AS spent WHERE spent.approval_id = ${approval}.id)
+    AND NOT EXISTS (
+      SELECT 1 FROM registry_activations AS later
+      WHERE later.registry_version_id = ${approval}.registry_version_id AND later.created_at >= ${approval}.created_at
+    )`;
+}
+
+function approvalOf(row: RegistryApprovalRow & { activation_id: string | null, usable: number }): ApprovalV1 {
+  return {
+    id:               row.id,
+    versionId:        row.registry_version_id,
+    snapshotChecksum: row.snapshot_checksum,
+    activeVersionId:  row.active_version_id,
+    actor:            row.actor,
+    reason:           row.reason,
+    createdAt:        row.created_at,
+    expiresAt:        row.expires_at,
+    activationId:     row.activation_id,
+    usable:           row.usable === 1,
+  };
+}
+
+/*
+ * Records that `actor` approves a validated version, against the version
+ * that is on: the approval covers that change and no other, and expires
+ * `ttlSeconds` after it is given, an expiry stored with it, so changing the
+ * setting changes no approval already given. The version on is never
+ * approved: it is no change, and an approval of it could only ever wait for
+ * a move back. `expectedActiveVersionId` is the version its giver read the
+ * changes against, null for nothing on, and the approval is written only
+ * while that is what is on: a move made after the reading would have it
+ * cover a change nobody read.
+ */
+async function approveVersion(
+  db: D1Database,
+  input: {
+    versionId:               string,
+    actor:                   string,
+    reason:                  string,
+    ttlSeconds:              number,
+    expectedActiveVersionId: string | null,
+  },
+): Promise<ApprovalV1> {
+  const version = await readVersion(db, input.versionId);
+  if (version === null) {
+    throw new RegistryError('CANDIDATE_STATE_CONFLICT', `no such registry version`, input.versionId);
+  }
+  if (version.status !== 'validated' || version.snapshot_checksum === null) {
+    throw new RegistryError('CANDIDATE_STATE_CONFLICT', `only a validated version can be approved`, input.versionId);
+  }
+
+  const id  = crypto.randomUUID();
+  const now = Date.now();
+  const [ inserted, written ] = await db.batch([
+    conditioned(
+      db,
+      `INSERT INTO registry_approvals (
+         id, registry_version_id, snapshot_checksum, active_version_id, actor, reason, created_at, expires_at
+       )
+       SELECT ?1, ?2, ?3, active_version_id, ?4, ?5, ?6, ?7
+       FROM registry_state
+       WHERE singleton_id = 1 AND active_version_id IS NOT ?2`,
+      [
+        id, input.versionId, version.snapshot_checksum, input.actor, input.reason,
+        new Date(now).toISOString(), new Date(now + input.ttlSeconds * 1000).toISOString(),
+      ],
+      pointerAt(input.expectedActiveVersionId),
+    ),
+    db.prepare(`SELECT * FROM registry_approvals WHERE id = ?1`).bind(id),
+  ]);
+
+  const row = (written!.results?.[0] ?? null) as RegistryApprovalRow | null;
+  if (changedRows(inserted!) === 0 || row === null) {
+    const active = await readActiveVersionId(db);
+    throw new RegistryError(
+      'CANDIDATE_STATE_CONFLICT',
+      active === input.versionId
+        ? `registry version ${input.versionId} is on already; an approval is of a version to switch on`
+        : `the active version is ${active ?? 'none'}, not ${input.expectedActiveVersionId ?? 'none'} as this approval expected`,
+      input.versionId,
+    );
+  }
+  return approvalOf({ ...row, activation_id: null, usable: 1 });
+}
+
+/*
+ * The approval an activation by `actor` at `at` may use, replacing `active`:
+ * the newest by another name, or null for none. Names, not tokens, are the
+ * people here: two tokens of one holder never approve each other's
+ * activation.
+ */
+async function usableApprovalOf(
+  db: D1Database,
+  { versionId, actor, active, at }: { versionId: string, actor: string, active: string | null, at: string },
+): Promise<string | null> {
+  const id = await db.prepare(
+    `SELECT approval.id FROM registry_approvals AS approval
+     WHERE approval.registry_version_id = ?1 AND approval.actor <> ?2
+       AND ${approvalUsable('approval', '?3', '?4')}
+     ORDER BY approval.created_at DESC, approval.rowid DESC
+     LIMIT 1`
+  ).bind(versionId, actor, active, at).first<string | null>('id');
+  return id ?? null;
+}
+
+/*
+ * The version a rollback from `active` restores: the one `active` replaced
+ * when an activation last switched it on, so long as that one is older in
+ * the order the version listing uses; null when there is none — `active`
+ * replaced nothing then, or a newer version, which only another approved
+ * activation brings back. A rollback goes back that one step and no further:
+ * the step before it is another rollback, from the version this one
+ * restores. Migration 0011's trigger holds the same rule.
+ */
+async function restorableFrom(db: D1Database, active: string): Promise<string | null> {
+  const id = await db.prepare(
+    `SELECT replaced.id
+     FROM registry_activations AS latest
+     JOIN registry_versions AS replaced ON replaced.id = latest.previous_version_id
+     JOIN registry_versions AS active ON active.id = latest.registry_version_id
+     WHERE latest.id = (
+         SELECT id FROM registry_activations
+         WHERE action = 'activate' AND registry_version_id = ?1
+         ORDER BY created_at DESC, rowid DESC
+         LIMIT 1
+       )
+       AND (replaced.created_at, replaced.attempt, replaced.id) < (active.created_at, active.attempt, active.id)`
+  ).bind(active).first<string | null>('id');
+  return id ?? null;
+}
+
+// what a rollback may restore while `active` is on, as the refusal of one to `versionId` says it
+function rollbackRefusal(versionId: string, active: string | null, restorable: string | null): string {
+  if (active === null) {
+    return `nothing is on, so there is nothing to roll back`;
+  }
+  const instead = `to switch ${versionId} on, activate it once an admin of another name has approved it`;
+  return restorable === null
+    ? `a rollback goes back one step, and ${active} replaced no older version when it was last activated, so nothing is restored alone; ${instead}`
+    : `a rollback goes back one step, from ${active} to ${restorable}, the version it replaced when it was last activated; ${instead}`;
+}
+
+/*
+ * Refuses a rollback to anything but the version restorableFrom names. Going
+ * back a step is break-glass, which one person may do; going anywhere else is
+ * an activation, which needs two.
+ */
+async function assertRestorable(db: D1Database, versionId: string, active: string | null): Promise<void> {
+  const restorable = active === null ? null : await restorableFrom(db, active);
+  if (restorable !== versionId) {
+    throw new RegistryError('ROLLBACK_TARGET_INVALID', rollbackRefusal(versionId, active, restorable), versionId);
+  }
+}
+
+/*
+ * The batch of a move, whose rule was checked a moment before against the
+ * version on. Moves made in between can break it while the pointer comes
+ * back to that version: an approval used up by another activation that
+ * switched the version on and a move that went back again, or the version
+ * on switched off and on again in place of another, which a rollback from it
+ * then no longer restores. Migration 0011 refuses the move then, and the
+ * refusal is the conflict the check would have answered, not a fault.
+ */
+async function writeMove(db: D1Database, statements: D1PreparedStatement[], versionId: string): Promise<D1Result[]> {
+  try {
+    return await db.batch(statements);
+  } catch (error) {
+    const message = String(error);
+    if (message.includes('an activation requires an approval') || message.includes('UNIQUE constraint failed: registry_activations.approval_id')) {
+      throw new RegistryError(
+        'APPROVAL_REQUIRED',
+        `the approval of registry version ${versionId} this activation was to use was used up while it was decided; read the version and ask again`,
+        versionId,
+        { cause: error },
+      );
+    }
+    if (message.includes('a rollback restores only')) {
+      const active     = await readActiveVersionId(db);
+      const restorable = active === null ? null : await restorableFrom(db, active);
+      throw new RegistryError(
+        'ROLLBACK_TARGET_INVALID',
+        `the version on was switched on again while this rollback was decided, and ${rollbackRefusal(versionId, active, restorable)}`,
+        versionId,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
 /*
  * Moves the active pointer, auditing the change, in the two statements
  * above: once only, however often it is asked.
  *
- * A request may name the version it expects to replace. Both statements then
- * require it too, so of two moves made against the same version — a rollback
- * and an activation racing — the later one changes nothing and is refused,
- * rather than silently undoing the other. Null expects that nothing is on.
+ * What is on decides the rule a move answers to. Moving to the version that
+ * is on is the idempotent no-op, which needs nothing and writes nothing,
+ * whatever it expected. An activation needs an approval of its version by
+ * another name (usableApprovalOf), which it records and uses up. A rollback
+ * needs none, as break-glass, but goes back one step only, to the older
+ * version the one on replaced when it was last activated (restorableFrom).
+ * Every move is made here, so no caller can skip the rules, and migration
+ * 0011 holds them in the database too once the environment has an approval.
+ *
+ * A request may name the version it expects to replace, null for nothing on,
+ * and is refused when that is not what is on: of two moves made against the
+ * same version, the later one does not silently undo the other. The rules are
+ * then decided against the pointer as it was read, so both statements are
+ * written only while it still names that version: a move made in between
+ * would leave a decision about one change written as another.
  */
 async function activateVersion(
   db: D1Database,
@@ -967,22 +1203,55 @@ async function activateVersion(
       input.versionId,
     );
   }
+  const registryVersion = { id: input.versionId, checksum: version.snapshot_checksum };
+  const unchanged: ActivationResultV1 = {
+    action:            input.action,
+    activationId:      null,
+    previousVersionId: null,
+    targetVersionId:   input.versionId,
+    changed:           false,
+    approvalId:        null,
+    registryVersion,
+  };
+
+  const active = await readActiveVersionId(db);
+  if (active === input.versionId) {
+    return unchanged;
+  }
+  if (input.expectedActiveVersionId !== undefined && active !== input.expectedActiveVersionId) {
+    throw new RegistryError(
+      'CANDIDATE_STATE_CONFLICT',
+      `the active version is ${active ?? 'none'}, not ${input.expectedActiveVersionId ?? 'none'} as this ${input.action} expected`,
+      input.versionId,
+    );
+  }
 
   const activationId = crypto.randomUUID();
   const timestamp    = new Date().toISOString();
-  const expected: Condition | undefined = input.expectedActiveVersionId === undefined ? undefined : {
-    sql:    first => `active_version_id IS ?${first}`,
-    values: [ input.expectedActiveVersionId ],
-  };
+  let approvalId: string | null = null;
+  if (input.action === 'activate') {
+    approvalId = await usableApprovalOf(db, { versionId: input.versionId, actor: input.actor, active, at: timestamp });
+    if (approvalId === null) {
+      throw new RegistryError(
+        'APPROVAL_REQUIRED',
+        `registry version ${input.versionId} has no approval ${input.actor} can activate it with: one by another name, `
+          + `in force, given while ${active ?? 'no version'} was on, and not used or overtaken by a move since`,
+        input.versionId,
+      );
+    }
+  } else {
+    await assertRestorable(db, input.versionId, active);
+  }
 
-  const [ auditResult, pointerResult ] = await db.batch(activationStatements(db, {
+  const [ auditResult, pointerResult ] = await writeMove(db, activationStatements(db, {
     activationId,
     versionId: input.versionId,
     action:    input.action,
     actor:     input.actor,
     reason:    input.reason,
     at:        timestamp,
-  }, expected));
+    approvalId,
+  }, pointerAt(active)), input.versionId);
 
   const audited = changedRows(auditResult!);
   const moved   = changedRows(pointerResult!);
@@ -995,38 +1264,32 @@ async function activateVersion(
   }
 
   /*
-   * Nothing moved. The target already being on is the idempotent case; any
-   * other version being on means the expectation no longer held.
+   * Nothing moved: the pointer no longer named what the rules were decided
+   * against. A move that switched the target on in between leaves this one
+   * where a request made a moment later would be, the idempotent no-op; any
+   * other is refused, to be decided again against what is on now.
    */
-  if (moved === 0 && input.expectedActiveVersionId !== undefined) {
-    const active = await readActiveVersionId(db);
-    if (active !== input.versionId) {
-      throw new RegistryError(
-        'CANDIDATE_STATE_CONFLICT',
-        `the active version is ${active ?? 'none'}, not ${input.expectedActiveVersionId ?? 'none'} as this ${input.action} expected`,
-        input.versionId,
-      );
+  if (moved === 0) {
+    const current = await readActiveVersionId(db);
+    if (current === input.versionId) {
+      return unchanged;
     }
+    throw new RegistryError(
+      'CANDIDATE_STATE_CONFLICT',
+      `the active version changed to ${current ?? 'none'} while this ${input.action} was decided; read the status and ask again`,
+      input.versionId,
+    );
   }
 
-  /*
-   * What was replaced is read back from the audit row this activation wrote,
-   * not from a read taken before the batch. Two activations can race, and the
-   * answer an operator is given must be the one the audit trail records, not
-   * the state the request happened to observe on the way in.
-   */
-  const previousVersionId = moved === 1
-    ? await db.prepare(`SELECT previous_version_id FROM registry_activations WHERE id = ?1`)
-        .bind(activationId).first<string | null>('previous_version_id')
-    : null;
-
+  // written only while `active` was on, the move replaced exactly that
   return {
     action:            input.action,
-    activationId:      moved === 1 ? activationId : null,
-    previousVersionId: previousVersionId ?? null,
+    activationId,
+    previousVersionId: active,
     targetVersionId:   input.versionId,
-    changed:           moved === 1,
-    registryVersion:   { id: input.versionId, checksum: version.snapshot_checksum },
+    changed:           true,
+    approvalId,
+    registryVersion,
   };
 }
 
@@ -1060,13 +1323,13 @@ async function readActivationHistory(
   versionId: string,
 ): Promise<ActivationRecordV1[]> {
   const { results } = await db.prepare(
-    `SELECT id, action, previous_version_id, registry_version_id, actor, reason, created_at
+    `SELECT id, action, previous_version_id, registry_version_id, actor, reason, created_at, approval_id
      FROM registry_activations
      WHERE registry_version_id = ?1 OR previous_version_id = ?1
      ORDER BY created_at DESC, rowid DESC`
   ).bind(versionId).all<{
     id: string, action: ActivationAction, previous_version_id: string | null, registry_version_id: string,
-    actor: string, reason: string, created_at: string,
+    actor: string, reason: string, created_at: string, approval_id: string | null,
   }>();
   return (results ?? []).map(row => ({
     id:                row.id,
@@ -1076,7 +1339,26 @@ async function readActivationHistory(
     actor:             row.actor,
     reason:            row.reason,
     createdAt:         row.created_at,
+    approvalId:        row.approval_id,
   }));
+}
+
+/*
+ * Every approval of a version, newest first: who gave it, against which
+ * version, until when, the activation that used it, and whether an
+ * activation could use it at `at`, against the version on then.
+ */
+async function readApprovals(db: D1Database, versionId: string, at: string = new Date().toISOString()): Promise<ApprovalV1[]> {
+  const { results } = await db.prepare(
+    `SELECT approval.*, activation.id AS activation_id,
+            CASE WHEN ${approvalUsable('approval', 'state.active_version_id', '?2')} THEN 1 ELSE 0 END AS usable
+     FROM registry_approvals AS approval
+     JOIN registry_state AS state ON state.singleton_id = 1
+     LEFT JOIN registry_activations AS activation ON activation.approval_id = approval.id
+     WHERE approval.registry_version_id = ?1
+     ORDER BY approval.created_at DESC, approval.rowid DESC`
+  ).bind(versionId, at).all<RegistryApprovalRow & { activation_id: string | null, usable: number }>();
+  return (results ?? []).map(approvalOf);
 }
 
 /*
@@ -1564,6 +1846,8 @@ export {
   changedRows,
   activateVersion,
   activationStatements,
+  approvalUsable,
+  approveVersion,
   both,
   candidateRow,
   candidateStatement,
@@ -1582,6 +1866,7 @@ export {
   readActiveOverlays,
   readActivePointer,
   readActiveVersionId,
+  readApprovals,
   readImportOverlays,
   readMarket,
   readNetworkOverlay,
