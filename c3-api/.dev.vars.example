@@ -36,6 +36,14 @@
 # The admin tokens), and one name for each person
 # COMET_REGISTRY_ADMIN_TOKENS='[{"name":"local-admin","sha256":"<64 hex digits>","role":"admin","notAfter":null},{"name":"local-approver","sha256":"<64 hex digits>","role":"admin","notAfter":null}]'
 
+# Optional webhook every version switched on, rolled back to or approved is
+# announced to: the https URL of a Slack incoming webhook, which is itself the
+# credential (REGISTRY_RUNBOOK.md, Announcing changes). Unset, nothing is
+# announced. Set here, a local activation posts to it, so name a channel of
+# your own. `npm test` reads this file too; the registry's tests set this to
+# nothing over it, so they announce nothing
+# COMET_REGISTRY_WEBHOOK_URL=
+
 # GitHub token the registry import reads the Comet repository with: optional
 # here, required in stage and production. Without one GitHub allows 60 API
 # requests an hour per address, which a Worker shares with every other Worker

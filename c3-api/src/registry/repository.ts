@@ -1084,7 +1084,8 @@ async function usableApprovalOf(
  * replaced nothing then, or a newer version, which only another approved
  * activation brings back. A rollback goes back that one step and no further:
  * the step before it is another rollback, from the version this one
- * restores. Migration 0011's trigger holds the same rule.
+ * restores, announced on its own. Migration 0011's trigger holds the same
+ * rule.
  */
 async function restorableFrom(db: D1Database, active: string): Promise<string | null> {
   const id = await db.prepare(
