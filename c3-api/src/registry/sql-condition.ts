@@ -2,8 +2,9 @@ import type { RegistryTables } from './rows.js';
 
 /*
  * Conditional writes: the condition a statement applies under, the
- * statements that carry one, and how many rows a statement changed. The
- * registry stores and the sync fence (sync.ts) build their writes from them.
+ * statements that carry one, how many rows a statement changed, and the rows
+ * one read. The registry stores and the sync fence (sync.ts) build their
+ * writes from them.
  */
 type SqlValue = string | number | null;
 
@@ -70,5 +71,10 @@ function changedRows(result: D1Result): number {
   return (result as unknown as { meta?: { changes?: number } }).meta?.changes ?? 0;
 }
 
+// the cast to T is not checked
+function rowsOf<T>(result: D1Result | undefined): T[] {
+  return (result?.results ?? []) as T[];
+}
+
 export type { Condition, SqlValue };
-export { both, changedRows, conditioned, insertStatement };
+export { both, changedRows, conditioned, insertStatement, rowsOf };

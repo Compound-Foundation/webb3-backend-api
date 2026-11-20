@@ -67,6 +67,10 @@ function isAddress(value: unknown): value is Address {
   return typeof(value) === 'string' && ADDRESS_PATTERN.test(value);
 }
 
+function isChainId(value: unknown): value is number {
+  return typeof(value) === 'number' && Number.isSafeInteger(value) && value > 0;
+}
+
 function normalizeAddress(value: Address | string): Address {
   return value.toLowerCase() as Address;
 }
@@ -284,6 +288,20 @@ type ServedMarket  = MarketV1 & { contracts: MarketV1['contracts'] & { comet: Ad
 type ServedNetwork = Omit<NetworkV1, 'markets'> & { markets: ServedMarket[] };
 
 /*
+ * The active version as the active reads serve it — /active and the market
+ * reads — beside RegistrySnapshotV1, which stays the version as imported:
+ * every collateral also says whether an administrator marked it deprecated in
+ * its Comet (migrations/0007_deprecated_collaterals.sql), and whether one hid
+ * it there (migrations/0008_hidden_collaterals.sql). A flag is a decision
+ * about the market, not part of the version, so it takes no part in the
+ * version's checksum and is read anew for every answer.
+ */
+type ActiveCollateralAssetV1 = CollateralAssetV1 & { isDeprecated: boolean, isHidden: boolean };
+type ActiveMarketV1          = Omit<ServedMarket, 'collateralAssets'> & { collateralAssets: ActiveCollateralAssetV1[] };
+type ActiveNetworkV1         = Omit<NetworkV1, 'markets'> & { markets: ActiveMarketV1[] };
+type ActiveSnapshotV1        = Omit<RegistrySnapshotV1, 'networks'> & { networks: ActiveNetworkV1[] };
+
+/*
  * How a response that resolved a version identifies it. It is deliberately
  * smaller than the snapshot's own reference: a convenience read states which
  * version answered, not where it came from.
@@ -357,6 +375,272 @@ type ValidationSummaryV1 = {
 };
 
 /*
+ * The decision in force for a token. A token nobody has decided about is not
+ * strategic, and has no time or author to name.
+ */
+type TokenPolicyV1 = {
+  isStrategic: boolean,
+  updatedAt:   string | null,
+  updatedBy:   string | null,
+};
+
+type TokenPolicyEventV1 = {
+  id:                  string,
+  // null where the token had no decision yet, which is not strategic
+  previousIsStrategic: boolean | null,
+  isStrategic:         boolean,
+  actor:               string,
+  reason:              string,
+  createdAt:           string,
+};
+
+/*
+ * Every token of one network of the active version, with the decision in
+ * force for each, and the decisions kept for tokens of the chain the active
+ * version does not hold: each applies again if a version brings its token
+ * back. `inActiveVersion` is false for a chain the active version does not
+ * hold at all, which has no tokens to list but may still have decisions kept.
+ */
+type TokenPoliciesV1 = {
+  registryVersion: VersionRefV1,
+  chainId:         number,
+  inActiveVersion: boolean,
+  tokens:          Array<TokenV1 & TokenPolicyV1>,
+  retained:        Array<TokenPolicyV1 & { address: Address }>,
+};
+
+/*
+ * One token's decision, and the changes that led to it, newest committed
+ * first. `inActiveVersion` is false for a decision kept while the active
+ * version does not hold the token, which applies again once one does.
+ */
+type TokenPolicyDetailV1 = TokenPolicyV1 & {
+  registryVersion: VersionRefV1,
+  chainId:         number,
+  tokenAddress:    Address,
+  inActiveVersion: boolean,
+  events:          TokenPolicyEventV1[],
+};
+
+/*
+ * The answer to a policy change. `changed` is false when the decision asked
+ * for was already in force, which writes nothing; `updatedAt` is when the
+ * decision in force was made, and null for a token nobody has decided about.
+ */
+type TokenPolicyResultV1 = {
+  registryVersion: VersionRefV1,
+  chainId:         number,
+  tokenAddress:    Address,
+  isStrategic:     boolean,
+  changed:         boolean,
+  updatedAt:       string | null,
+};
+
+/*
+ * A list of decisions: what the export answers, and what review and apply
+ * take, so a list is exported, edited and sent back as one file.
+ *
+ * A row that changes a decision needs a reason: its own, or the list's. A row
+ * that leaves its token as it is needs none. `symbol` is there for the person
+ * editing the file; the address decides, and a symbol that is not the token's
+ * is refused as the mistake it usually is. `registryVersion` says where the
+ * list was exported from, and is not checked: a decision belongs to no version.
+ */
+type TokenPolicyDecisionV1 = {
+  chainId:      number,
+  tokenAddress: Address,
+  symbol?:      string | null,
+  isStrategic:  boolean,
+  reason?:      string | null,
+};
+
+type TokenPolicyListV1 = {
+  registryVersion?: VersionRefV1,
+  reason:           string | null,
+  policies:         TokenPolicyDecisionV1[],
+};
+
+// what applying a list would change, row by row, without writing anything
+type TokenPolicyReviewV1 = {
+  registryVersion: VersionRefV1,
+  summary:         { change: number, unchanged: number, problems: number },
+  policies:        Array<{
+    row:          number,
+    chainId:      number,
+    tokenAddress: Address,
+    symbol:       string | null,
+    current:      boolean,
+    requested:    boolean,
+    action:       'change' | 'unchanged',
+    reason:       string | null,
+    problem:      string | null,
+  }>,
+};
+
+// what applying a list wrote: every row, as the transaction that wrote it left it
+type TokenPolicyApplyV1 = {
+  registryVersion: VersionRefV1,
+  summary:         { changed: number, unchanged: number },
+  policies:        Array<{
+    row:          number,
+    chainId:      number,
+    tokenAddress: Address,
+    symbol:       string,
+    isStrategic:  boolean,
+    changed:      boolean,
+    updatedAt:    string | null,
+  }>,
+};
+
+/*
+ * The decisions an administrator makes about a collateral of a Comet, a flag
+ * a kind: whether the collateral is deprecated in that Comet
+ * (`isDeprecated`), and whether it is hidden there from discovery
+ * (`isHidden`). Every kind answers in the types below under its own flag, and
+ * a list of a kind's decisions holds its rows under the kind's own member
+ * (`Rows`), so that neither kind's review takes the other's file. Each kind's
+ * own names for those types follow them.
+ *
+ * The decision in force for a collateral of a Comet. A collateral nobody has
+ * decided about has the flag unset, and has no time or author to name.
+ */
+type CollateralDecisionV1<Flag extends string> = Record<Flag, boolean> & {
+  updatedAt: string | null,
+  updatedBy: string | null,
+};
+
+// the flag before the change is null where the collateral had no decision yet, which has the flag unset
+type CollateralDecisionEventV1<Flag extends string> = {
+  id:        string,
+} & Record<`previous${Capitalize<Flag>}`, boolean | null> & Record<Flag, boolean> & {
+  actor:     string,
+  reason:    string,
+  createdAt: string,
+};
+
+/*
+ * One collateral's decision, and the changes that led to it, newest committed
+ * first. `inActiveVersion` is false for a decision kept while the active
+ * version does not hold the collateral in that Comet, which applies again once
+ * one does and serves the market.
+ */
+type CollateralDecisionDetailV1<Flag extends string> = CollateralDecisionV1<Flag> & {
+  registryVersion: VersionRefV1,
+  chainId:         number,
+  cometAddress:    Address,
+  tokenAddress:    Address,
+  inActiveVersion: boolean,
+  events:          Array<CollateralDecisionEventV1<Flag>>,
+};
+
+/*
+ * The answer to a decision about one collateral. `changed` is false when the
+ * decision asked for was already in force, which writes nothing; `updatedAt`
+ * is when the decision in force was made, and null where nobody has decided.
+ */
+type CollateralDecisionResultV1<Flag extends string> = {
+  registryVersion: VersionRefV1,
+  chainId:         number,
+  cometAddress:    Address,
+  tokenAddress:    Address,
+} & Record<Flag, boolean> & {
+  changed:         boolean,
+  updatedAt:       string | null,
+};
+
+/*
+ * A row of a list of decisions about collaterals. A list is what the export
+ * answers, and what review and apply take, so a list is exported, edited and
+ * sent back as one file, as a list of token policies is.
+ *
+ * A row that changes a decision needs a reason: its own, or the list's.
+ * `deploymentKey` and `symbol` are there for the person editing the file; the
+ * addresses decide, and a market or a symbol that is not the one the active
+ * version names is refused as the mistake it usually is.
+ */
+type ListedCollateralDecisionV1<Flag extends string> = {
+  chainId:        number,
+  cometAddress:   Address,
+  deploymentKey?: string | null,
+  tokenAddress:   Address,
+  symbol?:        string | null,
+} & Record<Flag, boolean> & {
+  reason?:        string | null,
+};
+
+// a decision kept for a collateral the active version does not hold in that Comet
+type RetainedCollateralDecisionV1<Flag extends string> = CollateralDecisionV1<Flag> & {
+  chainId:      number,
+  cometAddress: Address,
+  tokenAddress: Address,
+};
+
+/*
+ * `registryVersion` and `retained` say where the list was exported from and
+ * which decisions the active version does not hold, and are not read.
+ */
+type CollateralDecisionListV1<Flag extends string, Rows extends string> = {
+  registryVersion?: VersionRefV1,
+  reason:           string | null,
+} & Record<Rows, Array<ListedCollateralDecisionV1<Flag>>> & {
+  retained?:        Array<RetainedCollateralDecisionV1<Flag>>,
+};
+
+// what applying a list would change, row by row, without writing anything
+type CollateralDecisionReviewV1<Rows extends string> = {
+  registryVersion: VersionRefV1,
+  summary:         { change: number, unchanged: number, problems: number },
+} & Record<Rows, Array<{
+  row:           number,
+  chainId:       number,
+  cometAddress:  Address,
+  deploymentKey: string | null,
+  tokenAddress:  Address,
+  symbol:        string | null,
+  current:       boolean,
+  requested:     boolean,
+  action:        'change' | 'unchanged',
+  reason:        string | null,
+  problem:       string | null,
+}>>;
+
+// what applying a list wrote: every row, as the transaction that wrote it left it
+type CollateralDecisionApplyV1<Flag extends string, Rows extends string> = {
+  registryVersion: VersionRefV1,
+  summary:         { changed: number, unchanged: number },
+} & Record<Rows, Array<{
+  row:           number,
+  chainId:       number,
+  cometAddress:  Address,
+  deploymentKey: string,
+  tokenAddress:  Address,
+  symbol:        string,
+} & Record<Flag, boolean> & {
+  changed:       boolean,
+  updatedAt:     string | null,
+}>>;
+
+type DeprecatedCollateralV1         = CollateralDecisionV1<'isDeprecated'>;
+type DeprecatedCollateralEventV1    = CollateralDecisionEventV1<'isDeprecated'>;
+type DeprecatedCollateralDetailV1   = CollateralDecisionDetailV1<'isDeprecated'>;
+type DeprecatedCollateralResultV1   = CollateralDecisionResultV1<'isDeprecated'>;
+type DeprecatedCollateralDecisionV1 = ListedCollateralDecisionV1<'isDeprecated'>;
+type RetainedDeprecatedCollateralV1 = RetainedCollateralDecisionV1<'isDeprecated'>;
+type DeprecatedCollateralListV1     = CollateralDecisionListV1<'isDeprecated', 'collaterals'>;
+type DeprecatedCollateralReviewV1   = CollateralDecisionReviewV1<'collaterals'>;
+type DeprecatedCollateralApplyV1    = CollateralDecisionApplyV1<'isDeprecated', 'collaterals'>;
+
+type HiddenCollateralV1         = CollateralDecisionV1<'isHidden'>;
+type HiddenCollateralEventV1    = CollateralDecisionEventV1<'isHidden'>;
+type HiddenCollateralDetailV1   = CollateralDecisionDetailV1<'isHidden'>;
+type HiddenCollateralResultV1   = CollateralDecisionResultV1<'isHidden'>;
+type HiddenCollateralDecisionV1 = ListedCollateralDecisionV1<'isHidden'>;
+type RetainedHiddenCollateralV1 = RetainedCollateralDecisionV1<'isHidden'>;
+type HiddenCollateralListV1     = CollateralDecisionListV1<'isHidden', 'hiddenCollaterals'>;
+type HiddenCollateralReviewV1   = CollateralDecisionReviewV1<'hiddenCollaterals'>;
+type HiddenCollateralApplyV1    = CollateralDecisionApplyV1<'isHidden', 'hiddenCollaterals'>;
+
+/*
  * What a Comet contract carries when it was materialized from the registry:
  * the version that described it, the market as that version describes it, and
  * the exceptions of its network.
@@ -395,16 +679,44 @@ export type {
   ActivationAction,
   ActivationRecordV1,
   ActivationResultV1,
+  ActiveCollateralAssetV1,
+  ActiveMarketV1,
+  ActiveNetworkV1,
+  ActiveSnapshotV1,
   Address,
   ApprovalV1,
   AssetDisplayOverrideV1,
   AssetRole,
   BaseAssetV1,
   CollateralAssetV1,
+  CollateralDecisionApplyV1,
+  CollateralDecisionDetailV1,
+  CollateralDecisionEventV1,
+  CollateralDecisionListV1,
+  CollateralDecisionResultV1,
+  CollateralDecisionReviewV1,
+  CollateralDecisionV1,
   ContractRole,
   ContractRoleKey,
   DeploymentPath,
+  DeprecatedCollateralApplyV1,
+  DeprecatedCollateralDecisionV1,
+  DeprecatedCollateralDetailV1,
+  DeprecatedCollateralEventV1,
+  DeprecatedCollateralListV1,
+  DeprecatedCollateralResultV1,
+  DeprecatedCollateralReviewV1,
+  DeprecatedCollateralV1,
   ExceptionKind,
+  HiddenCollateralApplyV1,
+  HiddenCollateralDecisionV1,
+  HiddenCollateralDetailV1,
+  HiddenCollateralEventV1,
+  HiddenCollateralListV1,
+  HiddenCollateralResultV1,
+  HiddenCollateralReviewV1,
+  HiddenCollateralV1,
+  ListedCollateralDecisionV1,
   MarketStatus,
   MarketV1,
   NetworkPresentationV1,
@@ -417,9 +729,21 @@ export type {
   RegistryVersionRefV1,
   RegistryAnnotation,
   RegistryComet,
+  RetainedCollateralDecisionV1,
+  RetainedDeprecatedCollateralV1,
+  RetainedHiddenCollateralV1,
   RewardAssetV1,
   ServedMarket,
   ServedNetwork,
+  TokenPoliciesV1,
+  TokenPolicyApplyV1,
+  TokenPolicyDecisionV1,
+  TokenPolicyDetailV1,
+  TokenPolicyEventV1,
+  TokenPolicyListV1,
+  TokenPolicyResultV1,
+  TokenPolicyReviewV1,
+  TokenPolicyV1,
   TokenV1,
   UnwrappedCollateralAssetV1,
   ValidationCheckV1,
@@ -436,6 +760,7 @@ export {
   MARKET_STATUSES,
   PRICE_QUOTES,
   isAddress,
+  isChainId,
   isCommitSha,
   MARKET_KEY_SEPARATOR,
   marketKey,

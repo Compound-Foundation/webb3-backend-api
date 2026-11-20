@@ -25,6 +25,11 @@ has reviewed, so a draft that holds a review — the file sent twice, or a
 draft that inherited decisions — refuses it whole with `409`, and nothing is
 written.
 
+[`production.deprecated-collaterals.json`](./production.deprecated-collaterals.json)
+is the first list of deprecated collaterals, which an environment takes once
+its first version is on
+([The deprecated collaterals](#the-deprecated-collaterals)).
+
 Nothing in the Worker reads these files: the tests read them from the
 repository, and they reach neither `dist` nor the bundle.
 
@@ -194,3 +199,54 @@ from before the proposal quoted it in the base asset, and the file says
 `base`, which is right
 ([REGISTRY_RUNBOOK.md](../../REGISTRY_RUNBOOK.md#when-something-goes-wrong),
 Linea WETH's reward price).
+
+## The deprecated collaterals
+
+[`production.deprecated-collaterals.json`](./production.deprecated-collaterals.json)
+holds the collaterals the app left out by a list of its own until the
+registry served them: 20 collaterals of the USDT, USDC, WBTC, wstETH and
+USDS markets of Ethereum, each `"isDeprecated": true`, under one reason.
+It is a list as `GET /registry/v1/admin/deprecated-collaterals` exports one,
+which `POST …/deprecated-collaterals/review` and `…/apply` take as it is:
+each row names its chain, its Comet, the market's key, the token and its
+symbol, the addresses lowercase.
+
+It is not part of the seed, since a collateral can be marked only while a
+version that holds it is on. Step 8 of
+[the first bring-up](../../REGISTRY_RUNBOOK.md#8-mark-the-initial-deprecated-collaterals)
+sends it once step 6 has switched the seed's version on, from the root of a
+checkout: a review of the file as it is, then an apply of what the review
+shows as changes.
+
+```sh
+curl -s -X POST "$API/registry/v1/admin/deprecated-collaterals/review" \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  --data-binary @c3-api/registry/seed/production.deprecated-collaterals.json > review.json
+```
+
+The review writes nothing, and holds every row against the version that is
+on: the Comet one of its markets on chain 1, the token one of that market's
+collateral, the key and the symbol the ones the version gives them. A row it
+finds a problem in keeps the list from being applied at all; the runbook
+says what to do about one. Like the seed, the list is sent once: in an
+environment that is up, a collateral is decided with the deprecated
+collateral routes
+([REGISTRY_RUNBOOK.md](../../REGISTRY_RUNBOOK.md#marking-a-collateral-deprecated)).
+
+The file changes by hand, in a pull request, as the seed does. Where each
+address comes from, the runbook says
+([The initial list of deprecated collaterals](../../REGISTRY_RUNBOOK.md#the-initial-list-of-deprecated-collaterals)).
+[`tests/lib/registry/seed-deprecated-collaterals.test.ts`](../../tests/lib/registry/seed-deprecated-collaterals.test.ts)
+holds the file to its form — as `JSON.stringify` writes it, twenty rows,
+lowercase addresses, chain 1, every row deprecated, one reason and no
+collateral twice — each Comet to the one `production.comets.json` names for
+the row's market, and each token to the one collateral of its symbol the
+registry's fixture holds on Ethereum.
+[`tests/e2e/registry/deprecated-collaterals.test.ts`](../../tests/e2e/registry/deprecated-collaterals.test.ts)
+sends it as it is to a version of that fixture, whose Ethereum markets are
+USDC, WETH, USDT and WBTC: the review resolves the 12 rows of those markets
+and names the 8 of the wstETH and USDS markets as problems, apply refuses
+the file whole, and the 12 apply as written. Only a version imported from
+the source holds the other two markets, so their rows are checked there: by
+the review of step 8, and before an environment depends on the file, by
+[the preflight](../../REGISTRY_RUNBOOK.md#the-preflight).

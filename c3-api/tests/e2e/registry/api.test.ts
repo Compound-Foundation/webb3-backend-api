@@ -2,6 +2,7 @@ import t from 'tap';
 
 import { randomUUID } from 'node:crypto';
 
+import type { ActiveSnapshotV1 } from '../../../lib/model/comet-registry.js';
 import { overlayOfMarket } from '../../../src/registry/overlay.js';
 
 import { seedValidated } from '../../util/registry-admin.js';
@@ -78,10 +79,24 @@ t.test('the bootstrap read serves the active snapshot, or says there is none', a
   t.equal(response.headers.get('access-control-allow-origin'), '*', 'public reads stay readable cross-origin');
   t.equal(response.headers.get('x-content-type-options'), 'nosniff', 'and keep the security headers');
 
-  const body = await response.json() as typeof snapshot;
+  const body = await response.json() as ActiveSnapshotV1;
   t.equal(body.schemaVersion, 1);
   t.equal(body.registryVersion.id, versionId);
-  t.same(body.networks, snapshot.networks, 'the payload is the snapshot that was stored');
+  // every collateral also says whether its Comet has it deprecated or hidden (deprecated- and hidden-collateral-reads.test.ts)
+  const collaterals = body.networks.flatMap(network => network.markets.flatMap(market => market.collateralAssets));
+  t.ok(collaterals.every(asset => asset.isDeprecated === false && asset.isHidden === false),
+    'none of them deprecated or hidden, since nobody has decided about one');
+  t.same(
+    body.networks.map(network => ({
+      ...network,
+      markets: network.markets.map(market => ({
+        ...market,
+        collateralAssets: market.collateralAssets.map(({ isDeprecated: _isDeprecated, isHidden: _isHidden, ...asset }) => asset),
+      })),
+    })),
+    snapshot.networks,
+    'the payload is the snapshot that was stored',
+  );
 
   const slashed = await server.fetch('/registry/v1/active/');
   t.equal(slashed.status, 200, 'a trailing slash names the same resource');
@@ -95,8 +110,8 @@ t.test('a snapshot is cacheable by version and checksum', async t => {
 
   const first = await server.fetch('/registry/v1/active');
   const etag  = first.headers.get('etag');
-  t.equal(etag, `"v1-r2-snapshot-${versionId}-${snapshot.registryVersion.checksum}"`,
-    'the ETag identifies schema, revision, representation, version, and checksum');
+  t.match(etag, new RegExp(`^"v1-r5-snapshot\\+deprecated-[0-9a-f]{16}\\+hidden-[0-9a-f]{16}-${versionId}-${snapshot.registryVersion.checksum}"$`),
+    'the ETag identifies schema, revision, representation with the deprecated and hidden flags it carries, version, and checksum');
   t.match(first.headers.get('cache-control'), /max-age=300/, 'with the configured cache lifetime');
 
   /*
@@ -122,10 +137,18 @@ t.test('a snapshot is cacheable by version and checksum', async t => {
   t.equal(repeat.status, 304, 'an unchanged version answers 304');
   t.equal(repeat.headers.get('x-registry-version'), versionId, 'and still names the version');
 
-  // the same bytes by id are the same representation, decided from the version's row alone
-  const pinned = await server.fetch(`/registry/v1/versions/${versionId}`, { headers: { 'If-None-Match': etag! } });
-  t.equal(pinned.status, 304, 'the version read by id accepts the tag of the same bytes');
-  t.equal(pinned.headers.get('etag'), etag);
+  /*
+   * The version read by id is the version as it was imported, without the
+   * flags of the active reads: another representation of the
+   * same version, under a tag of its own, decided from the version's row
+   * alone.
+   */
+  const pinnedTag = `"v1-r5-snapshot-${versionId}-${snapshot.registryVersion.checksum}"`;
+  const crossed   = await server.fetch(`/registry/v1/versions/${versionId}`, { headers: { 'If-None-Match': etag! } });
+  t.equal(crossed.status, 200, 'the version read by id does not accept the bootstrap tag, which names other bytes');
+  t.equal(crossed.headers.get('etag'), pinnedTag, 'and names its own');
+  const pinned = await server.fetch(`/registry/v1/versions/${versionId}`, { headers: { 'If-None-Match': pinnedTag } });
+  t.equal(pinned.status, 304, 'which it accepts');
 
   const stale = await server.fetch('/registry/v1/active', { headers: { 'If-None-Match': '"v1-other-version"' } });
   t.equal(stale.status, 200, 'a different ETag gets the body');

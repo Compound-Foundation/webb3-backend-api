@@ -126,6 +126,10 @@ type ConflictCode = (
   // cancelling a sync run
   | 'SYNC_RUN_HELD'
   | 'SYNC_RUN_ENDED'
+  // writing token policies, deprecated collaterals and hidden ones
+  | 'TOKEN_LEFT_REGISTRY'
+  | 'COLLATERAL_LEFT_REGISTRY'
+  | 'DECISION_CHANGED'
 );
 
 function conflict(code: ConflictCode, message: string, details: Record<string, unknown> = {}): ApiError {
