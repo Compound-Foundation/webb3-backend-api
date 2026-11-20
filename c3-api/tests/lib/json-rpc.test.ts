@@ -9,6 +9,7 @@ import '../../shim/node-self.js';
 import * as JsonRpc from '../../lib/json-rpc/json-rpc.js';
 let jsonRpc = JsonRpc;
 
+import { consoleLines } from '../util/console.js';
 import * as mock from '../util/mock/mock.js';
 declare var fetch: mock.Fetch;
 
@@ -133,16 +134,6 @@ function answerFrom(request: Request, ...response: ConstructorParameters<typeof 
   return Object.defineProperty(new Response(...response), 'url', { value: request.url });
 }
 
-function captureConsole(t: { teardown: (fn: () => void) => void }): string[] {
-  const lines: string[] = [];
-  for (const level of [ 'log', 'warn', 'error' ] as const) {
-    const write = console[level];
-    console[level] = (...parameters: unknown[]) => { lines.push(parameters.map(String).join(' ')); };
-    t.teardown(() => { console[level] = write; });
-  }
-  return lines;
-}
-
 /*
  * The node proxy answers a request it could not serve with a status and a
  * line of text. The failure says which status, and carries where it came from
@@ -154,7 +145,7 @@ function captureConsole(t: { teardown: (fn: () => void) => void }): string[] {
  * wait before the next one, so a route can pass that on.
  */
 t.test('a request the node fails is told by its status, without its key or its answer', async t => {
-  const written  = captureConsole(t);
+  const written  = consoleLines(t, [ 'log', 'warn', 'error' ]);
   const endpoint = 'https://node-provider.test.local/ethereum-mainnet/node-proxy-key';
   const call: JsonRpc.Call = { method: 'eth_blockNumber', params: [] };
   for (const [ status, text, headers, retryAfter ] of [
@@ -183,7 +174,7 @@ t.test('a request the node fails is told by its status, without its key or its a
 });
 
 t.test('an answer that is not JSON fails without its body', async t => {
-  const written  = captureConsole(t);
+  const written  = consoleLines(t, [ 'log', 'warn', 'error' ]);
   const endpoint = 'https://node-provider.test.local/ethereum-mainnet/node-proxy-key';
   fetch.expect(endpoint, { method: 'POST' })
     .returns(request => answerFrom(request, '<html>an error page</html>', { status: 200 }));

@@ -1,7 +1,8 @@
-import t, { Test } from 'tap';
+import t from 'tap';
 
 import C3Api, { Env } from '../../entrypoint.js';
 
+import { consoleLines } from '../util/console.js';
 import { makeTestEnv } from '../util/test-env.js';
 
 import '../../shim/node-self.js';
@@ -24,18 +25,6 @@ type Envelope = { error: { code: string, message: string, requestId: string } };
 
 async function get(path: string): Promise<Response> {
   return C3Api.fetch(new Request(`https://api.test.local${path}`), testEnv);
-}
-
-function captureLogs(t: Test): string[] {
-  const lines: string[] = [];
-  const { error, warn } = console;
-  console.error = (...parameters: unknown[]) => { lines.push(parameters.map(String).join(' ')); };
-  console.warn  = (...parameters: unknown[]) => { lines.push(parameters.map(String).join(' ')); };
-  t.teardown(() => {
-    console.error = error;
-    console.warn  = warn;
-  });
-  return lines;
 }
 
 t.test('a path no route matches is a 404 in the envelope', async t => {
@@ -84,7 +73,7 @@ t.test('a malformed parameter of the governance accounts is a 400', async t => {
  * client is told the request id and nothing else; the log has what Tally said.
  */
 t.test('a Tally API that fails is a 500 that says nothing of what Tally answered', async t => {
-  const logs = captureLogs(t);
+  const logs = consoleLines(t, [ 'error', 'warn' ]);
   const fetchBefore = globalThis.fetch;
   const tally = async () => new Response(
     JSON.stringify({ errors: [ { message: 'what Tally said about it' } ] }),

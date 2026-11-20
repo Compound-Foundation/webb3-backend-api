@@ -126,14 +126,8 @@ function corsOf(response: Response): Record<string, string> {
 
 // the failure a route answers with here is logged; nothing here is about it
 function quiet(t: Test): void {
-  const error = console.error;
-  const warn  = console.warn;
-  console.error = () => {};
-  console.warn  = () => {};
-  t.teardown(() => {
-    console.error = error;
-    console.warn  = warn;
-  });
+  t.capture(console, 'error');
+  t.capture(console, 'warn');
 }
 
 /*

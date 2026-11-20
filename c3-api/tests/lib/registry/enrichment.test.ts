@@ -10,6 +10,9 @@ import { ChainEndpoint, MAX_CALLS_PER_BATCH, enrichMarket, proxyTransport, readC
 import { parseDeploymentPath, parseRoot } from '../../../src/registry/source/roots.js';
 import { isRegistryError } from '../../../src/registry/errors.js';
 
+import { keyOf, recordedChain } from '../../util/recorded-chain.js';
+import type { Replay } from '../../util/recorded-chain.js';
+
 /*
  * On-chain enrichment, replaying responses recorded from Ethereum mainnet for
  * cUSDCv3 at the block the fixture names, which also says how they were
@@ -20,13 +23,6 @@ import { isRegistryError } from '../../../src/registry/errors.js';
 const FIXTURE  = './tests/fixtures/registry/chain/ethereum-mainnet-usdc.json';
 const ROOT_PATH = 'deployments/mainnet/usdc/roots.json';
 
-type Recording = {
-  chainId:   number,
-  responses: Record<string, string>,
-};
-
-const recording: Recording = JSON.parse(readFileSync(FIXTURE, 'utf8'));
-
 async function mainnetRoot() {
   return parseRoot(
     parseDeploymentPath(ROOT_PATH),
@@ -35,46 +31,9 @@ async function mainnetRoot() {
   );
 }
 
-function keyOf(call: jsonRpc.Call): string {
-  if (call.method === 'eth_getCode') {
-    return `eth_getCode:${call.params[0]}`;
-  }
-  if (call.method === 'eth_call') {
-    return `eth_call:${call.params[0].to}:${call.params[0].data}`;
-  }
-  return call.method;
-}
-
-/*
- * Replays the recording. `overrides` replaces the answer for one key,
- * `failures` makes a key revert, and `errors` makes it answer with any other
- * JSON-RPC error, which is how a revert, an unreadable contract or a node
- * that does not serve the call is exercised.
- */
-function replay({ overrides = {}, failures = [], errors = {} }: {
-  overrides?: Record<string, string>,
-  failures?:  string[],
-  errors?:    Record<string, jsonRpc.Error>,
-} = {}) {
-  const batches: number[] = [];
-  const transport = async (calls: jsonRpc.Call[]) => {
-    batches.push(calls.length);
-    return calls.map(call => {
-      const key = keyOf(call);
-      if (failures.includes(key)) {
-        return { error: { code: 3, message: 'execution reverted' } };
-      }
-      if (errors[key] !== undefined) {
-        return { error: errors[key] };
-      }
-      const result = overrides[key] ?? recording.responses[key];
-      if (result === undefined) {
-        throw new Error(`no recorded response for ${key}`);
-      }
-      return { result };
-    });
-  };
-  return { transport, batches };
+// replays the recording, with what a test changes in it
+function replay(changes?: Replay) {
+  return recordedChain(FIXTURE, changes);
 }
 
 async function rejects(operation: () => Promise<unknown>, code: string): Promise<void> {

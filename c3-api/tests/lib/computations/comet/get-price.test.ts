@@ -14,6 +14,7 @@ import * as comet from '../../../../lib/computations/comet.js';
 
 import type * as jsonRpc from '../../../../lib/json-rpc.js';
 
+import { consoleLines } from '../../../util/console.js';
 import * as mock from '../../../util/mock/mock.js';
 import { fixtureComet } from '../../../util/registry-fixture.js';
 
@@ -67,14 +68,6 @@ function read(feed: Feed = priceFeed, options: { unreported?: true } = {}) {
   }));
 }
 
-function captureWarnings(t: { teardown: (fn: () => void) => void }): string[] {
-  const logged: string[] = [];
-  const consoleWarn = console.warn;
-  console.warn = (...args: unknown[]) => { logged.push(args.join(' ')); };
-  t.teardown(() => { console.warn = consoleWarn; });
-  return logged;
-}
-
 t.test('a feed that answers is a price', async t => {
   answerWith({ result: `0x${(100_020_000).toString(16).padStart(64, '0')}` });
   const price = await read();
@@ -91,7 +84,7 @@ t.test('a feed that answers is a price', async t => {
  * the rest of its wording is free to change.
  */
 t.test('a feed that reverts is an answer, not a failure', async t => {
-  const logged = captureWarnings(t);
+  const logged = consoleLines(t, [ 'warn' ]);
 
   answerWith({ error: { code: 3, message: 'execution reverted', data: '0x' } });
   t.strictSame(await read(), { status: 'error', message: 'execution reverted' });
@@ -107,7 +100,7 @@ t.test('a feed that reverts is an answer, not a failure', async t => {
  * minute instead, for as long as it reverts.
  */
 t.test('a feed that keeps reverting is named once a minute, not on every read', async t => {
-  const logged = captureWarnings(t);
+  const logged = consoleLines(t, [ 'warn' ]);
   const feed   = { address: '0x00000000000000000000000000000000000000f2' as const, decimals: 8 };
 
   answerWith({ error: { code: 3, message: 'execution reverted', data: '0x' } }, feed);
@@ -125,7 +118,7 @@ t.test('a feed that keeps reverting is named once a minute, not on every read', 
  * which the node answers -32000.
  */
 t.test('a read whose caller answers its revert reports nothing', async t => {
-  const logged = captureWarnings(t);
+  const logged = consoleLines(t, [ 'warn' ]);
   const feed   = { address: '0x00000000000000000000000000000000000000f3' as const, decimals: 8 };
 
   answerWith({ error: { code: -32000, message: 'execution reverted' } }, feed);

@@ -2,28 +2,29 @@ import t from 'tap';
 
 import { randomUUID } from 'node:crypto';
 
-import { createTestHarness } from 'wrangler';
-
-import type { Env } from '../../../entrypoint.js';
-import { applyMigrations, foreignKeyViolations } from '../../util/d1.js';
+import { foreignKeyViolations } from '../../util/d1.js';
+import { count } from '../../util/registry-admin.js';
 import {
   clearCandidateSnapshot,
   loadRegistrySnapshotFixture,
   seedCandidate,
   writeCandidateSnapshot,
 } from '../../util/registry-fixture.js';
-import { isRegistryError } from '../../../src/registry/errors.js';
+import { registryHarness } from '../../util/registry-harness.js';
 import {
   createCandidate,
-  findAttemptsByCommit,
-  latestValidationAttempt,
-  marketWrites,
   markInvalid,
-  readSnapshot,
   markValidated,
   recordValidationResults,
+} from '../../util/registry-repository.js';
+import { isRegistryError } from '../../../src/registry/errors.js';
+import {
+  findAttemptsByCommit,
+  marketWrites,
+  readSnapshot,
   snapshotChecksum,
 } from '../../../src/registry/repository.js';
+import { readValidationSummary } from '../../../src/registry/validation-store.js';
 
 /*
  * The candidate write repository against real local D1: the RegistrySnapshotV1
@@ -32,19 +33,7 @@ import {
  * tests assert that the repository writes rows the triggers accept and that
  * its checksum matches the frozen contract.
  */
-const server = createTestHarness({ workers: [ { configPath: './wrangler.toml' } ] });
-
-t.before(async () => {
-  await server.listen();
-});
-t.teardown(() => server.close());
-
-async function freshDatabase(): Promise<D1Database> {
-  await server.reset();
-  const { APP_DB } = await server.getWorker<Env>().getEnv();
-  await applyMigrations(APP_DB);
-  return APP_DB;
-}
+const { freshDatabase } = await registryHarness();
 
 const snapshot = loadRegistrySnapshotFixture();
 const networks = snapshot.networks;
@@ -57,11 +46,6 @@ const SOURCE = {
 
 async function candidate(db: D1Database, attempt: number = 1) {
   return createCandidate(db, { ...SOURCE, attempt, createdBy: 'test' });
-}
-
-async function count(db: D1Database, table: string, where: string = '1 = 1', ...bindings: unknown[]): Promise<number> {
-  const value = await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${where}`).bind(...bindings).first<number>('n');
-  return value ?? 0;
 }
 
 async function rejects(operation: () => Promise<unknown>, message: RegExp): Promise<void> {
@@ -307,7 +291,7 @@ t.test('an importing candidate can be rewritten, a terminal one cannot', async t
     { check_name: 'source-reproducible', scope: 'global', passed: 1 },
     { check_name: 'markets-enriched',    scope: 'global', passed: 1 },
   ]);
-  t.equal(await latestValidationAttempt(db, version.id), 1, 'the latest attempt is reported');
+  t.equal((await readValidationSummary(db, version.id)).attempt, 1, 'the latest attempt is reported');
 
   await markValidated(db, version.id, await snapshotChecksum(networks));
   const [ validated ] = await findAttemptsByCommit(db, SOURCE.repository, SOURCE.commitSha);

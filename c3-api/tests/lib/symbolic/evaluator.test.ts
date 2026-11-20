@@ -6,7 +6,12 @@ import * as Fallible   from '../../../lib/fallible/fallible.js';
 import * as Index      from '../../../lib/symbolic/index.js';
 import * as Cache      from '../../../lib/symbolic/cache.js';
 import * as Compute    from '../../../lib/symbolic/computation.js';
+import * as Evaluator  from '../../../lib/symbolic/evaluator.js';
 import * as Workingset from '../../../lib/symbolic/evaluator/workingset.js';
+
+import { MemoryCache } from '../../../lib/symbolic/cache.js';
+
+import { consoleLines } from '../../util/console.js';
 
 function expectState<Scope extends Compute.Spec = Compute.Spec>(
   t:        Test,
@@ -138,6 +143,50 @@ t.test('WorkingsetEvaluator: detects stuck states', async t => {
     done: {},
     todo: [[ 'redex', 'ROOT', false, [ [[ 'increment', 'increment-v1:3' ]] ] ]],
   });
+});
+
+t.test('a join in the continuation of a join reads its own dependencies, under either evaluator', async t => {
+  for (const evaluatorAlgorithm of [ 'recursive', 'workingset' ] as const) {
+    const { evaluate, join, pull1 } = Evaluator.instantiate<Increment>({ increment }, {
+      flags: { ...Flags.parse(process.env), evaluatorAlgorithm },
+    });
+    const pair = (a: number, b: number) => [ pull1({ increment: a }), pull1({ increment: b }) ];
+    t.strictSame(await evaluate(join([
+      pair(10, 20),
+      () => join([ pair(30, 40), inner => inner ]),
+    ])), [ 31, 41 ], `${evaluatorAlgorithm}: the inner join's, not the outer's`);
+    t.strictSame(await evaluate(join([
+      pair(10, 20),
+      () => join([ pair(30, 40), () => join([ pair(50, 60), inner => inner ]) ]),
+    ])), [ 51, 61 ], `${evaluatorAlgorithm}: and a join in the continuation of that one, its own`);
+  }
+});
+
+/*
+ * The same in a computation, whose result is cached: under its own key, and
+ * under none of what it waited for.
+ */
+t.test('a computation whose join continues with another is cached as computed, under either evaluator', async t => {
+  type Nested = Compute.Spec<{ name: 'nested', depends: [ Increment ], expects: number, returns: number[] }>;
+  const { implement, join, pull1 } = Compute.Functor<Nested>({});
+  const nested = implement({
+    version: 1,
+    index:   Index.Everything,
+    key:     (name, context) => `${name}:${context}`,
+    compute: v => join([
+      [ pull1({ increment: v }), pull1({ increment: v + 1 }) ],
+      () => join([ [ pull1({ increment: v + 2 }), pull1({ increment: v + 3 }) ], inner => inner ]),
+    ]),
+  });
+  for (const evaluatorAlgorithm of [ 'recursive', 'workingset' ] as const) {
+    const cache     = new MemoryCache({});
+    const evaluator = Evaluator.instantiate<Nested>({ nested, increment }, {
+      cache,
+      flags: { ...Flags.parse(process.env), evaluatorAlgorithm },
+    });
+    t.strictSame(await evaluator.evaluate(evaluator.pull1({ nested: 10 })), [ 13, 14 ], `${evaluatorAlgorithm}: what the inner join read`);
+    t.strictSame(cache.store, { 'nested-v1:10': [ 13, 14 ] }, `${evaluatorAlgorithm}: under the computation's key alone`);
+  }
 });
 
 /*
@@ -328,10 +377,7 @@ t.test('WorkingsetEvaluator: a computation that fails says why', async t => {
  * not write it a third time.
  */
 t.test('WorkingsetEvaluator: a computation that fails is not logged by the step that ran it', async t => {
-  const lines: string[] = [];
-  const consoleError = console.error;
-  console.error = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
-  t.teardown(() => { console.error = consoleError; });
+  const lines = consoleLines(t, [ 'error' ]);
 
   type Refuse = Compute.Spec<{ name: 'refuse', expects: number, returns: number }>;
   const refuse = Compute.Functor<Refuse>({}).implement({

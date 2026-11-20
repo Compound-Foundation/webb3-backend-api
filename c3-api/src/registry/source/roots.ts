@@ -12,7 +12,7 @@ import {
   normalizeAddress,
 } from '../../../lib/model/comet-registry.js';
 
-import { sha256Hex } from '../../../lib/hash.js';
+import { sha256 } from '../../../lib/hash.js';
 
 import { RegistryError } from '../errors.js';
 
@@ -182,7 +182,7 @@ async function parseRoot(
     sourceBlobSha,
     contracts,
     otherRoots,
-    checksum: await sha256Hex(canonicalRootDocument(rootPath, roots)),
+    checksum: await sha256(canonicalRootDocument(rootPath, roots)),
   };
 }
 
@@ -201,7 +201,7 @@ async function sourceChecksum(roots: Array<{ rootPath: string, sourceBlobSha: st
   if (paths.size !== ordered.length) {
     throw new RegistryError('ROOT_DUPLICATE', `the pinned source lists a deployment path twice`);
   }
-  return sha256Hex(JSON.stringify({ schema: 'comet-registry-source-v1', roots: ordered }));
+  return sha256(JSON.stringify({ schema: 'comet-registry-source-v1', roots: ordered }));
 }
 
 export {

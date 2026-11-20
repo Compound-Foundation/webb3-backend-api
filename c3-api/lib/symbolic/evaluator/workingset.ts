@@ -151,11 +151,19 @@ async function rewrite<Scope extends Compute.Spec>(
   D.debug({ roots });
   let item; while(item = rewrites.pop(), !!item) {
     D.log(`item: ${item[0]}`).debug(item);
-    const [ key, indexed, { body: [ dependencies, receiver ] } ] = item;
+    const [ key, indexed, { body: [ dependencies, receiver ] }, continuation = 0 ] = item;
+    /*
+     * A redex a receiver answers takes the place of the receiver's own, under
+     * its key, as the key's next continuation. Its dependencies are keyed by
+     * that continuation: under the key alone, a dependency at an index the
+     * redex before it used is found done, and its receiver is handed what that
+     * one read.
+     */
+    const parent = continuation === 0 ? key : `continuation[${continuation}].${key}`;
     const rewritten = await Promise.all(dependencies.map(async (dependency, dependencyIndex) => {
       // redex<scope>: materialize a result key; queue recursive rewrite
       if (Redex.cast(dependency)) {
-        const dependencyKey = `dependencies[${dependencyIndex}].${key}`;
+        const dependencyKey = `dependencies[${dependencyIndex}].${parent}`;
         // NOTE(jordan): don't index intermediary dependencies
         rewrites.push([ dependencyKey, false, dependency ]);
         D.debug('dependency:redex:', rewrites[rewrites.length - 1]);
@@ -174,7 +182,7 @@ async function rewrite<Scope extends Compute.Spec>(
       D.debug('dependency:lookup:', { rewrittenLookup });
       return rewrittenLookup;
     }));
-    work.push([ 'redex', key, indexed, [ rewritten, receiver ] ]);
+    work.push([ 'redex', key, indexed, [ rewritten, receiver ], continuation ]);
     D.debug('work.push(...)', work[work.length - 1]);
   }
   // add pending computes for lookups after parent redexes are rewritten
@@ -619,7 +627,7 @@ async function step<
       // c. pending 'redex'
       // may not be able to progress if dependencies are not yet computed
       case 'redex': {
-        const [ _, key, indexed, [ requirements, receiver ] ] = item;
+        const [ _, key, indexed, [ requirements, receiver ], continuation = 0 ] = item;
         // FIXME?: manually padded to match the length of 'computation'
         D.group(`redex       { key: ${key} }`);
         // 0. check if this work was already done by a later item
@@ -671,9 +679,9 @@ async function step<
         // 2.b.2. invoke the receiver and handle the result
         stuck = false;
         const result = await receiver(inputs);
-        // 3.a. if it's a redex, queue for rewrite into a new work item
+        // 3.a. if it's a redex, queue for rewrite as the key's next continuation
         if (Redex.cast<Scope>(result)) {
-          rewrites.push([ key, indexed, result ]);
+          rewrites.push([ key, indexed, result, continuation + 1 ]);
           D.groupEnd(); // redex
           continue;
         }
@@ -738,7 +746,7 @@ async function step<
 
 // [ <result key>, <redex that will reduce to the result> ]
 type RewriteItem<Scope extends Compute.Spec> = (
-  readonly [ key: string, indexed: boolean, redex: Redex.Redex<Scope> ]
+  readonly [ key: string, indexed: boolean, redex: Redex.Redex<Scope>, continuation?: number ]
 );
 
 /*
@@ -774,10 +782,12 @@ namespace WorkItem {
    *
    */
   export type Redex<Scope extends Compute.Spec> = (readonly [
-    type:    'redex',
-    key:     string,
-    indexed: boolean,
-    body:    WorkItem.Redex.RewrittenBody<Scope>
+    type:          'redex',
+    key:           string,
+    indexed:       boolean,
+    body:          WorkItem.Redex.RewrittenBody<Scope>,
+    // 0 for the first redex under its key, n for the one the receiver of continuation n - 1 answered
+    continuation?: number,
   ]);
   export namespace Redex {
     // Redex.Lookup<Scope> except it points to result keys, not contexts

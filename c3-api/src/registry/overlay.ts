@@ -22,7 +22,7 @@ import {
 import type { MarketEnrichment } from './enrichment.js';
 import { RegistryError } from './errors.js';
 import { canonicalJson } from '../../lib/canonical-json.js';
-import { sha256Hex } from '../../lib/hash.js';
+import { sha256 } from '../../lib/hash.js';
 
 /*
  * The reviewed overlay: everything about a market that the chain and the
@@ -413,7 +413,7 @@ function overlayOfException(exception: PriceExceptionV1): OverlayPriceException 
  * address, expiry or list one overlay, so what is digested is its output.
  */
 async function overlayDigest(overlay: MarketOverlay | NetworkOverlay): Promise<string> {
-  return sha256Hex(canonicalJson(overlay));
+  return sha256(canonicalJson(overlay));
 }
 
 /*

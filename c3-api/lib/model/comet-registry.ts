@@ -1,8 +1,10 @@
 /*
- * Types shared by the Comet registry: the rows of the APP_DB tables created
- * in migrations/0001_comet_registry.sql, the records parsed from the pinned
- * Comet source, and the RegistrySnapshotV1 wire contract frozen in
- * tests/fixtures/registry/registry-snapshot-v1.json.
+ * Types shared by the Comet registry: the records parsed from the pinned
+ * Comet source, the RegistrySnapshotV1 wire contract frozen in
+ * tests/fixtures/registry/registry-snapshot-v1.json and the other answers of
+ * the registry routes, and the Comet a computation takes. The rows of the
+ * APP_DB tables are in src/registry/rows.ts, beside the only modules that
+ * read them.
  *
  * Addresses are stored and compared lowercase. The registry validates them
  * with the anchored validator below rather than Eth.parseAddress, whose
@@ -21,18 +23,13 @@ type Address = `0x${string}`;
  * array, so the type and the runtime list validation uses cannot drift apart,
  * and the values are exactly what D1 stores and the wire contract carries.
  */
-const CONTRACT_ROLES   = [ 'comet', 'configurator', 'rewards', 'bulker', 'fauceteer', 'bridge_receiver' ] as const;
-const ASSET_ROLES      = [ 'base', 'reward', 'collateral' ] as const;
-const PRICE_QUOTES     = [ 'usd', 'base' ] as const;
-const MARKET_STATUSES  = [ 'enabled', 'deprecated', 'disabled' ] as const;
-const VERSION_STATUSES = [ 'importing', 'invalid', 'validated' ] as const;
-const EXCEPTION_KINDS  = [ 'zero_price', 'fixed_price', 'deprecated_price_remap' ] as const;
+const CONTRACT_ROLES  = [ 'comet', 'configurator', 'rewards', 'bulker', 'fauceteer', 'bridge_receiver' ] as const;
+const ASSET_ROLES     = [ 'base', 'reward', 'collateral' ] as const;
+const PRICE_QUOTES    = [ 'usd', 'base' ] as const;
+const MARKET_STATUSES = [ 'enabled', 'deprecated', 'disabled' ] as const;
+const EXCEPTION_KINDS = [ 'zero_price', 'fixed_price', 'deprecated_price_remap' ] as const;
 
 const ACTIVATION_ACTIONS = [ 'activate', 'rollback' ] as const;
-const SYNC_TRIGGER_KINDS = [ 'scheduled', 'manual' ] as const;
-const SYNC_RUN_STATUSES  = [ 'running', 'failed', 'completed' ] as const;
-const SYNC_OUTCOMES      = [ 'imported', 'no_change' ] as const;
-const SYNC_ITEM_STATUSES = [ 'pending', 'processing', 'completed', 'failed' ] as const;
 
 type ContractRole  = (typeof CONTRACT_ROLES)[number];
 
@@ -55,14 +52,9 @@ type ContractRoleKey = (typeof CONTRACT_ROLE_KEYS)[ContractRole];
 type AssetRole     = (typeof ASSET_ROLES)[number];
 type PriceQuote    = (typeof PRICE_QUOTES)[number];
 type MarketStatus  = (typeof MARKET_STATUSES)[number];
-type VersionStatus = (typeof VERSION_STATUSES)[number];
 type ExceptionKind = (typeof EXCEPTION_KINDS)[number];
 
 type ActivationAction = (typeof ACTIVATION_ACTIONS)[number];
-type SyncTriggerKind  = (typeof SYNC_TRIGGER_KINDS)[number];
-type SyncRunStatus   = (typeof SYNC_RUN_STATUSES)[number];
-type SyncOutcome     = (typeof SYNC_OUTCOMES)[number];
-type SyncItemStatus  = (typeof SYNC_ITEM_STATUSES)[number];
 
 /*
  * Anchored address validation. Accepts any casing, because upstream roots
@@ -148,183 +140,6 @@ type ParsedRoot = DeploymentPath & {
   contracts:    Partial<Record<ContractRole, Address>>,
   otherRoots:   Record<string, Address>,
   checksum:     string,
-};
-
-/*
- * D1 rows. Booleans are INTEGER 0 or 1 and every nullable column is
- * explicitly nullable, matching the migrations.
- *
- * `reviewed` says whether someone made the decisions a network or market row
- * carries (0002). The column defaults to 1, which SQLite needs to add it to a
- * table that has rows, so a row inserted without it would claim a review
- * nobody made; the row types require it, and so every write states it.
- */
-type RegistryVersionRow = {
-  id:                string,
-  source_repository: string,
-  source_commit_sha: string,
-  source_checksum:   string,
-  snapshot_checksum: string | null,
-  attempt:           number,
-  status:            VersionStatus,
-  created_at:        string,
-  validated_at:      string | null,
-  created_by:        string,
-};
-
-type RegistryNetworkRow = {
-  id:                   string,
-  registry_version_id:  string,
-  chain_id:             number,
-  upstream_network_key: string,
-  canonical_name:       string,
-  display_name:         string,
-  is_testnet:           number,
-  metadata:             string,
-  reviewed:             number,
-};
-
-type MarketRow = {
-  id:                          string,
-  registry_version_id:         string,
-  network_id:                  string,
-  deployment_key:              string,
-  display_name:                string,
-  slug:                        string | null,
-  contract_name:               string | null,
-  creation_block:              number,
-  status:                      MarketStatus,
-  is_default:                  number,
-  is_institutional:            number,
-  rewards_enabled:             number,
-  account_rewards_enabled:     number,
-  transaction_history_enabled: number,
-  collateral_value_quote:      PriceQuote,
-  reviewed:                    number,
-};
-
-type TokenRow = {
-  id:                  string,
-  registry_version_id: string,
-  network_id:          string,
-  address:             Address,
-  symbol:              string,
-  name:                string,
-  decimals:            number,
-};
-
-type MarketContractRow = {
-  id?:       number,
-  market_id: string,
-  role:      ContractRole,
-  address:   Address,
-};
-
-type MarketAssetRow = {
-  id?:                     number,
-  registry_version_id:     string,
-  network_id:              string,
-  market_id:               string,
-  token_id:                string,
-  role:                    AssetRole,
-  asset_index:             number | null,
-  price_feed_address:      Address | null,
-  price_feed_decimals:     number | null,
-  price_feed_quote:        PriceQuote | null,
-  usd_price_feed_address:  Address | null,
-  usd_price_feed_decimals: number | null,
-  display_name:            string | null,
-  is_wrapped_native:       number | null,
-};
-
-type NetworkPriceExceptionRow = {
-  id?:                             number,
-  registry_version_id:             string,
-  network_id:                      string,
-  price_feed_address:              Address,
-  kind:                            ExceptionKind,
-  fixed_price_value:               string | null,
-  fixed_price_decimals:            number | null,
-  replacement_price_feed_address:  Address | null,
-  replacement_price_feed_decimals: number | null,
-  provenance:                      string,
-  expires_at:                      string | null,
-};
-
-type ValidationResultRow = {
-  id?:                 number,
-  registry_version_id: string,
-  validation_attempt:  number,
-  check_name:          string,
-  scope:               string,
-  passed:              number,
-  details:             string,
-  created_at:          string,
-};
-
-type RegistryOverlayEventRow = {
-  id:                  string,
-  registry_version_id: string,
-  scope_type:          'network' | 'market',
-  scope_key:           string,
-  previous_digest:     string | null,
-  new_digest:          string,
-  actor:               string,
-  reason:              string,
-  created_at:          string,
-};
-
-type SyncRunRow = {
-  id:                  string,
-  source_commit_sha:   string,
-  tracked_ref:         string | null,
-  registry_version_id: string | null,
-  trigger_kind:        SyncTriggerKind,
-  requested_by:        string | null,
-  reason:              string | null,
-  status:              SyncRunStatus,
-  outcome:             SyncOutcome | null,
-  lease_owner:         string | null,
-  lease_expires_at:    string | null,
-  expected_count:      number,
-  completed_count:     number,
-  failed_count:        number,
-  last_error:          string | null,
-  started_at:          string,
-  completed_at:        string | null,
-  hold_for_review:     number,
-};
-
-type SyncRunItemRow = {
-  id:                   string,
-  sync_run_id:          string,
-  root_path:            string,
-  source_blob_sha:      string,
-  upstream_network_key: string,
-  deployment_key:       string,
-  status:               SyncItemStatus,
-  attempts:             number,
-  claim_owner:          string | null,
-  claimed_at:           string | null,
-  completed_at:         string | null,
-  last_error:           string | null,
-  created_at:           string,
-  updated_at:           string,
-};
-
-/*
- * The tables the registry writes row by row, with the row each one takes, so
- * a write names its table and is checked against that table's columns.
- */
-type RegistryTables = {
-  registry_versions:        RegistryVersionRow,
-  registry_networks:        RegistryNetworkRow,
-  network_price_exceptions: NetworkPriceExceptionRow,
-  markets:                  MarketRow,
-  tokens:                   TokenRow,
-  market_contracts:         MarketContractRow,
-  market_assets:            MarketAssetRow,
-  registry_overlay_events:  RegistryOverlayEventRow,
 };
 
 /*
@@ -458,6 +273,17 @@ type RegistrySnapshotV1 = {
 };
 
 /*
+ * A market the API serves: one that is not disabled, with its Comet, which
+ * is what it is addressed and keyed by (isServed, src/registry/catalog.ts).
+ * Validation refuses a market that does not declare its Comet
+ * (comet-contract-declared), so of a validated version only the disabled
+ * markets are left out. A network the API serves lists only the markets it
+ * serves.
+ */
+type ServedMarket  = MarketV1 & { contracts: MarketV1['contracts'] & { comet: Address } };
+type ServedNetwork = Omit<NetworkV1, 'markets'> & { markets: ServedMarket[] };
+
+/*
  * How a response that resolved a version identifies it. It is deliberately
  * smaller than the snapshot's own reference: a convenience read states which
  * version answered, not where it came from.
@@ -473,6 +299,8 @@ type ActivationResultV1 = {
   previousVersionId: string | null,
   targetVersionId:   string,
   changed:           boolean,
+  // the approval an activation used; null for a rollback, and for a move that changed nothing
+  approvalId:        string | null,
   registryVersion:   VersionRefV1,
 };
 
@@ -489,6 +317,29 @@ type ActivationRecordV1 = {
   actor:             string,
   reason:            string,
   createdAt:         string,
+  // null for a rollback, and for a move made before approvals existed
+  approvalId:        string | null,
+};
+
+/*
+ * One approval of a validated version, by the token that gave it. It is made
+ * against the version on at that moment, `activeVersionId`, which the
+ * activation it lets through must replace, and `activationId` names that
+ * activation once there is one. `usable` says whether an activation by
+ * another name could use it now: in force, made against the version on now,
+ * and neither used nor overtaken by a move that switched its version on.
+ */
+type ApprovalV1 = {
+  id:               string,
+  versionId:        string,
+  snapshotChecksum: string,
+  activeVersionId:  string | null,
+  actor:            string,
+  reason:           string,
+  createdAt:        string,
+  expiresAt:        string,
+  activationId:     string | null,
+  usable:           boolean,
 };
 
 type ValidationCheckV1 = {
@@ -545,6 +396,7 @@ export type {
   ActivationRecordV1,
   ActivationResultV1,
   Address,
+  ApprovalV1,
   AssetDisplayOverrideV1,
   AssetRole,
   BaseAssetV1,
@@ -553,57 +405,36 @@ export type {
   ContractRoleKey,
   DeploymentPath,
   ExceptionKind,
-  MarketAssetRow,
-  MarketContractRow,
-  MarketRow,
   MarketStatus,
   MarketV1,
   NetworkPresentationV1,
-  NetworkPriceExceptionRow,
   NetworkV1,
   ParsedRoot,
   PriceExceptionV1,
   PriceFeedV1,
   PriceQuote,
-  RegistryNetworkRow,
-  RegistryOverlayEventRow,
   RegistrySnapshotV1,
-  RegistryTables,
   RegistryVersionRefV1,
   RegistryAnnotation,
   RegistryComet,
-  RegistryVersionRow,
   RewardAssetV1,
-  SyncItemStatus,
-  SyncOutcome,
-  SyncRunItemRow,
-  SyncRunRow,
-  SyncRunStatus,
-  SyncTriggerKind,
-  TokenRow,
+  ServedMarket,
+  ServedNetwork,
   TokenV1,
   UnwrappedCollateralAssetV1,
   ValidationCheckV1,
-  ValidationResultRow,
   ValidationSummaryV1,
   VersionRefV1,
-  VersionStatus,
 };
 
 export {
   checksumAddress,
-  ACTIVATION_ACTIONS,
   ASSET_ROLES,
   CONTRACT_ROLES,
   CONTRACT_ROLE_KEYS,
   EXCEPTION_KINDS,
   MARKET_STATUSES,
   PRICE_QUOTES,
-  SYNC_ITEM_STATUSES,
-  SYNC_OUTCOMES,
-  SYNC_RUN_STATUSES,
-  SYNC_TRIGGER_KINDS,
-  VERSION_STATUSES,
   isAddress,
   isCommitSha,
   MARKET_KEY_SEPARATOR,

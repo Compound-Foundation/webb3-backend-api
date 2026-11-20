@@ -10,8 +10,9 @@ import * as Eth from '../../../lib/eth-constants.js';
 import type { RegistrySnapshotV1 } from '../../../lib/model/comet-registry.js';
 import type * as KnownNetwork from '../../../lib/well-known/networks/network.js';
 
-import { streamEventsOf } from '../../../src/transaction-history-handler/transaction-history-items-handler.js';
+import { streamEventsOf } from '../../../src/transaction-history-handler/cursor.js';
 
+import { consoleLines } from '../../util/console.js';
 import { MemoryKv, refusingKv } from '../../util/kv.js';
 import * as mock from '../../util/mock/mock.js';
 import { makeTestEnv } from '../../util/test-env.js';
@@ -94,19 +95,11 @@ async function answering(
 }
 
 function captureErrors(t: Test): string[] {
-  const lines: string[] = [];
-  const error = console.error;
-  console.error = (...parameters: unknown[]) => { lines.push(parameters.map(String).join(' ')); };
-  t.teardown(() => { console.error = error; });
-  return lines;
+  return consoleLines(t, [ 'error' ]);
 }
 
 function captureWarnings(t: Test): string[] {
-  const lines: string[] = [];
-  const warn = console.warn;
-  console.warn = (...parameters: unknown[]) => { lines.push(parameters.map(String).join(' ')); };
-  t.teardown(() => { console.warn = warn; });
-  return lines;
+  return consoleLines(t, [ 'warn' ]);
 }
 
 type Envelope = { error: { code: string, message: string, requestId: string, details?: Record<string, unknown> } };
@@ -415,6 +408,40 @@ t.test('a cursor from another version that reads the same streams carries on', a
 });
 
 /*
+ * A cursor goes on only with the filters its first page was asked with. A
+ * request that changes them is refused for the first it changed, of markets,
+ * actions and initiators, in the words the history has always used.
+ */
+t.test('a cursor sent with other filters is refused for the first it changed', async t => {
+  const registry = await activeRegistryDatabase();
+  t.teardown(() => registry.dispose());
+
+  const cursor = cursorId('a cursor of the borrows an account made itself from the USDC market');
+  const seed   = {
+    [cursor]: {
+      registryVersionId: registry.versionId,
+      profilesByAddress: {},
+      filter:  { markets: [ `1_${USDC}` ], actions: [ 'Borrow' ], initiatedBy: [ 'me' ], contractAddresses: [], networks: [] },
+      streamEvents: streamEventsOf(fixtureCatalog(registry.snapshot)),
+      cursors: {},
+    },
+  };
+  const env  = envWith({ APP_DB: registry.db, kv_mainnet: MemoryKv({ seed }) });
+  const page = (filters: string) => get(env,
+    `/account/0x420f253087044b8BCf028dd89F8fe83Ba6275E84/transaction_history?cursor=${cursor}${filters}`);
+
+  for (const [ filters, text, what ] of [
+    [ '',                                                        'Cursor is having different markets filter',      'without any filter' ],
+    [ `&markets[]=1_${USDC}`,                                    'Cursor is having different actions filter',      'with its market alone' ],
+    [ `&markets[]=1_${USDC}&actions[]=Supply&initiated_by[]=me`, 'Cursor is having different actions filter',      'with another action' ],
+    [ `&markets[]=1_${USDC}&actions[]=Borrow`,                   'Cursor is having different initiated by filter', 'without its initiator' ],
+  ] as const) {
+    const response = await page(filters);
+    t.same([ response.status, await response.text() ], [ 400, text ], `a cursor sent ${what} is refused`);
+  }
+});
+
+/*
  * A cursor issued before the registry names no version, and keeps its
  * positions by network rather than by stream. Whatever it reads, a version
  * ends it as it ends a cursor of another version, and the client starts
@@ -654,6 +681,28 @@ function noHistory(call: Call): object {
     default:                     return { result: defaultAbiCoder.encode([ 'address', 'address[]' ], [ Eth.NullAddress, [] ]) };
   }
 }
+
+/*
+ * The cursor a page hands out reads the next page: it holds the filters the
+ * first page was asked with, and where each stream stopped, against the
+ * version that answered.
+ */
+t.test('a page hands out the cursor the next page is read with', async t => {
+  const registry = await activeRegistryDatabase();
+  t.teardown(() => registry.dispose());
+  const env = envWith({ APP_DB: registry.db });
+
+  const history = `/account/0x420f253087044b8BCf028dd89F8fe83Ba6275E84/transaction_history?markets[]=1_${USDC}&actions[]=Borrow,Supply&initiated_by[]=me`;
+  const first   = await answering(noHistory, () => get(env, history));
+  t.equal(first.response.status, 200, 'a first page of some markets, actions and initiators is answered');
+  const { cursor } = await first.response.json() as { cursor: string };
+
+  const { response } = await answering(noHistory, () => get(env, `${history}&cursor=${cursor}`));
+  t.equal(response.status, 200, 'and so is the page its cursor reads, asked with the same filters');
+  t.equal(response.headers.get('x-registry-version'), registry.versionId, 'by the version that is active');
+  t.match(await response.json(), { done: true, cursor: /^[0-9a-f]{64}$/, items: [] },
+    'which hands out a cursor of its own');
+});
 
 /*
  * A cursor's id is the digest of what it holds, and names no account: the

@@ -1,8 +1,5 @@
 import t from 'tap';
 
-import { createTestHarness } from 'wrangler';
-
-import type { Env } from '../../../entrypoint.js';
 import type * as jsonRpc from '../../../lib/json-rpc.js';
 import type { Address, PriceFeedV1 } from '../../../lib/model/comet-registry.js';
 
@@ -14,8 +11,8 @@ import { readSnapshot } from '../../../src/registry/repository.js';
 import { asApiError } from '../../../src/registry/router.js';
 import { bodyFor } from '../../util/registry-seed.js';
 
-import { applyMigrations } from '../../util/d1.js';
 import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate } from '../../util/registry-fixture.js';
+import { registryHarness } from '../../util/registry-harness.js';
 
 /*
  * What an overlay write reads of the chain: the scale of a feed it
@@ -29,12 +26,7 @@ import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate } from '..
  * creation block the chain contradicts. A node that did not serve the read
  * says nothing about the document, and is a 503 worth trying again.
  */
-const server = createTestHarness({ workers: [ { configPath: './wrangler.toml' } ] });
-
-t.before(async () => {
-  await server.listen();
-});
-t.teardown(() => server.close());
+const { freshDatabase } = await registryHarness();
 
 const snapshot = loadRegistrySnapshotFixture();
 const mainnet  = snapshot.networks.find(network => network.chainId === 1)!;
@@ -44,9 +36,7 @@ const usdc     = mainnet.markets.find(market => market.deploymentKey === 'usdc')
 const FEED = '0x00000000000000000000000000000000000000f1' as Address;
 
 async function freshCandidate(): Promise<{ db: D1Database, versionId: string }> {
-  await server.reset();
-  const { APP_DB: db } = await server.getWorker<Env>().getEnv();
-  await applyMigrations(db);
+  const db = await freshDatabase();
   const { versionId } = await seedCandidate(db, snapshot);
   return { db, versionId };
 }

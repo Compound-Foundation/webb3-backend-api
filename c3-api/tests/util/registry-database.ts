@@ -5,7 +5,7 @@ import type { RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
 import { activateVersion } from '../../src/registry/repository.js';
 
 import { applyMigrations } from './d1.js';
-import { loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from './registry-fixture.js';
+import { approveSeeded, loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from './registry-fixture.js';
 
 /*
  * An APP_DB for tests that call the worker from Node.
@@ -55,6 +55,7 @@ async function activeRegistryDatabase(options: Options = {}): Promise<RegistryDa
   const { versionId } = await seedCandidate(db, snapshot);
   await validateSeeded(db, versionId);
   if (activate) {
+    await approveSeeded(db, versionId);
     await activateVersion(db, {
       versionId,
       action: 'activate',

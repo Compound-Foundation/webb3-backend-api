@@ -1,5 +1,7 @@
 import type { NotServed } from '../../lib/json-rpc.js';
 
+import type { Log } from '../log.js';
+
 /*
  * Typed HTTP errors with one JSON envelope.
  *
@@ -54,12 +56,34 @@ class ApiError extends Error {
    * is right, which is half an answer.
    */
   readonly headers: Record<string, string>;
+  /*
+   * What the line logged about this answer says besides, and the client is
+   * never told: which entry of a setting is wrong, or whose token was
+   * refused. Never a token, its digest or a secret.
+   */
+  readonly logged:  Record<string, unknown> | undefined;
 
+  constructor(
+    code: Exclude<ApiErrorCode, 'CONFLICT'>,
+    message: string,
+    details?: Record<string, unknown>,
+    headers?: Record<string, string>,
+    logged?: Record<string, unknown>,
+  );
+  // a CONFLICT names the conflict it met in details.code, which a script matches (API.md)
+  constructor(
+    code: ApiErrorCode,
+    message: string,
+    details: Record<string, unknown> & { code: string },
+    headers?: Record<string, string>,
+    logged?: Record<string, unknown>,
+  );
   constructor(
     code: ApiErrorCode,
     message: string,
     details?: Record<string, unknown>,
     headers: Record<string, string> = {},
+    logged?: Record<string, unknown>,
   ) {
     super(message);
     this.name    = 'ApiError';
@@ -67,6 +91,7 @@ class ApiError extends Error {
     this.status  = STATUS[code];
     this.details = details;
     this.headers = headers;
+    this.logged  = logged;
   }
 }
 
@@ -78,6 +103,14 @@ function methodNotAllowed(method: string, pathname: string, allowed: string[]): 
     { allowed },
     { 'Allow': allow },
   );
+}
+
+/*
+ * The answer to a request that needs the active version while none is, on
+ * every route: not an outage but what D1 said, so it has a code of its own.
+ */
+function noActiveVersion(): ApiError {
+  return new ApiError('REGISTRY_NOT_ACTIVE', `No active registry snapshot is available`);
 }
 
 /*
@@ -121,11 +154,6 @@ function errorResponse(error: ApiError, requestId: string, headers: Record<strin
   });
 }
 
-type FailureLog = {
-  error: (...parameters: unknown[]) => unknown,
-  warn:  (...parameters: unknown[]) => unknown,
-};
-
 /*
  * The answer to a request that failed, and the log line an operator finds it
  * by, under the same request id.
@@ -144,7 +172,7 @@ function failureResponse(
   { requestId, pathname, debug, label, headers = {} }: {
     requestId: string,
     pathname:  string,
-    debug:     FailureLog,
+    debug:     Pick<Log, 'error' | 'warn'>,
     // what the log line says failed, such as the router that answered
     label:     string,
     headers?:  Record<string, string>,
@@ -152,12 +180,12 @@ function failureResponse(
 ): Response {
   const error = answer ?? new ApiError('INTERNAL', `the request could not be completed`);
   if (error.status >= 500) {
-    debug.error(`${label} failed`, { requestId, pathname, status: error.status, code: error.code, error: failure });
+    debug.error(`${label} failed`, { requestId, pathname, status: error.status, code: error.code, ...error.logged, error: failure });
   } else if (error.status === 401 || error.status === 403) {
-    debug.warn(`${label} refused`, { requestId, pathname, status: error.status, code: error.code });
+    debug.warn(`${label} refused`, { requestId, pathname, status: error.status, code: error.code, ...error.logged });
   }
   return errorResponse(error, requestId, headers);
 }
 
-export type { ApiErrorCode, FailureLog };
-export { ApiError, failureResponse, isApiError, methodNotAllowed, nodeUnavailable };
+export type { ApiErrorCode };
+export { ApiError, failureResponse, isApiError, methodNotAllowed, noActiveVersion, nodeUnavailable };

@@ -1,14 +1,16 @@
 import type { Env } from '../../entrypoint.js';
 
-import { SyncOutcome, parseMarketKey } from '../../lib/model/comet-registry.js';
+import { parseMarketKey } from '../../lib/model/comet-registry.js';
 
-import { authenticateAdmin } from '../http/bearer-auth.js';
+import { allows, authenticateAdmin, refuseRole } from '../http/bearer-auth.js';
 import { clientOf } from '../http/client-address.js';
 import { ApiError, methodNotAllowed } from '../http/errors.js';
 import { MAX_BODY_BYTES, jsonResponse, readJsonObject } from '../http/json.js';
 
-import { cacheDepsOf } from './cache.js';
+import { cacheDepsOf, isUnreachable } from './cache.js';
+import { registryConfig } from './config.js';
 import { readCreationBlocks, readFeeds } from './enrichment.js';
+import { isRegistryError, isTransportFailure } from './errors.js';
 import { registryStatus } from './status.js';
 import {
   CreationReader,
@@ -19,6 +21,7 @@ import {
   replaceOverlays,
 } from './admin.js';
 import {
+  AdminContext,
   RegistryContext,
   cancelSyncRun,
   chainIdOf,
@@ -29,10 +32,12 @@ import {
   getVersionDetail,
   getVersions,
   postActivation,
+  postApproval,
   postValidate,
 } from './handlers.js';
 import { isExplicit } from './importer.js';
 import type { InvocationResult } from './importer.js';
+import type { SyncOutcome } from './rows.js';
 import { runRegistrySync, transportFor } from './scheduled.js';
 
 /*
@@ -63,27 +68,37 @@ function creationReader(env: Env): CreationReader {
  * protects the registry from a stuck script or a runaway retry loop, while
  * the D1 sync fence remains the real concurrency authority.
  *
- * Callers sharing one token share the second budget. That is a property of
- * the credential, not of the limiter: the environment configures a single
- * token hash, so two operators using it are indistinguishable here and in the
- * audit rows alike. Issuing separate tokens is what would separate them.
+ * Each token has budgets of its own, so a monitor polling the status with a
+ * token of its own spends nothing of an operator's. Callers who share a token
+ * share its budgets, as they share its name in the audit rows: that is a
+ * property of the credential, not of the limiter.
+ *
+ * `role` is the least role a token needs for the route (bearer-auth.ts). The
+ * status is a monitor's, every other read a reader's, and an import and an
+ * overlay write an operator's. Activation and rollback decide what is served,
+ * and are an admin's, and so is an approval, the second person an activation
+ * needs; approving has a budget of its own. So is validation, which ends the
+ * review of a draft a sync held open. That role gates this route alone: a
+ * sync not held for review validates its own draft once the import
+ * completes, and what goes live is decided by an activation all the same.
  */
 const ROUTES = [
-  { pattern: /^\/registry\/v1\/admin\/sync$/,                                                  method: 'POST', handler: 'sync',           family: 'sync' },
-  { pattern: /^\/registry\/v1\/admin\/sync-runs\/([^/]+)$/,                                    method: 'GET',  handler: 'syncRun',        family: 'read' },
-  { pattern: /^\/registry\/v1\/admin\/sync-runs\/([^/]+)\/cancel$/,                            method: 'POST', handler: 'cancelSyncRun',  family: 'sync' },
-  { pattern: /^\/registry\/v1\/admin\/status$/,                                                method: 'GET',  handler: 'status',         family: 'read' },
-  { pattern: /^\/registry\/v1\/admin\/versions$/,                                              method: 'GET',  handler: 'versions',       family: 'read' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)$/,                                     method: 'GET',  handler: 'version',        family: 'read' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/changes$/,                            method: 'GET',  handler: 'changes',        family: 'read' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/validate$/,                           method: 'POST', handler: 'validate',       family: 'validate' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/activate$/,                           method: 'POST', handler: 'activate',       family: 'activate' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/rollback$/,                           method: 'POST', handler: 'rollback',       family: 'activate' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/networks\/([^/]+)\/overlay$/,         method: 'PUT',  handler: 'networkOverlay', family: 'overlay' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/networks\/([^/]+)\/overlay$/,         method: 'GET',  handler: 'readNetworkOverlay', family: 'read' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/markets\/([^/]+)\/([^/]+)\/overlay$/, method: 'PUT',  handler: 'marketOverlay',  family: 'overlay' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/markets\/([^/]+)\/([^/]+)\/overlay$/, method: 'GET',  handler: 'readMarketOverlay', family: 'read' },
-  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/overlays$/,                            method: 'PUT',  handler: 'overlays',       family: 'overlay' },
+  { pattern: /^\/registry\/v1\/admin\/sync$/,                                                  method: 'POST', handler: 'sync',               family: 'sync',     role: 'operator' },
+  { pattern: /^\/registry\/v1\/admin\/sync-runs\/([^/]+)$/,                                    method: 'GET',  handler: 'syncRun',            family: 'read',     role: 'reader' },
+  { pattern: /^\/registry\/v1\/admin\/sync-runs\/([^/]+)\/cancel$/,                            method: 'POST', handler: 'cancelSyncRun',      family: 'sync',     role: 'operator' },
+  { pattern: /^\/registry\/v1\/admin\/status$/,                                                method: 'GET',  handler: 'status',             family: 'read',     role: 'monitor' },
+  { pattern: /^\/registry\/v1\/admin\/versions$/,                                              method: 'GET',  handler: 'versions',           family: 'read',     role: 'reader' },
+  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)$/,                                     method: 'GET',  handler: 'version',            family: 'read',     role: 'reader' },
+  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/changes$/,                            method: 'GET',  handler: 'changes',            family: 'read',     role: 'reader' },
+  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/validate$/,                           method: 'POST', handler: 'validate',           family: 'validate', role: 'admin' },
+  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/approve$/,                            method: 'POST', handler: 'approve',            family: 'approve',  role: 'admin' },
+  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/activate$/,                           method: 'POST', handler: 'activate',           family: 'activate', role: 'admin' },
+  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/rollback$/,                           method: 'POST', handler: 'rollback',           family: 'activate', role: 'admin' },
+  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/networks\/([^/]+)\/overlay$/,         method: 'PUT',  handler: 'networkOverlay',     family: 'overlay',  role: 'operator' },
+  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/networks\/([^/]+)\/overlay$/,         method: 'GET',  handler: 'readNetworkOverlay', family: 'read',     role: 'reader' },
+  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/markets\/([^/]+)\/([^/]+)\/overlay$/, method: 'PUT',  handler: 'marketOverlay',      family: 'overlay',  role: 'operator' },
+  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/markets\/([^/]+)\/([^/]+)\/overlay$/, method: 'GET',  handler: 'readMarketOverlay',  family: 'read',     role: 'reader' },
+  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/overlays$/,                            method: 'PUT',  handler: 'overlays',           family: 'overlay',  role: 'operator' },
 ] as const;
 
 const MAX_REASON = 1000;
@@ -113,16 +128,35 @@ const MAX_OVERLAYS_PER_REQUEST = 100;
 const MAX_OVERLAYS_BODY_BYTES  = 512 * 1024;
 
 /*
+ * A value as a reason, trimmed, or what keeps it from being one. Every
+ * command is held to this one rule, so they all take the same reasons.
+ */
+function reasonOf(value: unknown): { reason: string } | { problem: 'malformed' | 'nul' } {
+  if (typeof(value) !== 'string' || value.trim().length === 0 || value.length > MAX_REASON) {
+    return { problem: 'malformed' };
+  }
+  /*
+   * SQLite's text functions stop at a NUL, so the audit tables' checks would
+   * read a reason that starts with one as empty and refuse it with a database
+   * error, and one that only contains one would be stored cut short.
+   */
+  return value.includes('\u0000') ? { problem: 'nul' } : { reason: value.trim() };
+}
+
+/*
  * A reason is required wherever an operator changes what the registry serves,
  * because the audit row that records the change is only as useful as the
  * reason stored with it.
  */
 function requireReason(body: Record<string, unknown>): string {
-  const reason = body.reason;
-  if (typeof(reason) !== 'string' || reason.trim().length === 0 || reason.length > MAX_REASON) {
-    throw new ApiError('BAD_REQUEST', `a non-empty reason of at most ${MAX_REASON} characters is required`);
+  const checked = reasonOf(body.reason);
+  if ('problem' in checked) {
+    throw new ApiError('BAD_REQUEST', {
+      malformed: `a non-empty reason of at most ${MAX_REASON} characters is required`,
+      nul:       `a reason cannot contain a NUL character`,
+    }[checked.problem]);
   }
-  return reason.trim();
+  return checked.reason;
 }
 
 function requireExactKeys(body: Record<string, unknown>, allowed: string[]): void {
@@ -157,13 +191,31 @@ function expectedDigestOf(body: Record<string, unknown>): { expectedDigest?: str
 }
 
 /*
- * `expectedActiveVersionId` names the version an activation or a rollback is
- * decided against, so a move made against a version someone else has since
- * replaced is refused instead of silently undoing theirs.
+ * `expectedActiveVersionId` names the version an activation, a rollback or
+ * an approval is decided against, so a move made against a version someone
+ * else has since replaced is refused instead of silently undoing theirs, and
+ * an approval is not given for another change than the one its giver read.
  */
 function expectedActiveVersionOf(body: Record<string, unknown>): { expectedActiveVersionId?: string | null } {
   const { value } = optionalExpectation(body, 'expectedActiveVersionId', /^[0-9A-Za-z-]{1,64}$/, 'a registry version id');
   return value === undefined ? {} : { expectedActiveVersionId: value };
+}
+
+/*
+ * An approval is of one change, from the version on to the one approved, so
+ * it always names the version its giver read the changes against: an
+ * approval recorded against whatever is on by then could cover a change
+ * nobody read.
+ */
+function requireExpectedActiveVersion(body: Record<string, unknown>): string | null {
+  const { expectedActiveVersionId } = expectedActiveVersionOf(body);
+  if (expectedActiveVersionId === undefined) {
+    throw new ApiError(
+      'BAD_REQUEST',
+      `expectedActiveVersionId is required: the id of the version on that the changes were read against, or null when nothing is on`,
+    );
+  }
+  return expectedActiveVersionId;
 }
 
 /*
@@ -218,28 +270,16 @@ async function limit(env: Env, fingerprint: string, family: string): Promise<voi
   }
 }
 
-type SyncFailure = Extract<InvocationResult, { kind: 'invalid' | 'failed' }>;
-
 /*
- * The error an administrative sync answers with when the invocation failed.
- *
- * A registry error is answered as the routes answer it everywhere: a request
- * the registry has to refuse, such as a commit the tracked ref cannot reach,
- * is the client's to fix. A candidate that failed its checks would fail the
- * same way again, so it is refused with the ids to inspect it by rather than
- * offered as something to retry. A database or a source that did not answer
- * is a 503; a fault never reaches here — it is raised, and answered 500.
+ * The error an administrative sync answers with when its candidate failed its
+ * checks. It would fail the same way again, so it is refused with the ids to
+ * inspect it by rather than offered as something to retry.
  */
-function syncFailure(result: SyncFailure): Error {
-  switch (result.kind) {
-    case 'invalid':
-      return new ApiError('UNPROCESSABLE', result.reason, {
-        syncRunId:         result.runId,
-        registryVersionId: result.versionId,
-      });
-    case 'failed':
-      return result.error ?? new ApiError('UPSTREAM_UNAVAILABLE', result.reason);
-  }
+function syncFailure(result: Extract<InvocationResult, { kind: 'invalid' }>): ApiError {
+  return new ApiError('UNPROCESSABLE', result.reason, {
+    syncRunId:         result.runId,
+    registryVersionId: result.versionId,
+  });
 }
 
 /*
@@ -248,7 +288,7 @@ function syncFailure(result: SyncFailure): Error {
  * candidate completed its import as one that validated did, and says that it
  * is held, and how many of its checks failed.
  */
-function syncAnswer(result: Exclude<InvocationResult, SyncFailure>): {
+function syncAnswer(result: Exclude<InvocationResult, { kind: 'invalid' }>): {
   status:        'idle' | 'running' | 'completed',
   outcome:       SyncOutcome | null,
   heldForReview: boolean,
@@ -281,7 +321,7 @@ function syncAnswer(result: Exclude<InvocationResult, SyncFailure>): {
 async function postSync(
   env: Env,
   body: Record<string, unknown>,
-  { actor, requestId }: Pick<RegistryContext, 'actor' | 'requestId'>,
+  { actor, requestId }: Pick<AdminContext, 'actor' | 'requestId'>,
 ): Promise<Response> {
   requireExactKeys(body, [ 'sourceCommitSha', 'forceNewAttempt', 'holdForReview', 'markets', 'reason' ]);
 
@@ -326,9 +366,22 @@ async function postSync(
     env,
     isExplicit(request) ? { ...request, reason: requireReason(body) } : request,
     { requestId },
-  );
+  ).catch((error: unknown) => {
+    /*
+     * A registry error is answered as the routes answer it everywhere: a
+     * request the registry has to refuse, such as a commit the tracked ref
+     * cannot reach, is the client's to fix. A database or a source that did
+     * not answer, with no registry error to say so, is worth trying again
+     * whatever it said: a 503, whose cause the line runRegistrySync logged
+     * names. A fault is raised as it is, and answered 500.
+     */
+    if (!isRegistryError(error) && (isTransportFailure(error) || isUnreachable(error))) {
+      throw new ApiError('UPSTREAM_UNAVAILABLE', `the import was interrupted by a service that did not answer`);
+    }
+    throw error;
+  });
 
-  if (result.kind === 'invalid' || result.kind === 'failed') {
+  if (result.kind === 'invalid') {
     throw syncFailure(result);
   }
   const { status, outcome, heldForReview, checksFailed } = syncAnswer(result);
@@ -450,7 +503,7 @@ async function routeAdmin(
    * publishes them — so a path that is none of them answers 404 without a
    * token being asked for, as any unknown path does.
    */
-  const credential = await authenticateAdmin(request, env.COMET_REGISTRY_ADMIN_TOKEN_HASH);
+  const credential = await authenticateAdmin(request, env);
 
   const route = matching.find(entry => entry.method === request.method);
   if (route === undefined) {
@@ -458,7 +511,19 @@ async function routeAdmin(
     throw methodNotAllowed(request.method, pathname, [ ...new Set(matching.map(entry => entry.method)), 'OPTIONS' ]);
   }
 
+  /*
+   * The role is checked once the verb is known, since one path takes verbs
+   * of different roles, and before the token's own budget is spent: a route
+   * the token may not call costs it nothing but the address's.
+   */
+  if (!allows(credential.role, route.role)) {
+    throw refuseRole(credential, route.role);
+  }
+
   await limit(env, credential.fingerprint, route.family);
+
+  // a command records the token's name as its actor, wherever the audit keeps one
+  const admin: AdminContext = { ...context, actor: credential.name };
 
   const [ , versionId, second, third ] = route.match!;
   const body = route.method === 'GET'
@@ -474,12 +539,12 @@ async function routeAdmin(
        */
       return jsonResponse(await registryStatus(env, cacheDepsOf(env, context.debug)));
     case 'sync':
-      return await postSync(env, body, context);
+      return await postSync(env, body, admin);
     case 'syncRun':
       return await getSyncRun(context, versionId!);
     case 'cancelSyncRun':
       requireExactKeys(body, [ 'reason' ]);
-      return await cancelSyncRun(context, versionId!, requireReason(body));
+      return await cancelSyncRun(admin, versionId!, requireReason(body));
     case 'versions':
       return await getVersions(context, new URL(request.url).searchParams);
     case 'version':
@@ -493,42 +558,47 @@ async function routeAdmin(
     case 'validate':
       /*
        * Validation decides nothing: it checks the stored candidate and records
-       * every check it ran, exactly as the scheduled import does unattended.
-       * The decision a person makes about a version, with its reason, is the
-       * activation.
+       * every check it ran, and not who asked for it, exactly as the scheduled
+       * import does unattended. The decisions people make about a version,
+       * each with its reason, are the approval and the activation.
        */
       requireExactKeys(body, []);
       return await postValidate(context, versionId!);
+    case 'approve':
+      requireExactKeys(body, [ 'reason', 'expectedActiveVersionId' ]);
+      return await postApproval(
+        admin, versionId!, requireReason(body), registryConfig(env).approvalTtlSeconds, requireExpectedActiveVersion(body),
+      );
     case 'activate':
       requireExactKeys(body, [ 'reason', 'expectedActiveVersionId' ]);
-      return await postActivation(context, versionId!, 'activate', requireReason(body), expectedActiveVersionOf(body));
+      return await postActivation(admin, versionId!, 'activate', requireReason(body), expectedActiveVersionOf(body));
     case 'rollback':
       requireExactKeys(body, [ 'reason', 'expectedActiveVersionId' ]);
-      return await postActivation(context, versionId!, 'rollback', requireReason(body), expectedActiveVersionOf(body));
+      return await postActivation(admin, versionId!, 'rollback', requireReason(body), expectedActiveVersionOf(body));
     case 'networkOverlay':
       requireExactKeys(body, [ 'reason', 'overlay', 'expectedDigest' ]);
-      return jsonResponse(await replaceNetworkOverlay(context.db, {
+      return jsonResponse(await replaceNetworkOverlay(admin.db, {
         versionId: versionId!,
         chainId:   chainIdOf(second!),
         overlay:   body.overlay,
-        actor:     context.actor,
+        actor:     admin.actor,
         reason:    requireReason(body),
         ...expectedDigestOf(body),
       }, feedReader(env)));
     case 'marketOverlay':
       requireExactKeys(body, [ 'reason', 'overlay', 'expectedDigest' ]);
-      return jsonResponse(await replaceMarketOverlay(context.db, {
+      return jsonResponse(await replaceMarketOverlay(admin.db, {
         versionId:     versionId!,
         chainId:       chainIdOf(second!),
         deploymentKey: third!,
         overlay:       body.overlay,
-        actor:         context.actor,
+        actor:         admin.actor,
         reason:        requireReason(body),
         ...expectedDigestOf(body),
       }, feedReader(env), creationReader(env)));
     case 'overlays':
-      return jsonResponse(await replaceOverlays(context.db, overlayDocuments(body, versionId!, context.actor), feedReader(env), creationReader(env)));
+      return jsonResponse(await replaceOverlays(admin.db, overlayDocuments(body, versionId!, admin.actor), feedReader(env), creationReader(env)));
   }
 }
 
-export { overlayDocuments, routeAdmin, syncAnswer, syncFailure };
+export { ROUTES, overlayDocuments, routeAdmin, syncAnswer };

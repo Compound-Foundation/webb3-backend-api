@@ -1,7 +1,11 @@
 import type { Env } from '../../entrypoint.js';
 
-import type { RegistrySnapshotV1, RegistryVersionRefV1, RegistryVersionRow } from '../../lib/model/comet-registry.js';
+import type { RegistrySnapshotV1, RegistryVersionRefV1 } from '../../lib/model/comet-registry.js';
+import { throttleBy } from '../../lib/throttle.js';
 
+import type { Log } from '../log.js';
+
+import { nowOf } from './clock.js';
 import { registryConfig } from './config.js';
 import {
   readActivePointer,
@@ -10,6 +14,7 @@ import {
   readVersion,
   snapshotChecksum,
 } from './repository.js';
+import type { RegistryVersionRow } from './rows.js';
 import type { VersionRef } from './version-headers.js';
 
 /*
@@ -54,10 +59,13 @@ type CacheDeps = {
   staleSeconds: number,
   now?:    () => Date,
   // a failure goes out as an error, a degradation the cache recovers from as a warning
-  debug?:  {
-    error: (...parameters: unknown[]) => unknown,
-    warn:  (...parameters: unknown[]) => unknown,
-  },
+  debug:   Pick<Log, 'error' | 'warn'>,
+  /*
+   * The request's waitUntil, which keeps a write going past the answer, so
+   * the request does not wait for it. Without it, as in the Cron, the write
+   * is waited for.
+   */
+  defer?:  (work: Promise<unknown>) => void,
 };
 
 /*
@@ -72,22 +80,18 @@ type PinnedVersion = {
 };
 
 /*
- * The registry could not be read: nothing is active, or D1 did not answer
- * and nothing within the fallback window is cached. Every route answers it
- * with 503 — after the cutover there is nothing else to answer from, and
- * silently answering from the static constants would serve markets nobody
- * reviewed or activated. The reason tells the two apart for a route that
- * answers them differently; why D1 did not answer is the cause, for the logs.
+ * The registry could not be read: D1 did not answer, and nothing within the
+ * fallback window is cached. Every route that resolves a market answers it
+ * with 503 — after the cutover there is nothing else to answer from. Why D1
+ * did not answer is the cause, for the logs.
+ *
+ * Nothing being active is never this: D1 answered, and the cache says so
+ * with null.
  */
-type UnavailableReason = 'not_active' | 'unreadable';
-
 class RegistryUnavailable extends Error {
-  readonly reason: UnavailableReason;
-
-  constructor(message: string, reason: UnavailableReason, cause?: unknown) {
+  constructor(message: string, cause?: unknown) {
     super(message, cause === undefined ? {} : { cause });
-    this.name   = 'RegistryUnavailable';
-    this.reason = reason;
+    this.name = 'RegistryUnavailable';
   }
 }
 
@@ -120,15 +124,18 @@ const POINTER_RETRY_SECONDS = 60;
  * which is what an environment that would rather fail than serve an older
  * version sets. A value neither takes is answered with its default, and the
  * status names it.
+ *
+ * A request adds its waitUntil (`defer`) to these. The Cron and the status
+ * route take them as they are, and so wait for whatever they write.
  */
-function cacheDepsOf(env: Env, debug?: CacheDeps['debug']): CacheDeps {
+function cacheDepsOf(env: Env, debug: CacheDeps['debug']): CacheDeps {
   const { snapshotTtlSeconds, staleFallbackSeconds } = registryConfig(env);
   return {
     db:           env.APP_DB,
     kv:           env.kv_registry,
     ttlSeconds:   snapshotTtlSeconds,
     staleSeconds: staleFallbackSeconds,
-    ...(debug === undefined ? {} : { debug }),
+    debug,
   };
 }
 
@@ -145,10 +152,6 @@ function snapshotKey({ id, checksum }: VersionRef): string {
 const POINTER_KEY = `active:${SCHEMA}`;
 
 type PointerRecord = RegistryVersionRefV1 & { at: string };
-
-function now(deps: CacheDeps): Date {
-  return deps.now?.() ?? new Date();
-}
 
 function refOf({ id, checksum }: VersionRef): string {
   return `${id}:${checksum}`;
@@ -304,7 +307,7 @@ async function cachedSnapshot(deps: CacheDeps, pointer: RegistryVersionRefV1): P
     value = await deps.kv.get(snapshotKey(pointer), 'json');
   } catch (error) {
     // a cache that cannot be read is a slow request, never a failed one
-    deps.debug?.warn(`registry snapshot cache unreadable`, { versionId: pointer.id, error });
+    deps.debug.warn(`registry snapshot cache unreadable`, { versionId: pointer.id, error });
     return null;
   }
   if (value === null || value === undefined) {
@@ -318,7 +321,7 @@ async function cachedSnapshot(deps: CacheDeps, pointer: RegistryVersionRefV1): P
      * Something is under the key that is not the version it names. D1
      * answers instead, and the bytes it hydrates are written over the entry.
      */
-    deps.debug?.warn(`registry snapshot cache entry refused: it is not the version it is cached as`, { versionId: pointer.id });
+    deps.debug.warn(`registry snapshot cache entry refused: it is not the version it is cached as`, { versionId: pointer.id });
   }
   return snapshot;
 }
@@ -364,7 +367,7 @@ async function storedSnapshot(
  */
 async function writeSnapshot(deps: CacheDeps, pointer: RegistryVersionRefV1, snapshot: RegistrySnapshotV1): Promise<void> {
   if (await verified(snapshot, pointer) === null) {
-    deps.debug?.warn(`registry snapshot not cached: this release hydrates it unlike the release that validated it`, {
+    deps.debug.warn(`registry snapshot not cached: this release hydrates it unlike the release that validated it`, {
       versionId: pointer.id,
     });
     return;
@@ -373,7 +376,7 @@ async function writeSnapshot(deps: CacheDeps, pointer: RegistryVersionRefV1, sna
     await deps.kv.put(snapshotKey(pointer), JSON.stringify(snapshot));
   } catch (error) {
     // the answer is already computed; failing to remember it must not fail it
-    deps.debug?.warn(`registry snapshot cache unwritable`, { versionId: pointer.id, error });
+    deps.debug.warn(`registry snapshot cache unwritable`, { versionId: pointer.id, error });
   }
 }
 
@@ -391,10 +394,15 @@ async function writeSnapshot(deps: CacheDeps, pointer: RegistryVersionRefV1, sna
  * all of them together after an activation. So a write is claimed before it
  * is made, and the requests that arrive while it is under way leave it to the
  * one making it. The claim holds for the period only once the write has
- * landed: a write KV refused, or one cut off with its request, is made again
- * about a minute later, not by the next request and not a period later. The
- * minute is spread at random between half a minute and a minute and a half,
- * so isolates refused together do not try again together.
+ * landed: a write KV refused, or one the runtime cut off, is made again about
+ * a minute later, not by the next request and not a period later. The minute
+ * is spread at random between half a minute and a minute and a half, so
+ * isolates refused together do not try again together.
+ *
+ * No request waits for the write. It is handed to the request's waitUntil
+ * (`defer`), which keeps it going past the answer until the runtime cuts it
+ * off; that is why the claim is extended by the write itself, once it has
+ * landed, and never when it is handed over.
  */
 const written = new WeakMap<KVNamespace, { ref: string, due: number }>();
 
@@ -403,7 +411,7 @@ async function rememberPointer(deps: CacheDeps, pointer: RegistryVersionRefV1): 
     // with no fallback window nothing ever reads this record, so nothing writes it
     return;
   }
-  const at     = now(deps).getTime();
+  const at     = nowOf(deps.now).getTime();
   const ref    = refOf(pointer);
   const last   = written.get(deps.kv);
   /*
@@ -420,13 +428,20 @@ async function rememberPointer(deps: CacheDeps, pointer: RegistryVersionRefV1): 
   const claim = { ref, due: at + Math.min(period, POINTER_RETRY_SECONDS * 1000 * (0.5 + Math.random())) };
   written.set(deps.kv, claim);
   const record: PointerRecord = { ...pointer, at: new Date(at).toISOString() };
-  try {
-    await deps.kv.put(POINTER_KEY, JSON.stringify(record), {
-      expirationTtl: Math.max(deps.staleSeconds, MIN_TTL_SECONDS),
-    });
-    claim.due = at + period;
-  } catch (error) {
-    deps.debug?.warn(`registry pointer cache unwritable`, { versionId: pointer.id, error });
+  const write = (async () => {
+    try {
+      await deps.kv.put(POINTER_KEY, JSON.stringify(record), {
+        expirationTtl: Math.max(deps.staleSeconds, MIN_TTL_SECONDS),
+      });
+      claim.due = at + period;
+    } catch (error) {
+      deps.debug.warn(`registry pointer cache unwritable`, { versionId: pointer.id, error });
+    }
+  })();
+  if (deps.defer === undefined) {
+    await write;
+  } else {
+    deps.defer(write);
   }
 }
 
@@ -457,14 +472,14 @@ async function stalePointer(deps: CacheDeps): Promise<{ pointer: RegistryVersion
   try {
     record = pointerRecordOf(await deps.kv.get(POINTER_KEY, 'json'));
   } catch (error) {
-    deps.debug?.warn(`registry pointer cache unreadable`, { error });
+    deps.debug.warn(`registry pointer cache unreadable`, { error });
     return null;
   }
   if (record === null) {
     return null;
   }
 
-  const age = (now(deps).getTime() - Date.parse(record.at)) / 1000;
+  const age = (nowOf(deps.now).getTime() - Date.parse(record.at)) / 1000;
   if (!Number.isFinite(age) || age < 0 || age > deps.staleSeconds) {
     return null;
   }
@@ -499,13 +514,12 @@ function isUnreachable(error: unknown): boolean {
 // a database that could not be reached is the registry being unavailable; one that answered is its own fault
 function unavailableOr(error: unknown): unknown {
   return isUnreachable(error)
-    ? new RegistryUnavailable(`the comet registry could not be read`, 'unreadable', error)
+    ? new RegistryUnavailable(`the comet registry could not be read`, error)
     : error;
 }
 
 /*
- * When this isolate last said it answers from the fallback, per database
- * binding.
+ * When this isolate says it answers from the fallback, per database binding.
  *
  * A database that cannot be reached is a failure an operator has to see, so
  * it is an error even while the fallback keeps every answer a success. It is
@@ -513,18 +527,13 @@ function unavailableOr(error: unknown): unknown {
  * serves for its whole window would otherwise write a line, with the whole
  * error, for every request it answered.
  */
-const reportedOutage = new WeakMap<D1Database, number>();
-
-const REPORT_OUTAGE_EVERY_MS = 60_000;
+const outageDue = throttleBy<D1Database>(60_000);
 
 function reportOutage(deps: CacheDeps, stale: { pointer: VersionRef, staleFor: number }, error: unknown): void {
-  const at   = now(deps).getTime();
-  const last = reportedOutage.get(deps.db);
-  if (last !== undefined && at - last < REPORT_OUTAGE_EVERY_MS) {
+  if (!outageDue(deps.db, 'outage', nowOf(deps.now).getTime())) {
     return;
   }
-  reportedOutage.set(deps.db, at);
-  deps.debug?.error(`registry database unreachable; answering from the version it last named`, {
+  deps.debug.error(`registry database unreachable; answering from the version it last named`, {
     versionId: stale.pointer.id,
     staleFor:  stale.staleFor,
     error,
@@ -682,7 +691,7 @@ async function cacheStatus(deps: CacheDeps, pointer: VersionRef | null): Promise
       ? { keys: [] as Array<{ name: string }> }
       : await deps.kv.list({ prefix: snapshotKey(pointer) });
     const record = pointerRecordOf(await deps.kv.get(POINTER_KEY, 'json'));
-    const age    = record === null ? null : Math.round((now(deps).getTime() - Date.parse(record.at)) / 1000);
+    const age    = record === null ? null : Math.round((nowOf(deps.now).getTime() - Date.parse(record.at)) / 1000);
     return {
       snapshotCached:    listed.keys.length > 0,
       pointerAgeSeconds: age !== null && Number.isFinite(age) ? age : null,
@@ -695,7 +704,7 @@ async function cacheStatus(deps: CacheDeps, pointer: VersionRef | null): Promise
      * no cache at all, and so no fallback when the database next fails — went
      * unsaid.
      */
-    deps.debug?.warn(`registry cache status unreadable`, { error });
+    deps.debug.warn(`registry cache status unreadable`, { error });
     return { snapshotCached: false, pointerAgeSeconds: null, readable: false };
   }
 }
@@ -813,18 +822,18 @@ async function cacheAgainIfSwitchedOn(deps: CacheDeps, reached: string[]): Promi
   try {
     active = await readActivePointer(deps.db);
   } catch (error) {
-    deps.debug?.warn(`registry snapshot not checked again after the prune`, { error });
+    deps.debug.warn(`registry snapshot not checked again after the prune`, { error });
     return;
   }
   if (active === null || !reached.includes(snapshotKey(active))) {
     return;
   }
   // logged before the write, not as its outcome: writeSnapshot warns of a write it could not make
-  deps.debug?.warn(`registry snapshot switched on while the prune removed it; caching it again`, { versionId: active.id });
+  deps.debug.warn(`registry snapshot switched on while the prune removed it; caching it again`, { versionId: active.id });
   try {
     await warmSnapshot(deps, active.id);
   } catch (error) {
-    deps.debug?.warn(`registry snapshot not warmed`, { versionId: active.id, error });
+    deps.debug.warn(`registry snapshot not warmed`, { versionId: active.id, error });
   }
 }
 

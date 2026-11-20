@@ -1,38 +1,46 @@
 import {
   ActivationAction,
-  MarketV1,
+  Address,
   NetworkV1,
   RegistrySnapshotV1,
-  VERSION_STATUSES,
+  ServedMarket,
+  ServedNetwork,
   isAddress,
   marketKey,
   normalizeAddress,
 } from '../../lib/model/comet-registry.js';
 
 import { matchesIfNoneMatch } from '../http/conditional.js';
-import { ApiError } from '../http/errors.js';
+import { ApiError, noActiveVersion } from '../http/errors.js';
 import { jsonResponse } from '../http/json.js';
+import type { Log } from '../log.js';
 
 import type { CachedSnapshot, PinnedVersion } from './cache.js';
+import { conflict } from './errors.js';
 import { registryHeaders } from './version-headers.js';
 import type { VersionRef } from './version-headers.js';
 import {
   activateVersion,
+  approveVersion,
   readActivationHistory,
   readActiveVersionId,
+  readApprovals,
   readMarket,
-  readNetworkOverlay,
-  readSnapshot,
   readUnreviewed,
-  readValidationSummary,
   readVersion,
   readVersions,
 } from './repository.js';
-import { compareVersions } from './changes.js';
+import { readNetworkOverlay } from './overlay-store.js';
+import { VERSION_STATUSES } from './rows.js';
+import type { SyncRunItemRow, SyncRunRow } from './rows.js';
+import { readValidationSummary } from './validation-store.js';
+import { readChanges } from './changes.js';
 import { isServed, servedNetworks } from './catalog.js';
-import { orderNetworks, overlayDigest, overlayOfMarket, parseMarketOverlay } from './overlay.js';
-import { validateStoredVersion } from './admin.js';
-import { cancelRun } from './sync.js';
+import type { RegistryEvent } from './notifications.js';
+import { overlayDigest, overlayOfMarket, parseMarketOverlay } from './overlay.js';
+import { requireVersion, validateStoredVersion } from './admin.js';
+import { syncRunSummary } from './status.js';
+import { cancelRun, readRun, readRunItems } from './sync.js';
 
 /*
  * The registry HTTP handlers. They resolve a version, shape the response, and
@@ -45,17 +53,13 @@ import { cancelRun } from './sync.js';
  */
 type RegistryContext = {
   db:    D1Database,
-  actor: string,
   // the id the request is answered under, so a line logged about what it came to can name it
   requestId: string,
   /*
    * Where a failure that is not the caller's goes, and a degradation the
    * registry recovered from; the routes never return either.
    */
-  debug: {
-    error: (...parameters: unknown[]) => unknown,
-    warn:  (...parameters: unknown[]) => unknown,
-  },
+  debug: Pick<Log, 'error' | 'warn'>,
   /*
    * The active snapshot as the cache resolves it: from this isolate's memory
    * or from KV where the pointer D1 reports names a version they already
@@ -64,6 +68,9 @@ type RegistryContext = {
    * them are cached the same and every stale answer says so; an
    * administrative read that only needs the active version's id still asks
    * D1 directly, because it is asking what is true now.
+   *
+   * Each call reads the pointer again, so a handler asks once and answers
+   * from the one version that call returned.
    */
   active: () => Promise<CachedSnapshot | null>,
   /*
@@ -79,6 +86,23 @@ type RegistryContext = {
    * so it is paid for here instead, while nobody is waiting.
    */
   warm: (versionId: string) => Promise<void>,
+  /*
+   * Announces a change that went live, or an approval of one
+   * (notifications.ts), once the command that made it has committed. It
+   * returns at once: the message is read and sent by a task the answer never
+   * waits for, and nothing it meets fails the command.
+   */
+  notify: (event: RegistryEvent) => void,
+};
+
+/*
+ * What an administrative command is given besides: the name of the token
+ * that authenticated it, which every audit row the command writes records as
+ * its actor. Only the admin router makes one, from the token it checked, so
+ * nothing a request sends can name who it was.
+ */
+type AdminContext = RegistryContext & {
+  actor: string,
 };
 
 const SCHEMA_VERSION = 1;
@@ -167,7 +191,7 @@ async function snapshotResponse(
  * decided to offer. A network whose markets are deprecated is still served,
  * because positions and history in them must stay reachable.
  */
-function selectable(snapshot: RegistrySnapshotV1): RegistrySnapshotV1 {
+function selectable(snapshot: RegistrySnapshotV1): Omit<RegistrySnapshotV1, 'networks'> & { networks: ServedNetwork[] } {
   return {
     ...snapshot,
     networks: servedNetworks(snapshot).map(({ network, markets }) => ({ ...network, markets })),
@@ -177,12 +201,13 @@ function selectable(snapshot: RegistrySnapshotV1): RegistrySnapshotV1 {
 async function activeSnapshot(context: RegistryContext): Promise<CachedSnapshot> {
   const active = await context.active();
   if (active === null) {
-    throw new ApiError('REGISTRY_NOT_ACTIVE', `No active registry snapshot is available`);
+    throw noActiveVersion();
   }
   return active;
 }
 
-function networkOf(snapshot: RegistrySnapshotV1, chainId: number): NetworkV1 {
+// a chain's network as `snapshot` holds it: a served one in what the API serves (selectable)
+function networkOf<Network extends NetworkV1>(snapshot: { networks: Network[] }, chainId: number): Network {
   const network = snapshot.networks.find(candidate => candidate.chainId === chainId);
   if (network === undefined) {
     throw new ApiError('NOT_FOUND', `chain ${chainId} is not part of the active registry`);
@@ -208,16 +233,24 @@ function chainIdOf(value: string): number {
 }
 
 /*
+ * An address a path names, in any case. It is stored and answered lowercase,
+ * as every address the registry holds.
+ */
+function addressOf(value: string): Address {
+  if (!isAddress(value)) {
+    throw new ApiError('BAD_REQUEST', `${value} is not an address`);
+  }
+  return normalizeAddress(value);
+}
+
+/*
  * A market is addressed by its Comet address. A disabled market is not
  * selectable, so it answers 404 even though it stays in the snapshot for
  * diagnostics; a deprecated one is still readable, because positions and
  * history in it must remain reachable.
  */
-function marketOf(network: NetworkV1, address: string): MarketV1 {
-  if (!isAddress(address)) {
-    throw new ApiError('BAD_REQUEST', `${address} is not an address`);
-  }
-  const comet  = normalizeAddress(address);
+function marketOf(network: NetworkV1, address: string): ServedMarket {
+  const comet  = addressOf(address);
   const market = network.markets.find(candidate => candidate.contracts.comet === comet);
   if (market === undefined || !isServed(market)) {
     throw new ApiError('NOT_FOUND', `no selectable market at ${comet} on chain ${network.chainId}`);
@@ -356,14 +389,12 @@ async function getVersions(context: RegistryContext, query: URLSearchParams): Pr
 }
 
 async function getVersionDetail(context: RegistryContext, versionId: string): Promise<Response> {
-  const version = await readVersion(context.db, versionId);
-  if (version === null) {
-    throw new ApiError('NOT_FOUND', `no registry version with that id`);
-  }
-  // three reads that do not depend on each other, so one round trip of waiting rather than three
-  const [ validation, activations, unreviewed ] = await Promise.all([
+  const version = await requireVersion(context.db, versionId);
+  // reads that do not depend on each other, so one round trip of waiting rather than four
+  const [ validation, activations, approvals, unreviewed ] = await Promise.all([
     readValidationSummary(context.db, versionId),
     readActivationHistory(context.db, versionId),
+    readApprovals(context.db, versionId),
     readUnreviewed(context.db, versionId),
   ]);
   return jsonResponse({
@@ -381,6 +412,7 @@ async function getVersionDetail(context: RegistryContext, versionId: string): Pr
     },
     validation,
     activations,
+    approvals,
     /*
      * The networks and markets this version imported that nobody has
      * reviewed: disabled, with every capability off, until someone decides
@@ -398,58 +430,49 @@ async function getVersionDetail(context: RegistryContext, versionId: string): Pr
  * resumable.
  */
 async function getSyncRun(context: RegistryContext, syncRunId: string): Promise<Response> {
-  const run = await context.db.prepare(`SELECT * FROM sync_runs WHERE id = ?1`).bind(syncRunId).first<SyncRunRecord>();
-  if (run === null || run === undefined) {
+  const [ run, items ] = await Promise.all([
+    readRun(context.db, syncRunId),
+    readRunItems(context.db, syncRunId),
+  ]);
+  if (run === null) {
     throw new ApiError('NOT_FOUND', `no sync run with that id`);
   }
-
-  const items = await context.db.prepare(
-    `SELECT root_path, upstream_network_key, deployment_key, status, attempts,
-            completed_at, last_error, updated_at
-     FROM sync_run_items WHERE sync_run_id = ?1 ORDER BY root_path`
-  ).bind(syncRunId).all<SyncRunItemRecord>();
-
-  return syncRunResponse(run, items.results ?? []);
+  return syncRunResponse(run, items);
 }
-
-type SyncRunRecord = {
-  id: string, source_commit_sha: string, tracked_ref: string | null, registry_version_id: string | null,
-  trigger_kind: string, requested_by: string | null, reason: string | null, status: string,
-  outcome: string | null, lease_expires_at: string | null, expected_count: number,
-  completed_count: number, failed_count: number, last_error: string | null,
-  started_at: string, completed_at: string | null,
-};
-
-type SyncRunItemRecord = {
-  root_path: string, upstream_network_key: string, deployment_key: string,
-  status: string, attempts: number, completed_at: string | null,
-  last_error: string | null, updated_at: string,
-};
 
 /*
  * What both sync run routes answer: the run read by id, or as a cancel left
- * it. Every field is named, so neither owner a row carries leaves the worker.
+ * it, listing what started it before how far it got, as it always has. The
+ * literal keeps that order and this type keeps it whole: jsonResponse takes
+ * any value, so it is the type that refuses an answer missing a field of
+ * syncRunSummary. Every field is named, here and in syncRunSummary, so
+ * neither owner a row carries leaves the worker.
  */
-function syncRunResponse(run: SyncRunRecord, items: SyncRunItemRecord[]): Response {
+type SyncRunAnswer = ReturnType<typeof syncRunSummary> & {
+  sourceCommitSha: SyncRunRow['source_commit_sha'],
+  trackedRef:      SyncRunRow['tracked_ref'],
+  triggerKind:     SyncRunRow['trigger_kind'],
+  requestedBy:     SyncRunRow['requested_by'],
+  reason:          SyncRunRow['reason'],
+};
+
+function syncRunResponse(run: SyncRunRow, items: SyncRunItemRow[]): Response {
+  const {
+    id, registryVersionId, status, outcome, startedAt, completedAt,
+    failedCount, expectedCount, completedCount, lastError, leaseExpiresAt,
+  } = syncRunSummary(run);
+  const syncRun: SyncRunAnswer = {
+    id, registryVersionId,
+    sourceCommitSha: run.source_commit_sha,
+    trackedRef:      run.tracked_ref,
+    triggerKind:     run.trigger_kind,
+    requestedBy:     run.requested_by,
+    reason:          run.reason,
+    status, outcome, leaseExpiresAt, expectedCount, completedCount, failedCount, lastError,
+    startedAt, completedAt,
+  };
   return jsonResponse({
-    syncRun: {
-      id:                run.id,
-      registryVersionId: run.registry_version_id,
-      sourceCommitSha:   run.source_commit_sha,
-      trackedRef:        run.tracked_ref,
-      triggerKind:       run.trigger_kind,
-      requestedBy:       run.requested_by,
-      reason:            run.reason,
-      status:            run.status,
-      outcome:           run.outcome,
-      leaseExpiresAt:    run.lease_expires_at,
-      expectedCount:     run.expected_count,
-      completedCount:    run.completed_count,
-      failedCount:       run.failed_count,
-      lastError:         run.last_error,
-      startedAt:         run.started_at,
-      completedAt:       run.completed_at,
-    },
+    syncRun,
     items: items.map(item => ({
       rootPath:           item.root_path,
       upstreamNetworkKey: item.upstream_network_key,
@@ -469,15 +492,15 @@ function syncRunResponse(run: SyncRunRecord, items: SyncRunItemRecord[]): Respon
  * invocation holds, which may be importing into it, until its lease has run
  * out.
  */
-async function cancelSyncRun(context: RegistryContext, syncRunId: string, reason: string): Promise<Response> {
+async function cancelSyncRun(context: AdminContext, syncRunId: string, reason: string): Promise<Response> {
   const { cancelled, run, items } = await cancelRun(context.db, syncRunId, { actor: context.actor, reason });
   if (run === null) {
     throw new ApiError('NOT_FOUND', `no sync run with that id`);
   }
   if (!cancelled) {
-    throw new ApiError('CONFLICT', run.status !== 'running'
-      ? `the sync run has already ended; it is ${run.status}`
-      : `an invocation holds the sync run until ${run.lease_expires_at}; cancel it once that has passed`);
+    throw run.status !== 'running'
+      ? conflict('SYNC_RUN_ENDED', `the sync run has already ended; it is ${run.status}`)
+      : conflict('SYNC_RUN_HELD', `an invocation holds the sync run until ${run.lease_expires_at}; cancel it once that has passed`);
   }
   return syncRunResponse(run, items);
 }
@@ -493,25 +516,15 @@ async function cancelSyncRun(context: RegistryContext, syncRunId: string, reason
  */
 async function getChanges(context: RegistryContext, versionId: string): Promise<Response> {
   const [ version, activeId ] = await Promise.all([
-    readVersion(context.db, versionId),
+    requireVersion(context.db, versionId),
     readActiveVersionId(context.db),
-  ]);
-  if (version === null) {
-    throw new ApiError('NOT_FOUND', `no registry version with that id`);
-  }
-
-  // the two versions and the review state are read side by side, not one after another
-  const [ after, before, unreviewed ] = await Promise.all([
-    readSnapshot(context.db, versionId),
-    activeId === null ? null : readSnapshot(context.db, activeId),
-    readUnreviewed(context.db, versionId),
   ]);
 
   return jsonResponse({
     versionId,
     status:       version.status,
     comparedWith: activeId,
-    ...compareVersions(before === null ? null : orderNetworks(before), orderNetworks(after), new Set(unreviewed.markets)),
+    ...await readChanges(context.db, versionId, activeId),
   });
 }
 
@@ -532,14 +545,11 @@ async function getMarketOverlay(
 ): Promise<Response> {
   const scope = marketKey(chainId, deploymentKey);
   // the one market, not every row of the version, and the version beside it
-  const [ version, market, unreviewed ] = await Promise.all([
-    readVersion(context.db, versionId),
+  const [ , market, unreviewed ] = await Promise.all([
+    requireVersion(context.db, versionId),
     readMarket(context.db, versionId, { chainId, deploymentKey }),
     readUnreviewed(context.db, versionId),
   ]);
-  if (version === null) {
-    throw new ApiError('NOT_FOUND', `no registry version with that id`);
-  }
   if (market === null) {
     throw new ApiError('NOT_FOUND', `${scope} is not in this registry version`);
   }
@@ -561,13 +571,10 @@ async function getMarketOverlay(
  * version serves would drop every exception this one has and that one lacks.
  */
 async function getNetworkOverlay(context: RegistryContext, versionId: string, chainId: number): Promise<Response> {
-  const [ version, network ] = await Promise.all([
-    readVersion(context.db, versionId),
+  const [ , network ] = await Promise.all([
+    requireVersion(context.db, versionId),
     readNetworkOverlay(context.db, versionId, chainId),
   ]);
-  if (version === null) {
-    throw new ApiError('NOT_FOUND', `no registry version with that id`);
-  }
   if (network === null) {
     throw new ApiError('NOT_FOUND', `chain ${chainId} is not in this registry version`);
   }
@@ -596,17 +603,24 @@ async function postValidate(context: RegistryContext, versionId: string): Promis
 }
 
 async function postActivation(
-  context: RegistryContext,
+  context: AdminContext,
   versionId: string,
   action: ActivationAction,
   reason: string,
   expectation: { expectedActiveVersionId?: string | null } = {},
 ): Promise<Response> {
   // a version that does not exist is not a state conflict, and answers as every other route does
-  if (await readVersion(context.db, versionId) === null) {
-    throw new ApiError('NOT_FOUND', `no registry version with that id`);
-  }
+  await requireVersion(context.db, versionId);
   const result = await activateVersion(context.db, { versionId, action, actor: context.actor, reason, ...expectation });
+  /*
+   * A move that changed what is served is announced, and one that changed
+   * nothing is not. It is handed over before the warm-up, which can take a
+   * while: a client that hangs up meanwhile ends the request, and must not
+   * take the announcement of a move already made with it.
+   */
+  if (result.changed && result.activationId !== null) {
+    context.notify({ activationId: result.activationId });
+  }
   /*
    * A rollback names a version that was validated long ago, and whose bytes
    * the hourly prune may have removed from KV: it keeps only the active
@@ -619,7 +633,28 @@ async function postActivation(
   return jsonResponse(result, { headers: registryHeaders(result.registryVersion) });
 }
 
-export type { RegistryContext };
+/*
+ * Approves a validated version for an activation by somebody else, against
+ * the version its giver read the changes against, which must still be on
+ * (approveVersion). Every request records an approval of its own, and each
+ * one is announced at once, as a move is: the channel hears that a change is
+ * on its way while it can still be stopped.
+ */
+async function postApproval(
+  context: AdminContext,
+  versionId: string,
+  reason: string,
+  ttlSeconds: number,
+  expectedActiveVersionId: string | null,
+): Promise<Response> {
+  // a version that does not exist is not a state conflict, and answers as every other route does
+  await requireVersion(context.db, versionId);
+  const approval = await approveVersion(context.db, { versionId, actor: context.actor, reason, ttlSeconds, expectedActiveVersionId });
+  context.notify({ approvalId: approval.id });
+  return jsonResponse({ approval });
+}
+
+export type { AdminContext, RegistryContext };
 
 export {
   cancelSyncRun,
@@ -636,5 +671,6 @@ export {
   getVersions,
   getVersionDetail,
   postActivation,
+  postApproval,
   postValidate,
 };

@@ -17,14 +17,14 @@ import type { RegistryFetch } from './source/github.js';
  *
  * An invocation stopped by a service that did not answer — GitHub while the
  * import looks for the commit, or the database — or refused by the registry
- * ends as a failed result, which the administrative route answers with and
- * the Cron reports as a failed invocation. A market whose own reads fail, its
- * root from GitHub or the chain through the node provider, stops nothing: the
- * importer records the failure on that root and goes on, and the status
- * raises `sync-failing` once such failures repeat. Nothing is retried here:
- * the next invocation resumes from the checkpoints in D1. A fault — a bug, or
- * a database without its migrations — is logged whole and raised: the Cron
- * then reports an exception, and the administrative route answers 500.
+ * is logged with why, and what stopped it is raised: the administrative route
+ * answers it, and the Cron reports an exception. A market whose own reads
+ * fail, its root from GitHub or the chain through the node provider, stops
+ * nothing: the importer records the failure on that root and goes on, and
+ * the status raises `sync-failing` once such failures repeat. Nothing is
+ * retried here: the next invocation resumes from the checkpoints in D1. A
+ * fault — a bug, or a database without its migrations — is logged whole and
+ * raised the same way, and the administrative route answers it 500.
  */
 
 /*
@@ -80,14 +80,14 @@ function transportFor(env: Env, fetch = registryFetch(env)): (network: string) =
   });
 }
 
-function importerDeps(env: Env, debug?: ImporterDeps['debug']): ImporterDeps {
+function importerDeps(env: Env, debug: ImporterDeps['debug']): ImporterDeps {
   const config = registryConfig(env);
   assertImportable(config);
   const token = env.COMET_GITHUB_TOKEN;
   const fetch = registryFetch(env);
   return {
     db: env.APP_DB,
-    ...(debug === undefined ? {} : { debug }),
+    debug,
     source: {
       repository: env.COMET_SOURCE_REPOSITORY,
       ref:        env.COMET_SOURCE_REF,
@@ -105,8 +105,10 @@ function importerDeps(env: Env, debug?: ImporterDeps['debug']): ImporterDeps {
 }
 
 /*
- * Runs one invocation of the importer and reports its outcome. Returns the
- * result so a manual administrative sync can answer with it.
+ * Runs one invocation of the importer and logs its outcome. Returns what the
+ * invocation did, so a manual administrative sync can answer with it. What
+ * stopped one that failed is logged with why and raised as it was: the
+ * administrative route answers it, and the Cron fails on it.
  *
  * `requestId` is the id the administrative route answers under, which each
  * line this logs about the invocation carries; the Cron has none.
@@ -161,12 +163,12 @@ async function runRegistrySync(
       } else {
         debug.error(`registry sync failed`, { reason, cause: error.cause, ...asked });
       }
-      return { kind: 'failed', processed: 0, reason, error };
+      throw error;
     }
     if (isTransportFailure(error) || isUnreachable(error)) {
       // the database or a source did not answer: worth retrying, and its message names which
       debug.error(`registry sync failed`, { reason: (error as Error).message, ...asked });
-      return { kind: 'failed', processed: 0, reason: 'the import was interrupted by a service that did not answer' };
+      throw error;
     }
     /*
      * Anything else is a fault, not a service being down: a bug, or a

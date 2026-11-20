@@ -20,9 +20,6 @@ async function sha256(source: string): Promise<string> {
   return Buffer.from(digestBytes).toString('hex');
 }
 
-// the same digest under the name the registry and the admin auth use for it
-const sha256Hex = sha256;
-
 /*
  * Sometimes, we need a keccak256 hash - usualle for the purpose of
  * encoding values for the EVM. In such cases, we can still leverage
@@ -38,6 +35,5 @@ function keccak256(source: string): string {
 
 export {
   sha256,
-  sha256Hex,
   keccak256,
 };

@@ -6,7 +6,7 @@ import C3Api, { Env } from '../../entrypoint.js';
 
 import { MemoryKv } from '../util/kv.js';
 import { activeRegistryDatabase } from '../util/registry-database.js';
-import { makeTestEnv } from '../util/test-env.js';
+import { failingDatabase, makeTestEnv } from '../util/test-env.js';
 
 import '../../shim/node-self.js';
 
@@ -64,7 +64,6 @@ const CURSORS = {
  */
 const requests: string[] = [];
 const fetchBefore        = globalThis.fetch;
-const consoleBefore      = { error: console.error, warn: console.warn, log: console.log };
 
 t.before(() => {
   globalThis.fetch = (async (input: Request | string, init?: RequestInit) => {
@@ -72,11 +71,12 @@ t.before(() => {
     throw new TypeError('fetch failed');
   }) as unknown as typeof globalThis.fetch;
   // the worker logs every request the node fails
-  console.error = console.warn = console.log = () => {};
+  for (const level of [ 'error', 'warn', 'log' ] as const) {
+    t.capture(console, level);
+  }
 });
 t.teardown(() => {
   globalThis.fetch = fetchBefore;
-  Object.assign(console, consoleBefore);
 });
 
 // a registry with the fixture on — or, with `activate: false`, with nothing on
@@ -84,11 +84,6 @@ async function registryOf(t: Test, options: { activate?: boolean } = {}): Promis
   const registry = await activeRegistryDatabase(options);
   t.teardown(() => registry.dispose());
   return registry.db;
-}
-
-function failing(message: string): D1Database {
-  const fail = () => { throw new Error(message); };
-  return { prepare: fail, batch: fail, exec: fail, dump: fail } as unknown as D1Database;
 }
 
 // the worker over `db`, the registry fixture unless a test says otherwise, asking the node under a key of its own
@@ -210,7 +205,7 @@ t.test('a testnet is refused while no version is on, and while the database does
 
   for (const [ db, state ] of [
     [ await registryOf(t, { activate: false }), 'no version is on' ],
-    [ failing('D1_ERROR: Network connection lost.'), 'the database does not answer' ],
+    [ failingDatabase('D1_ERROR: Network connection lost.'), 'the database does not answer' ],
   ] as const) {
     const { get, asked } = await harness(t, db);
     for (const [ path, named ] of [
