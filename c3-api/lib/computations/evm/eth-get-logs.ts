@@ -8,7 +8,9 @@ import * as Compute from '../../symbolic/computation.js';
 
 import * as KnownNetwork from '../../well-known/networks/network.js';
 
-import { EvmRpc } from './rpc.js';
+import type { Redex } from '../../symbolic/redex.js';
+
+import { EvmRpc, notServed } from './rpc.js';
 
 type EthGetLogs = Compute.Spec<{
   name: 'ethGetLogs',
@@ -28,7 +30,10 @@ type EthGetLogs = Compute.Spec<{
 /*
  * implementations -- cached and uncached
  */
-const { implement, pipe1 } = Compute.Functor<EthGetLogs>({});
+const { implement, pipe1, join } = Compute.Functor<EthGetLogs>({});
+
+// the refused calls one range may split before it fails (compute)
+const MAX_REFUSALS = 32;
 
 /*
  * NOTE(jordan): caching of ethGetLogs RPCs is not recommended in
@@ -82,32 +87,60 @@ const ethGetLogs = implement({
       blockDistance: end - start,
     };
     logsDebug.log(`eth_getLogs`, debugPayload);
-    const call: jsonRpc.Call = {
-      method: 'eth_getLogs',
-      params: [{
-        topics:    Eth.Event.encodeFilter(filter),
-        address:   addresses,
-        fromBlock: Eth.Hex.fromNumber(start),
-        toBlock:   Eth.Hex.fromNumber(end),
-      }],
+    /*
+     * A range the node answers with an error is read again in two halves,
+     * and so is each half the node refuses in turn, down to a single block;
+     * the logs of the halves, in block order, are the range's.
+     *
+     * Node providers refuse a range whose logs do not fit one answer: they
+     * cap eth_getLogs at a number of logs, about 10,000, or at a size. The
+     * node provider proxy masks every such refusal as "upstream error"
+     * (node-provider-proxy/src/handler.ts), so the refusal cannot be told
+     * from another error, and any error splits the range. The ranges of a
+     * very active account's history, which span many days of blocks, are
+     * refused this way.
+     *
+     * The splits of one range share MAX_REFUSALS: an error that every half
+     * repeats, which is not about size, fails the range after at most
+     * 1 + 2 × MAX_REFUSALS calls, rather than reading it block by block. A
+     * request the proxy fails as a whole, because no provider answered it,
+     * is not split: it fails before an answer reaches this point
+     * (json-rpc.ts, postBatch).
+     */
+    let refusals = 0;
+    const read = (from: Eth.BlockNumber, to: Eth.BlockNumber): Redex<EvmRpc, EthGetLogs['returns']> => {
+      const call: jsonRpc.Call = {
+        method: 'eth_getLogs',
+        params: [{
+          topics:    Eth.Event.encodeFilter(filter),
+          address:   addresses,
+          fromBlock: Eth.Hex.fromNumber(from),
+          toBlock:   Eth.Hex.fromNumber(to),
+        }],
+      };
+      return pipe1([
+        { evmRpc: { frame: { apiHost, nodeHost, nodeKey, network }, items: [ call ] } },
+        ([{ result, error }]) => {
+          if (!error) {
+            return result as EthGetLogs['returns'];
+          }
+          refusals++;
+          const where = `ethGetLogs(${addresses} on ${network} from ${from} to ${to})`;
+          if (from >= to || refusals > MAX_REFUSALS) {
+            logsDebug.error(`eth_getLogs`, { error, refusals }, { ...debugPayload, blockRange: [ from, to ] });
+            throw notServed(where, error);
+          }
+          const middle = from + Math.floor((to - from) / 2);
+          logsDebug.warn(`${where} refused; reading it in two halves`, { error, refusals });
+          return join([
+            [ read(from, middle), read(middle + 1, to) ],
+            ([ older, newer ]) => [ ...older, ...newer ],
+          ]);
+        },
+      ]);
     };
-    return pipe1([
-      { evmRpc: { frame: { apiHost, nodeHost, nodeKey,network }, items: [ call ] } },
-      ([{ result, error }]) => {
-        if (error) {
-          const formatted = jsonRpc.formatError(error);
-          logsDebug.error(`eth_getLogs`, { error }, debugPayload);
-          throw new Error(
-            `ethGetLogs(${debugPayload.addresses}`
-            + ` on ${debugPayload.network}`
-            + ` from ${debugPayload.blockRange.join(' to ')})`
-            + `: call error: ${formatted}`
-          );
-        }
-        return result as EthGetLogs['returns'];
-      }
-    ]);
+    return read(start, end);
   },
 });
 
-export { EthGetLogs, ethGetLogs };
+export { EthGetLogs, ethGetLogs, MAX_REFUSALS };

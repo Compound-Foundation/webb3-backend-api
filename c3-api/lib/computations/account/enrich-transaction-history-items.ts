@@ -1,5 +1,4 @@
 import * as Eth      from '../../eth-constants.js';
-import * as Fallible from '../../fallible/fallible.js';
 import { sha256    } from '../../hash.js';
 import { BigFixnum } from '../../bigfixnum.js';
 
@@ -22,12 +21,12 @@ import * as Redex   from '../../symbolic/redex.js';
 import * as Index   from '../../symbolic/index.js';
 import * as Compute from '../../symbolic/computation.js';
 
-import { Comet } from '../../well-known/contracts/types.js';
-import * as ContractUtils from '../../well-known/contracts/utils.js';
 import * as KnownNetwork from '../../well-known/networks/network.js';
 
 import type * as evm   from '../evm.js';
 import type * as comet from '../comet.js';
+
+import type { RegistryLookup } from '../../model/registry-lookup.js';
 
 type EnrichTransactionHistoryItem = Compute.Spec<{
   name: 'enrichTransactionHistoryItem',
@@ -38,6 +37,8 @@ type EnrichTransactionHistoryItem = Compute.Spec<{
     network:        KnownNetwork.Name,
     accountAddress: Eth.Address,
     item:           RawTransactionHistoryItem,
+    // the one registry version this request resolves markets against
+    catalog:        RegistryLookup,
   },
   depends: [
     evm.EthGetBlock,
@@ -47,10 +48,28 @@ type EnrichTransactionHistoryItem = Compute.Spec<{
   returns: TransactionHistoryItem,
 }>;
 
-function isBulker(address: Eth.Address | null, network: KnownNetwork.Name) {
-  return address !== null
-    && ('Bulker' in Eth.wellKnownContractsByNetwork[network])
-    && (address.toLowerCase() in (Eth.wellKnownContractsByNetwork[network] as any)[ 'Bulker' ]);
+/*
+ * Whether a transaction went through a Bulker: the contract that batches
+ * several market operations into one transaction, which is what makes an item
+ * a bulk item rather than several unrelated actions.
+ *
+ * Each market names its current bulker in the registry, so a market added on
+ * a new network is recognized without a code change. A market names only the
+ * one it uses now, though, and history reaches back past bulker upgrades: a
+ * transaction sent through mainnet's first Bulker is still a bulk
+ * transaction. The bulkers the constants list are the ones earlier history
+ * went through, so they keep counting.
+ */
+function isBulker(address: Eth.Address | null, network: KnownNetwork.Name, catalog: RegistryLookup) {
+  if (address === null) {
+    return false;
+  }
+  const bulker = address.toLowerCase();
+  if (catalog.marketsOn(network).some(({ market }) => market.contracts.bulker === bulker)) {
+    return true;
+  }
+  const known = (Eth.wellKnownContractsByNetwork[network] as Record<string, Record<string, unknown>> | undefined)?.['Bulker'];
+  return known !== undefined && bulker in known;
 }
 
 function isLiquidate(actions: RawTransactionHistoryAction[]) {
@@ -69,16 +88,19 @@ function onlyMigratorActions(actions: RawTransactionHistoryAction[]) {
 const { implement, pipe1, pipe, value, join } = Compute.Functor<EnrichTransactionHistoryItem>({});
 
 const enrichTransactionHistoryItem = implement({
-  version: 5,
+  // 7: keyed by what history reads, so a change to a feed or an exception keeps the items
+  version: 7,
   index: Index.Make<EnrichTransactionHistoryItem['expects']>(Index.Everything),
-  async key(name, { network, accountAddress, item }) {
+  async key(name, { network, accountAddress, item, catalog }) {
     return Key.toKey(name, {
       network,
       accountAddress,
+      // the enriched item carries what the version says about the markets of its network that history reads
+      registry: catalog.historyKeyFor(network),
       itemHash: await sha256(Key.toKey('', item)),
     });
   },
-  compute({ apiHost, nodeHost, nodeKey, network, item: rawItem }, debug) {
+  compute({ apiHost, nodeHost, nodeKey, network, item: rawItem, catalog }, debug) {
     return pipe1([
       {
         ethGetBlock: {
@@ -98,7 +120,7 @@ const enrichTransactionHistoryItem = implement({
             nodeKey,
             rawAction,
             { pipe, value },
-            { network, block }
+            { network, block, catalog }
           )
         )),
         (enrichedActions): TransactionHistoryItem => {
@@ -118,7 +140,7 @@ const enrichTransactionHistoryItem = implement({
           const actions = enrichedActions.flat();
           const itemType = (
             (actions.length < 2)                  ? ItemTypes.Unit
-            : isBulker(transaction.to, network)   ? ItemTypes.Bulk
+            : isBulker(transaction.to, network, catalog) ? ItemTypes.Bulk
             : isLiquidate(actions)                ? ItemTypes.Liquidation
             : ItemTypes.Multi
           );
@@ -155,24 +177,23 @@ function enrichAction
     nodeKey: string,
     rawAction: RawTransactionHistoryAction,
     { pipe, value }: Pick<Redex.Factories<EnrichTransactionHistoryItem['depends']>, 'pipe' | 'value'>,
-    { network, block: { number: blockNumber } }: {
+    { network, block: { number: blockNumber }, catalog }: {
       network:        KnownNetwork.Name,
       block:          Eth.Block,
+      catalog:        RegistryLookup,
     }
   )
   : Redex.Redex<EnrichTransactionHistoryItem['depends'], TransactionHistoryAction[]>
 {
   const { eventType } = rawAction;
-  const contract = Fallible.must(ContractUtils.lookupInWellKnown(
-    { network, address: rawAction.contract.address },
-    Eth.wellKnownContractsByNetwork
-  ));
   // Read balanceOf and borrowBalanceOf from the previous block
   // If read the current block the Comet state has already been updated, which is too late.
   if (eventType === EventTypes.Supply || eventType === EventTypes.Withdraw) {
-    if (!Comet.is(contract)) {
+    const resolved = catalog.marketAt(network, rawAction.contract.address);
+    if (resolved === null) {
       throw new Error(`invariant violated: Supply or Withdraw from non-Comet contract`);
     }
+    const contract = resolved.comet;
     return pipe([
       {
         balanceOf: { apiHost, nodeHost, nodeKey, network, contract, address: rawAction.account.address, blockNumber },
@@ -225,9 +246,11 @@ function enrichAction
     ]);
   } else if (eventType === EventTypes.AbsorbDebt) {
     // AbsorbDebt need to spin additional supply as Liquidation refund if after absorb debt user position became supplying
-    if (!Comet.is(contract)) {
-      throw new Error(`invariant violated: Supply or Withdraw from non-Comet contract`);
+    const resolved = catalog.marketAt(network, rawAction.contract.address);
+    if (resolved === null) {
+      throw new Error(`invariant violated: AbsorbDebt from non-Comet contract`);
     }
+    const contract = resolved.comet;
     return pipe([
       {
         balanceOf: { apiHost, nodeHost, nodeKey, network, contract, address: rawAction.account.address, blockNumber },
@@ -253,4 +276,5 @@ function enrichAction
 export {
   EnrichTransactionHistoryItem,
   enrichTransactionHistoryItem,
+  isBulker,
 };

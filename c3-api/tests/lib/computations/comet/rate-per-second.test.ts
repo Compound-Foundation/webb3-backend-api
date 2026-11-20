@@ -12,6 +12,7 @@ import { versionedName } from '../../../../lib/symbolic/computation.js';
 import { MemoryCache } from '../../../../lib/symbolic/cache.js';
 import * as evm from '../../../../lib/computations/evm.js';
 import * as comet from '../../../../lib/computations/comet.js';
+import { fixtureComet } from '../../../util/registry-fixture.js';
 import * as mock from '../../../util/mock/mock.js';
 
 import '../../../../shim/node-self.js';
@@ -21,7 +22,7 @@ const rateContext: comet.SupplyRatePerSecond['expects'] = {
   nodeHost: 'node.example.test',
   nodeKey: 'test',
   network: 'ethereum-mainnet',
-  contract: Eth.wellKnownContractsByNetwork['ethereum-mainnet'].Comet.cUSDCv3,
+  contract: fixtureComet('ethereum-mainnet', '0xc3d688b66703497daa19211eedff47f25384cdc3'),
   block: { number: 16_380_543, timestamp: 1_673_432_423 },
 };
 

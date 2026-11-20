@@ -125,10 +125,10 @@ function validateMarket(network: NetworkV1, market: MarketV1): CheckResult[] {
   ));
   /*
    * Nor without the rewards contract: the token a market pays is read through
-   * it, and a market served with rewards but without one would offer rewards
-   * whose token cannot be read. No import writes such a market, since it
-   * reads the token through that contract too; this keeps any version that
-   * holds one from being served.
+   * it (catalog.ts, cometOf), and a market served with rewards but without
+   * one fails the routes that serve them, every market of the answer with it.
+   * No import writes such a market, since it reads the token through that
+   * contract too; this keeps any version that holds one from being served.
    */
   results.push(check(
     'rewards-capability-has-contract',
@@ -213,8 +213,8 @@ function validateNetwork(network: NetworkV1, reviewed: boolean): CheckResult[] {
    * back.
    *
    * Wherever validation asks, a candidate's market is served by its status
-   * alone, not by isServed: one without a Comet still counts, and fails
-   * comet-contract-declared.
+   * alone, not as the catalog has it (isServed): one without a Comet still
+   * counts, and fails comet-contract-declared.
    */
   const served = network.markets.filter(market => market.status !== 'disabled').map(market => market.deploymentKey);
   results.push(check('served-network-reviewed', scope, reviewed || served.length === 0, { served }));

@@ -23,6 +23,16 @@ import * as account from '../../../../lib/computations/account.js';
 import '../../../../shim/node-self.js';
 
 import { setupTestEnvVars } from '../../../util/setupTestEnvVars.js';
+import { fixtureCatalog } from '../../../util/registry-fixture.js';
+
+/*
+ * Markets and tokens are resolved through the registry, so these tests build
+ * the same request catalog the worker does, from the frozen snapshot fixture.
+ */
+const catalog = fixtureCatalog();
+
+const CWETHV3 = '0xa17581a9e3356d9a858b789d68b4d866e593ae94';
+const CUSDCV3 = '0xc3d688b66703497daa19211eedff47f25384cdc3';
 
 /*
  * Global env.
@@ -44,7 +54,7 @@ t.before(() => {
 
 t.test(`Test enrichment market history items with proper balanceOf info`, async t => {
   const network: KnownNetwork.Name = 'ethereum-mainnet';
-  const contract = Eth.wellKnownContractsByNetwork[network]['Comet']['cWETHv3'];
+  const contract = catalog.marketAt(network, CWETHV3)!.comet;
   const accountAddress = '0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5';
   const startBlock: Eth.Block = {
     date: '2023-03-17',
@@ -101,10 +111,11 @@ t.test(`Test enrichment market history items with proper balanceOf info`, async 
         nodeKey,
         network,
         marketContracts: [ contract ],
-        rewardsContract: contract.rewards.contract,
+        rewardsContract: contract.rewards!.contract,
         accountAddress,
         proxyAddresses: [],
         blockNumber: startBlock.number,
+        catalog,
       },
     },
     rawItems => evaluator.split(rawItems.map(item => evaluator.pull1({
@@ -114,8 +125,8 @@ t.test(`Test enrichment market history items with proper balanceOf info`, async 
         nodeKey,
         item,
         network,
-        contract,
         accountAddress,
+        catalog,
       },
     }))),
   ]));
@@ -167,7 +178,7 @@ t.test(`Test enrichment market history items with proper balanceOf info`, async 
 
 t.test(`Test enrichment market history items with proper actions split function account for dusty accrual balance`, async t => {
   const network: KnownNetwork.Name = 'ethereum-mainnet';
-  const contract = Eth.wellKnownContractsByNetwork[network]['Comet']['cWETHv3'];
+  const contract = catalog.marketAt(network, CWETHV3)!.comet;
   const accountAddress = '0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5';
   const startBlock: Eth.Block = {
     date: '2023-03-17',
@@ -226,10 +237,11 @@ t.test(`Test enrichment market history items with proper actions split function 
         nodeKey,
         network,
         marketContracts: [ contract ],
-        rewardsContract: contract.rewards.contract,
+        rewardsContract: contract.rewards!.contract,
         accountAddress,
         proxyAddresses: [],
         blockNumber: startBlock.number,
+        catalog,
       },
     },
     rawItems => evaluator.split(rawItems.map(item => evaluator.pull1({
@@ -239,8 +251,8 @@ t.test(`Test enrichment market history items with proper actions split function 
         nodeKey,
         item,
         network,
-        contract,
         accountAddress,
+        catalog,
       },
     }))),
   ]));
@@ -293,7 +305,7 @@ t.test(`Test enrichment market history items with proper actions split function 
 
 t.test(`Test enrichment market history items`, async t => {
   const network: KnownNetwork.Name = 'ethereum-mainnet';
-  const contract = Eth.wellKnownContractsByNetwork[network]['Comet']['cUSDCv3'];
+  const contract = catalog.marketAt(network, CUSDCV3)!.comet;
   const accountAddress = '0x5bD458485d40ca6232b8c96AA88A1D69264Ad36D';
   const startBlock: Eth.Block = {
     date: '2023-01-23',
@@ -352,10 +364,11 @@ t.test(`Test enrichment market history items`, async t => {
         nodeKey,
         network,
         marketContracts: [contract],
-        rewardsContract: contract.rewards.contract,
+        rewardsContract: contract.rewards!.contract,
         accountAddress,
         proxyAddresses: [],
         blockNumber: startBlock.number,
+        catalog,
       },
     },
     rawItems => evaluator.split(rawItems.map(item => evaluator.pull1({
@@ -365,8 +378,8 @@ t.test(`Test enrichment market history items`, async t => {
         nodeKey,
         item,
         network,
-        contract,
         accountAddress,
+        catalog,
       },
     }))),
   ]));

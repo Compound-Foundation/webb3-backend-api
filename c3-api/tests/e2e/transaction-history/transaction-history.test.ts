@@ -32,6 +32,10 @@ import { makeTestEnv } from '../../util/test-env.js';
 import '../../../shim/node-self.js';
 
 import { setupTestEnvVars } from '../../util/setupTestEnvVars.js';
+import { activeRegistryDatabase } from '../../util/registry-database.js';
+
+import type { NetworkV1 } from '../../../lib/model/comet-registry.js';
+import { loadRegistrySnapshotFixture } from '../../util/registry-fixture.js';
 
 const { apiHost, nodeHost, nodeKey } = setupTestEnvVars();
 
@@ -47,6 +51,63 @@ const flags = Flags.parseWithDefaults(globalEnv);
  * once Comet is deployed to base-mainnet
  */
 type Mainnets = Exclude<Extract<KnownNetwork.Name, `${string}-mainnet`>, 'scroll-mainnet' | 'mantle-mainnet' | 'linea-mainnet' | 'unichain-mainnet' | 'ronin-mainnet'>;
+/*
+ * Polygon's USDC market, whose history the first account's is recorded
+ * across: the frozen registry fixture holds no Polygon, and a market the
+ * active version does not hold is refused before any history is read. Read
+ * from the chain on 2026-10-06; its collaterals have since been capped at
+ * zero, which history does not depend on.
+ */
+const POLYGON: NetworkV1 = {
+  chainId:      137,
+  key:          'polygon-mainnet',
+  upstreamKey:  'polygon',
+  displayName:  'Polygon',
+  testnet:      false,
+  presentation: { assetDisplayOverrides: [], unwrappedCollateralAssets: [] },
+  priceExceptions: [],
+  markets: [ {
+    id:                   '00000000-0000-4000-8000-000000000201',
+    deploymentKey:        'usdc',
+    displayName:          'USDC.e',
+    slug:                 null,
+    contractName:         'cUSDCv3',
+    isDefault:            false,
+    isInstitutional:      false,
+    status:               'enabled',
+    creationBlock:        39_412_367,
+    collateralValueQuote: 'usd',
+    capabilities:         { rewards: true, accountRewards: true, transactionHistory: true },
+    contracts: {
+      comet:          '0xf25212e676d1f7f89cd72ffee66158f541246445',
+      configurator:   '0x83e0f742cacbe66349e3701b171ee2487a26e738',
+      rewards:        '0x45939657d1ca34a8fa39a924b71d28fe8431e581',
+      bulker:         '0x59e242d352ae13166b4987ae5c990c232f7f7cd6',
+      fauceteer:      null,
+      bridgeReceiver: '0x18281dfc4d00905da1aaa6731414eaba843c468a',
+    },
+    baseAsset: {
+      token:           { address: '0x2791bca1f2de4661ed88a30c99a7a9449aa84174', symbol: 'USDC', name: 'USD Coin (PoS)', decimals: 6 },
+      displayName:     'USD Coin (Bridged)',
+      isWrappedNative: false,
+      priceFeed:       { address: '0xfe4a8cc5b5b2366c1b58bea3858e81843581b2f7', decimals: 8 },
+      usdPriceFeed:    null,
+    },
+    rewardAsset: {
+      token:          { address: '0x8505b9d2254a7ae468c0e9dd10ccea3a837aef5c', symbol: 'COMP', name: '(PoS) Compound', decimals: 18 },
+      priceFeed:      { address: '0x2a8758b7257102461bc958279054e372c2b1bde6', decimals: 8 },
+      priceFeedQuote: 'usd',
+    },
+    collateralAssets: [
+      { assetIndex: 0, token: { address: '0x7ceb23fd6bc0add59e62ac25578270cff1b9f619', symbol: 'WETH',    name: 'Wrapped Ether',                    decimals: 18 }, priceFeed: { address: '0xf9680d99d6c9589e2a93a78a04a279e509205945', decimals: 8 } },
+      { assetIndex: 1, token: { address: '0x1bfd67037b42cf73acf2047067bd4f2c47d9bfd6', symbol: 'WBTC',    name: '(PoS) Wrapped BTC',                decimals: 8 },  priceFeed: { address: '0xde31f8bfbd8c84b5360cfacca3539b938dd78ae6', decimals: 8 } },
+      { assetIndex: 2, token: { address: '0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270', symbol: 'WPOL',    name: 'Wrapped Polygon Ecosystem Token',  decimals: 18 }, priceFeed: { address: '0xab594600376ec9fd91f8e885dadf0ce036862de0', decimals: 8 } },
+      { assetIndex: 3, token: { address: '0xfa68fb4628dff1028cfec22b4162fccd0d45efb6', symbol: 'MaticX',  name: 'Liquid Staking Matic (PoS)',       decimals: 18 }, priceFeed: { address: '0x5d37e4b374e6907de8fc7fb33ee3b0af403c7403', decimals: 8 } },
+      { assetIndex: 4, token: { address: '0x3a58a54c066fdc0f2d55fc9c89f0415c92ebf3c4', symbol: 'stMATIC', name: 'Staked MATIC (PoS)',               decimals: 18 }, priceFeed: { address: '0x5d173813b4505701e79e654b36a95e6c1fad4448', decimals: 8 } },
+    ],
+  } ],
+};
+
 const testBlocks: { [_ in Mainnets]: Eth.Block.WithTimestamp } = {
   'ethereum-mainnet': {
     number: 17_417_719,
@@ -114,12 +175,26 @@ t.test(`transaction history`, async t => {
   const seed = encodeSeed(seedJson);
 
   /*
+   * The markets whose history is read, and the networks they are on, are what
+   * the activated registry says they are. This test seeds the frozen snapshot
+   * fixture with Polygon's USDC market added, and mocks a latest block for each
+   * network that version serves history for: mainnet, whose USDC, WETH and
+   * USDT markets have it, and Polygon. The list is written here rather than
+   * computed by the code under test, which could not then be caught wrong.
+   */
+  const fixture  = loadRegistrySnapshotFixture();
+  const registry = await activeRegistryDatabase({ snapshot: { ...fixture, networks: [ ...fixture.networks, POLYGON ] } });
+  t.teardown(() => registry.dispose());
+  const historyNetworks: Mainnets[] = [ 'ethereum-mainnet', 'polygon-mainnet' ];
+
+  /*
    * Set up the test env, seeding in-memory test KVs with the cache seed.
    */
   const testEnv: Env = {
     ...globalEnv,
     'kv_testnet': MemoryKv({ seed }),
     'kv_mainnet': MemoryKv({ seed }),
+    'APP_DB':     registry.db,
   };
 
   /*
@@ -129,28 +204,22 @@ t.test(`transaction history`, async t => {
    * All mocked fetch expectations must be satisfied after each test.
    */
   t.afterEach((t) => fetch.satisfy(t));
-  t.beforeEach(async () => {
-    /*
-     * Mock Tally API governance profiles response from a dump file.
-     */
-    /*
-     * Mock 1 'latest' block request per supported mainnet.
-     */
-    const mainnets: Mainnets[] = [
-      'ethereum-mainnet',
-      'polygon-mainnet',
-      'arbitrum-mainnet',
-      'optimism-mainnet',
-      'base-mainnet',
-    ];
-    for (const network of mainnets) {
+
+  /*
+   * Mock 1 'latest' block request per network a first page reads: each one
+   * the version serves history for, or with `markets[]` those of the markets
+   * it names.
+   */
+  function expectLatestBlocks(networks: Mainnets[]): void {
+    for (const network of networks) {
       mock.rpc.expectPost(fetch, Eth.nodeEndpoint(testEnv.NODE_PROXY_HOST, testEnv.NODE_PROXY_KEY, network),
         mock.rpc.ethGetBlock(testBlocks[network], { reference: 'latest' })
       );
     }
-  });
+  }
 
   t.test('Test on Account#1 0x420f253087044b8BCf028dd89F8fe83Ba6275E84', async t => {
+    expectLatestBlocks(historyNetworks);
     const accountAddress = '0x420f253087044b8BCf028dd89F8fe83Ba6275E84';
     const limit = 15;
     // All mainnet USDC, WETH markets, and polygon USDC market
@@ -158,6 +227,7 @@ t.test(`transaction history`, async t => {
     const testUrl = `http://test.local/account/${accountAddress}/transaction_history?limit=${limit}&markets[]=${markets}`;
     const request = new Request(testUrl);
     const response = await C3Api.fetch(request, testEnv);
+    t.equal(response.status, 200, `the history is answered, not refused`);
     t.ok(response.body, `response has no body`);
 
     // non-null assert (!) is safe because of the t.ok(response.body) above.
@@ -195,6 +265,7 @@ t.test(`transaction history`, async t => {
       const testUrl = `http://test.local/account/${accountAddress}/transaction_history?cursor=${cursorHash}&limit=${limit}&markets[]=${markets}`;
       const request = new Request(testUrl);
       const response = await C3Api.fetch(request, testEnv);
+      t.equal(response.status, 200, `the history is answered, not refused`);
       t.ok(response.body, `response has no body`);
 
       // non-null assert (!) is safe because of the t.ok(response.body) above.
@@ -214,6 +285,7 @@ t.test(`transaction history`, async t => {
   });
 
   t.test('Test on Account#2 0x49707808908f0C2450B3F2672E012eDBf49eD808', async t => {
+    expectLatestBlocks([ 'ethereum-mainnet' ]);
     const accountAddress = '0x49707808908f0C2450B3F2672E012eDBf49eD808';
     const limit = 15;
     // All market only WETH and USDC on mainnet
@@ -221,6 +293,7 @@ t.test(`transaction history`, async t => {
     const testUrl = `http://test.local/account/${accountAddress}/transaction_history?limit=${limit}&markets[]=${markets}`;
     const request = new Request(testUrl);
     const response = await C3Api.fetch(request, testEnv);
+    t.equal(response.status, 200, `the history is answered, not refused`);
     t.ok(response.body, `response has no body`);
 
     // non-null assert (!) is safe because of the t.ok(response.body) above.
@@ -251,6 +324,7 @@ t.test(`transaction history`, async t => {
       const testUrl = `http://test.local/account/${accountAddress}/transaction_history?cursor=${cursorHash}&limit=${limit}&markets[]=${markets}`;
       const request = new Request(testUrl);
       const response = await C3Api.fetch(request, testEnv);
+      t.equal(response.status, 200, `the history is answered, not refused`);
       t.ok(response.body, `response has no body`);
 
       // non-null assert (!) is safe because of the t.ok(response.body) above.
@@ -274,6 +348,7 @@ t.test(`transaction history`, async t => {
   });
 
   t.test('Test on Account#1 0x420f253087044b8BCf028dd89F8fe83Ba6275E84 with market filter', async t => {
+    expectLatestBlocks([ 'ethereum-mainnet' ]);
     const accountAddress = '0x420f253087044b8BCf028dd89F8fe83Ba6275E84';
     const limit = 15;
     // All mainnet USDC, WETH markets, and polygon USDC market
@@ -281,6 +356,7 @@ t.test(`transaction history`, async t => {
     const testUrl = `http://test.local/account/${accountAddress}/transaction_history?limit=${limit}&markets[]=${markets}`;
     const request = new Request(testUrl);
     const response = await C3Api.fetch(request, testEnv);
+    t.equal(response.status, 200, `the history is answered, not refused`);
     t.ok(response.body, `response has no body`);
 
     // non-null assert (!) is safe because of the t.ok(response.body) above.
@@ -298,12 +374,14 @@ t.test(`transaction history`, async t => {
   });
 
   t.test('Test on Account#3 0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5 with action filter', async t => {
+    expectLatestBlocks(historyNetworks);
     const accountAddress = '0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5';
     const limit = 15;
     const actions = 'borrow';
     const testUrl = `http://test.local/account/${accountAddress}/transaction_history?limit=${limit}&actions[]=${actions}`;
     const request = new Request(testUrl);
     const response = await C3Api.fetch(request, testEnv);
+    t.equal(response.status, 200, `the history is answered, not refused`);
     t.ok(response.body, `response has no body`);
 
     // non-null assert (!) is safe because of the t.ok(response.body) above.
@@ -319,6 +397,7 @@ t.test(`transaction history`, async t => {
   });
 
   t.test('Test on Account#4 0x11b50686d3983C14C0d0972a5e46e38e0D9B2E14', async t => {
+    expectLatestBlocks([ 'ethereum-mainnet' ]);
     const accountAddress = '0x11b50686d3983C14C0d0972a5e46e38e0D9B2E14';
     const limit = 15;
     const markets = '1_0xc3d688B66703497DAA19211EEdff47f25384cdc3';
@@ -334,6 +413,7 @@ t.test(`transaction history`, async t => {
         : `http://test.local/account/${accountAddress}/transaction_history?cursor=${cursorHash}&limit=${limit}&markets[]=${markets}`;
       const request = new Request(testUrl);
       const response = await C3Api.fetch(request, testEnv);
+      t.equal(response.status, 200, `the history is answered, not refused`);
       t.ok(response.body, `response has no body`);
 
       // non-null assert (!) is safe because of the t.ok(response.body) above.
@@ -366,12 +446,14 @@ t.test(`transaction history`, async t => {
   });
 
   t.test('Test on Account#5 0xD36Daf280D5F3a972AE77adB451aEBdC87189f67 with defisaver transactions', async t => {
+    expectLatestBlocks([ 'ethereum-mainnet' ]);
     const accountAddress = '0xD36Daf280D5F3a972AE77adB451aEBdC87189f67';
     const limit = 15;
     const markets = '1_0xc3d688B66703497DAA19211EEdff47f25384cdc3';
     const testUrl = `http://test.local/account/${accountAddress}/transaction_history?limit=${limit}&markets[]=${markets}`;
     const request = new Request(testUrl);
     const response = await C3Api.fetch(request, testEnv);
+    t.equal(response.status, 200, `the history is answered, not refused`);
     t.ok(response.body, `response has no body`);
 
     // non-null assert (!) is safe because of the t.ok(response.body) above.
@@ -394,11 +476,13 @@ t.test(`transaction history`, async t => {
   });
 
   t.test('Test on Account#6 0xa5e6b86b278ae2511518e0837047ae9595777434 with Migrator transactions', async t => {
+    expectLatestBlocks(historyNetworks);
     const accountAddress = '0xa5e6b86b278ae2511518e0837047ae9595777434';
     // Trace all the way to the end of history and make sure block numbers are all in order
     const testUrl = `http://test.local/account/${accountAddress}/transaction_history`;
     const request = new Request(testUrl);
     const response = await C3Api.fetch(request, testEnv);
+    t.equal(response.status, 200, `the history is answered, not refused`);
     t.ok(response.body, `response has no body`);
     // non-null assert (!) is safe because of the t.ok(response.body) above.
     const responseJson = await streamInto.json(response.body! as any);
@@ -414,11 +498,13 @@ t.test(`transaction history`, async t => {
   });
 
   t.skip('Test on Account#7 0x0cC5A715b06C8eCe9F2fa49Cdc75750539255779 that got liquidated', async t => {
+    expectLatestBlocks(historyNetworks);
     const accountAddress = '0x0cC5A715b06C8eCe9F2fa49Cdc75750539255779';
     const limit = 15;
     const testUrl = `http://test.local/account/${accountAddress}/transaction_history?limit=${limit}`;
     const request = new Request(testUrl);
     const response = await C3Api.fetch(request, testEnv);
+    t.equal(response.status, 200, `the history is answered, not refused`);
     t.ok(response.body, `response has no body`);
 
     // non-null assert (!) is safe because of the t.ok(response.body) above.

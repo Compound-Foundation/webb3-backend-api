@@ -269,7 +269,9 @@ t.test('an isolate answers a version it has read before from memory', async t =>
 /*
  * The version the pointer names has a place in memory of its own. Pinned
  * versions are read by id on an anonymous route, and however many of them a
- * client reads, the active one stays where every public read finds it.
+ * client reads, the active one stays where every public read and market
+ * route finds it — with the catalog built from it, which is kept for as long
+ * as the snapshot is.
  */
 t.test('the versions sessions pin do not push the active one out of memory', async t => {
   const { db, kv, versionId: activeId } = await activeFixture();
@@ -610,7 +612,7 @@ t.test('the version headers are readable by a browser', async t => {
  * names the version and its checksum, and the content is checked against
  * that checksum: an entry edited by hand, or one that is not a snapshot at
  * all, would otherwise be served under the version's genuine checksum, or
- * fail on every request of every isolate.
+ * fail in the catalog on every request of every isolate.
  */
 t.test('an entry that is not the version it is cached as is refused, and replaced', async t => {
   const { db, kv } = await activeFixture();

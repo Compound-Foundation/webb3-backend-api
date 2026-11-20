@@ -12,8 +12,8 @@ import { activeRegistryDatabase } from '../../util/registry-database.js';
 import '../../../shim/node-self.js';
 
 /*
- * What the registry's routes answer when its database fails, through the
- * worker's own entry point.
+ * What the API answers when its database fails, through the worker's own
+ * entry point, on the registry's routes and the market routes alike.
  *
  * The two ways D1 fails need opposite answers. One that could not be reached
  * is an outage: a 503 a client may retry and a monitor reads as one, and
@@ -22,6 +22,7 @@ import '../../../shim/node-self.js';
  * but the request id, while the log has all of it under that id.
  */
 const ADMIN_TOKEN = 'registry-admin-token-for-tests';
+const MAINNET     = 'ethereum-mainnet';
 const USDC        = '0xc3d688b66703497daa19211eedff47f25384cdc3';
 const UNKNOWN     = '0x1111111111111111111111111111111111111111';
 
@@ -68,6 +69,8 @@ t.test('a database that cannot be reached, with nothing cached, is a 503 on ever
     '/registry/v1/networks/1/markets',
     `/registry/v1/networks/1/markets/${USDC}`,
     `/registry/v1/versions/${randomUUID()}`,
+    `/market/${MAINNET}/${USDC}/summary`,
+    `/account/${USDC}/rewards`,
   ]) {
     const response = await get(env, path);
     t.equal(response.status, 503, `${path} answers 503`);
@@ -86,7 +89,7 @@ t.test('a database that answers with a fault is a 500 that says nothing but the 
   const logs = captureLogs(t);
   const env  = await envWith({ APP_DB: failing('D1_ERROR: no such column: version.snapshot_digest: SQLITE_ERROR') });
 
-  for (const path of [ '/registry/v1/active' ]) {
+  for (const path of [ '/registry/v1/active', `/market/${MAINNET}/${USDC}/summary` ]) {
     const response = await get(env, path);
     t.equal(response.status, 500, `${path} answers 500, not an outage`);
     const body = await response.json() as Envelope;
@@ -98,7 +101,7 @@ t.test('a database that answers with a fault is a 500 that says nothing but the 
 });
 
 /*
- * The fallback answers a read and a refusal from the same version, and both
+ * The fallback answers both kinds of route from the same version, and both
  * say the answer is an older one in the same headers.
  */
 t.test('a database that stops answering is answered from the version it last named', async t => {
@@ -139,6 +142,12 @@ t.test('a database that stops answering is answered from the version it last nam
       `a stale answer confirms nothing, not even for ${header}`);
   }
 
+  const market = await get(env, `/market/${MAINNET}/${UNKNOWN}/summary`);
+  t.equal(market.status, 400, 'a market route resolves against the same version');
+  t.equal(market.headers.get('x-registry-version'), registry.versionId);
+  t.match(market.headers.get('x-registry-stale'), /^\d+$/, 'and says so the same way');
+  t.equal(market.headers.get('cache-control'), 'no-store');
+
   for (const path of [ '/registry/v1/networks/999/markets', `/registry/v1/networks/1/markets/${UNKNOWN}` ]) {
     const refused = await get(env, path);
     t.equal(refused.status, 404, `${path} is refused against the same version`);
@@ -157,6 +166,6 @@ t.test('a database that stops answering is answered from the version it last nam
   t.same(
     logs.filter(line => line.includes('registry database unreachable')),
     [ 'error: registry database unreachable; answering from the version it last named' ],
-    'the outage is logged as an error once for the fifteen answers it was met by',
+    'the outage is logged as an error once for the sixteen answers it was met by',
   );
 });
