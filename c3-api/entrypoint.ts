@@ -179,7 +179,12 @@ function prepare(env: Env) {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  /*
+   * The runtime always passes the invocation's context; a test that calls the
+   * worker with the request and the environment alone leaves what is deferred
+   * to run on, unawaited.
+   */
+  async fetch(request: Request, env: Env, execution?: ExecutionContext): Promise<Response> {
     const { pathname } = new URL(request.url);
     /*
      * The path decides which router answers, here and nowhere else. The
@@ -202,7 +207,11 @@ export default {
     const response = await route(
       request,
       { ...context, requestId },
-      Evaluator.preInstantiate(quota, context, computations),
+      Evaluator.preInstantiate(quota, {
+        ...context,
+        // the computation cache's writes to KV, which would otherwise end with the answer
+        defer: task => execution?.waitUntil(task),
+      }, computations),
     );
     return secured(response, corsHeaders('legacy'));
   },

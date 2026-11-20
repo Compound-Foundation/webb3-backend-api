@@ -2,6 +2,9 @@ import t, { Test } from 'tap';
 
 import { MemoryKv, refusingKv } from '../../util/kv.js';
 
+import type { Env }       from '../../../entrypoint.js';
+import { preInstantiate } from '../../../src/evaluator.js';
+
 import Quota         from '../../../lib/quota.js';
 import * as Debug    from '../../../lib/debug-log.js';
 import * as Flags    from '../../../lib/flags.js';
@@ -15,6 +18,7 @@ import {
   MemoryCache,
   QuotaCache,
   WorkersKvCache,
+  kvKeyOf,
 } from '../../../lib/symbolic/cache.js';
 
 import {
@@ -139,6 +143,90 @@ t.test('an evaluation whose cache KV refuses is computed, under either evaluator
     `computation cache unreadable: KV GET failed: 503 Service Unavailable: ${key}`,
     `computation cache unwritable: KV PUT failed: 429 Too Many Requests: ${key}`,
   ]), 'and each namespace says once that it refused a read, and once a write');
+});
+
+/*
+ * A KV whose writes land only once they are let through, as a write still in
+ * flight when the invocation answers.
+ */
+function heldKv(kv: KVNamespace): { kv: KVNamespace, release: () => void } {
+  let release: () => void = () => {};
+  const released = new Promise<void>(resolve => { release = resolve; });
+  const held = new Proxy(kv, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (property === 'put') {
+        return async (...parameters: Parameters<KVNamespace['put']>) => {
+          await released;
+          return target.put(...parameters);
+        };
+      }
+      return typeof(value) === 'function' ? (value as () => unknown).bind(target) : value;
+    },
+  }) as KVNamespace;
+  return { kv: held, release };
+}
+
+/*
+ * The runtime ends what an invocation still has pending once it has answered,
+ * unless it was handed to waitUntil, so a write to KV is handed to `defer`.
+ */
+t.test('LayersCache answers a write once memory has it, and hands the write to KV to defer', async t => {
+  const store = MemoryKv({});
+  const { kv, release } = heldKv(store);
+  const deferred: Promise<unknown>[] = [];
+  const cache = LayersCache.of([ new MemoryCache({}), new WorkersKvCache(kv) ], undefined, task => { deferred.push(task); });
+
+  await cache.put('computed', 5);
+  t.equal(await cache.get('computed'), 5, 'the computation goes on with the value in memory');
+  t.equal(await store.get('computed'), null, 'while its write to KV is still in flight');
+  t.equal(deferred.length, 1, 'which is handed to defer');
+
+  release();
+  await Promise.all(deferred);
+  t.equal(await store.get('computed'), '5', 'and lands after the answer');
+});
+
+t.test('LayersCache hands over a write KV refuses, and what waits for it does not fail', async t => {
+  const { debug, lines } = warnings(t);
+  const deferred: Promise<unknown>[] = [];
+  const cache = LayersCache.of([ new MemoryCache({}), new WorkersKvCache(refusingKv(), [], debug) ], debug, task => { deferred.push(task); });
+
+  await cache.put('computed', 5);
+  await t.resolves(Promise.all(deferred));
+  t.same(lines, [ 'computation cache unwritable: KV PUT failed: 429 Too Many Requests: computed' ]);
+});
+
+/*
+ * The cache a route evaluates with (src/evaluator.ts), given the `defer` the
+ * entrypoint gives it: a value the route computed reaches KV after the
+ * answer, under the evaluator the routes that read many markets use.
+ */
+t.test('a route\'s computation hands its writes to KV to the defer of its context', async t => {
+  const store = MemoryKv({});
+  const { kv, release } = heldKv(store);
+  const deferred: Promise<unknown>[] = [];
+  const instantiate = preInstantiate<GetNum>(
+    Quota.initialize({ ops: Infinity, reads: Infinity, writes: Infinity }),
+    {
+      env:   { kv_mainnet: kv, MEMORY_CACHE_SEED: 'layers-defer-test' } as unknown as Env,
+      debug: Debug.MakeLogger([]),
+      flags: { evaluatorAlgorithm: 'workingset' },
+      defer: task => { deferred.push(task); },
+    },
+    { getNum },
+  );
+  const { evaluate, pull1 } = instantiate('mainnet');
+  const context = { start: 0, end: 10, stride: 5, val: 5 };
+
+  t.equal(await evaluate(pull1({ getNum: context })), 5);
+  const key = kvKeyOf(await getNum.key('getNum-v1', context));
+  t.equal(await store.get(key), null, 'the answer does not wait for KV');
+  t.ok(deferred.length > 0, 'the write is handed to defer');
+
+  release();
+  await Promise.all(deferred);
+  t.equal(await store.get(key), '5', 'and reaches KV after the answer');
 });
 
 t.test('Only cache on indices', async t => {
