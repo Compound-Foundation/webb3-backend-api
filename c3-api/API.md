@@ -367,8 +367,9 @@ $ curl 'localhost:8787/market/mainnet/0xc3d688B66703497DAA19211EEdff47f25384cdc3
 ### description:
 
 30 days of historical `/summary`s — two in stage, and one in a local run —
-one block sampled per day, oldest first, up to the most recent day sampled.
-Each day carries its `date` and `timestamp`, and the fields of the summary
+oldest first: each past UTC day at the first block of that day, and the
+current day at the latest block. Each day carries its `date`, the
+`timestamp` of the block it was read at, and the fields of the summary
 but `base_price` and what the registry version says of the market
 ([Market registry fields](#market-registry-fields)): its `comet` is the
 Comet's `address` alone.

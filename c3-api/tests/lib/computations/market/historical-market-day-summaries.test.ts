@@ -6,11 +6,9 @@ import * as jsonUtil from '../../../util/json.js';
 import * as Eth      from '../../../../lib/eth-constants.js';
 import * as Debug    from '../../../../lib/debug-log.js';
 import * as Flags    from '../../../../lib/flags.js';
-import * as Fallible from '../../../../lib/fallible/fallible.js';
 import { BigNumber } from '../../../../lib/bignumber.js';
 import { BigFixnum } from '../../../../lib/bigfixnum.js';
 
-import * as Index      from '../../../../lib/symbolic/index.js';
 import * as Evaluator  from '../../../../lib/symbolic/evaluator.js';
 import { versionedName } from '../../../../lib/symbolic/computation.js';
 import { MemoryCache } from '../../../../lib/symbolic/cache.js';
@@ -157,18 +155,17 @@ t.test(`historical-market-day-summaries@startBlock:${startBlock.number}`, async 
   }
 
   /*
-   * Check salient cache entries.
+   * Check salient cache entries: the first block of each past UTC day, the
+   * market on that day by its date, and the history by its start date.
    */
-  const enumerated = Fallible.must(Index.DailyBlockIndex.enumerate(
-    { network, contract, block: startBlock },
-    -30,
+  const pastDates = Array.from({ length: 29 }, (_, index) => (
+    Eth.Timestamp.toDateString(startBlock.timestamp - 60 * 60 * 24 * (29 - index))
   ));
   const cachedKeys1 = Object.keys(cache.store);
-  const expectedKeys = enumerated.flatMap(({ contract, network, block }) => [
-    `${versionedName('marketSummary', market.marketSummary.version)}:(block:${block.number};`
-      + `contract:${contract.key()};network:${network})`,
+  const expectedKeys = pastDates.flatMap(date => [
+    `${versionedName('dayOpeningBlock', market.dayOpeningBlock.version)}:(date:${date};network:${network})`,
     `${versionedName('marketDaySummary', market.marketDaySummary.version)}:(contract:${contract.key()};`
-      + `date:${Eth.Timestamp.toDateString(Eth.estimateBlockTimestamp(network, block))};`
+      + `date:${date};`
       + `network:${network})`,
   ])
   .concat([
@@ -184,8 +181,8 @@ t.test(`historical-market-day-summaries@startBlock:${startBlock.number}`, async 
   }
 
   /*
-   * check that re-running with an already-projected startBlock (so,
-   * already included in the index) actually persists to cache properly.
+   * check that re-running from the same start block answers the kept
+   * history.
    */
   const historicalSummaries2 = await evaluator.evaluate(evaluator.pull1({
     historicalMarketDaySummaries: {
@@ -199,7 +196,7 @@ t.test(`historical-market-day-summaries@startBlock:${startBlock.number}`, async 
     }
   }));
   t.strictSame(historicalSummaries2, historicalSummaries,
-    `re-running with projected startBlock yields the same result`
+    `re-running from the same start block yields the same result`
   );
   const cachedKeys2 = Object.keys(cache.store);
   t.strictSame(cachedKeys2, cachedKeys1, `cached keys do not change`);
