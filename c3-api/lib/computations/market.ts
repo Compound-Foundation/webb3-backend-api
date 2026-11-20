@@ -2,6 +2,7 @@ import { BorrowApr            } from './market/borrow-apr.js';
 import { SupplyApr            } from './market/supply-apr.js';
 import { MarketSummary        } from './market/market-summary.js';
 import { MarketDaySummary     } from './market/market-day-summary.js';
+import { DayOpeningBlock      } from './market/day-opening-block.js';
 import { Collaterals          } from './market/collaterals.js';
 import { VersionedCollaterals } from './market/collateral-details.js';
 import { MarketLatestSummary  } from './market/market-latest-summary.js';
@@ -15,6 +16,7 @@ export type Market = (
   | SupplyApr
   | MarketSummary
   | MarketDaySummary
+  | DayOpeningBlock
   | Collaterals
   | VersionedCollaterals
   | MarketLatestSummary
@@ -41,6 +43,10 @@ export {
   MarketDaySummary,
   marketDaySummary,
 } from './market/market-day-summary.js';
+export {
+  DayOpeningBlock,
+  dayOpeningBlock,
+} from './market/day-opening-block.js';
 export {
   HistoricalMarketDaySummaries,
   historicalMarketDaySummaries,

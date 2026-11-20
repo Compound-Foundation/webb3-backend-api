@@ -272,10 +272,13 @@ async function historicalSummary(
    * The days of a market are one evaluation, and every round of its reads
    * reaches the node as one batch: three calls to the node provider proxy
    * per market — one more where a feed the version remaps to reverts —
-   * beside one per network for its latest block. Unbatched, every read would
-   * be a call of its own, thousands for a market's 30 days, and a cold
-   * history of every market would run past the 10,000 subrequests an
-   * invocation has (README, "Workers Plan").
+   * beside one per network for its latest block. Before them, the first
+   * block of every past day is searched for by the blocks' timestamps, all
+   * the days at once, in some rounds of one batch each (dayOpeningBlock); a
+   * day found once is kept. Unbatched, every read would be a call of its
+   * own, thousands for a market's 30 days, and a cold history of every
+   * market would run past the 10,000 subrequests an invocation has (README,
+   * "Workers Plan").
    *
    * Markets stay separate evaluations, where the summary evaluates a whole
    * network as one: a batch holds the days of one market, some 1,500 reads
@@ -339,25 +342,11 @@ async function historicalSummary(
             return backfilled([ { ...unreachedMarket(contract, latestBlock), timestamp, date } ]);
           }
 
-          // compute computation context from inputs... then evaluate
-          const daysLimit = Fallible.must(
-            Index.DailyBlockIndex.countFromStartTo({
-              network,
-              contract,
-              block: latestBlock,
-            })
-          );
-
-          const daysBack = Math.min(daysLimit, desiredDaysBack);
-          const startBlock = latestBlock;
-          const { block: projectedStartBlock } = Fallible.must(
-            Index.DailyBlockIndex.project({
-              network,
-              contract,
-              block: startBlock,
-            })
-          );
-
+          /*
+           * The past days at the first block of each UTC day, and today at
+           * the latest block. A day that began before the market existed is
+           * left out by the computation, and backfilled below.
+           */
           const historicalSummary = await evaluate(
             pull1({
               historicalMarketDaySummaries: {
@@ -366,11 +355,8 @@ async function historicalSummary(
                 nodeKey,
                 network,
                 contract,
-                daysBack,
-                startBlock: {
-                  ...startBlock,
-                  number: projectedStartBlock.number,
-                },
+                daysBack: desiredDaysBack,
+                startBlock: latestBlock,
               },
             })
           );
