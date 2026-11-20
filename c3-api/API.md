@@ -901,7 +901,23 @@ and is `null` for a cursor issued before the registry:
 }
 ```
 
-A value that is not a cursor this API handed out is a `400` with the text
+A cursor lasts 30 days from the page that handed it out. A value of the form
+this API hands cursors out in, 64 lowercase hexadecimal digits, that it no
+longer holds — a cursor that has expired, or one never handed out, which it
+cannot tell apart — is a `409` with the code `CURSOR_EXPIRED`, and the client
+restarts pagination without a cursor, as above:
+
+```json
+{
+  "error": {
+    "code": "CURSOR_EXPIRED",
+    "message": "the cursor has expired or was never issued; restart pagination without a cursor",
+    "requestId": "4f6c1a2e-..."
+  }
+}
+```
+
+A value of any other form is not a cursor, and is a `400` with the text
 `Cursor is invalid`.
 
 A page reads a bounded number of ranges of blocks and enriches a bounded
@@ -1001,7 +1017,8 @@ errors, which use the [envelope](#errors) every endpoint uses:
 `CONFLICT` (409), `PAYLOAD_TOO_LARGE` (413), `UNPROCESSABLE` (422),
 `RATE_LIMITED` (429), `REGISTRY_NOT_ACTIVE` (503), `UPSTREAM_UNAVAILABLE` (503)
 and `INTERNAL` (500); the market endpoints add `REWARDS_NOT_AVAILABLE` (404),
-`REGISTRY_VERSION_CHANGED` (409) and `TESTNET_NOT_SERVED` (400), described
+`REGISTRY_VERSION_CHANGED` (409), `CURSOR_EXPIRED` (409) and
+`TESTNET_NOT_SERVED` (400), described
 with them. A failure the registry names more precisely — an import, a chain
 read, an overlay — carries its own code in `details.code`, such as
 `SYNC_ALREADY_RUNNING` or `OVERLAY_FEED_UNREADABLE`, under the kind of answer
