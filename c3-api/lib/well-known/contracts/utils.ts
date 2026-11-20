@@ -776,12 +776,25 @@ function defaultFormatFunctionCall({
   return { title: `${formattedTarget}.${name}(${formattedArgs.join(', ')})` };
 }
 
+/*
+ * A string argument of a call formatted here is quoted when it holds an
+ * address anywhere in it, as these titles have always quoted it: an address,
+ * and also a bytes32, calldata or a string with an address in it.
+ * Eth.parseAddress takes an address and nothing else, so it does not decide
+ * this, and an argument formatted here reads as it always has. The named
+ * titles above still check their arguments with Eth.parseAddress, so a call
+ * whose signature puts another type where a title expects an address, such as
+ * `_setPriceOracle(bytes32)` or `_supportMarket((address,address))`, can be
+ * titled otherwise than before.
+ */
+const HOLDS_ADDRESS = /0x[0-9a-fA-F]{40}/;
+
 const defaultFormatFunctionArg = (formatContractAddress: (_: Eth.Address) => string) => (arg: unknown): string => {
   if (true
     && typeof(arg) === 'string'
-    && Eth.parseAddress(arg)
+    && HOLDS_ADDRESS.test(arg)
   ) {
-    return '"' + formatContractAddress(arg) + '"';
+    return '"' + formatContractAddress(arg as Eth.Address) + '"';
   }
   if (typeof(arg) === 'object') {
     if (Array.isArray(arg)) {

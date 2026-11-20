@@ -36,11 +36,12 @@ async function getAccounts(
   // Parse and use any query selectors for the resulting data.
   const pageSize = parseInt(queryParams.get('page_size') ?? '20');
   const pageNumber = parseInt(queryParams.get('page_number') ?? '1');
+  // a list may have a space after a comma, as in `0xA, 0xB` or the query string's `0xA,+0xB`
   const addressesRaw = (
     queryParams
       .get('addresses')
       ?.split(',')
-      .map(address => address.toLowerCase())
+      .map(address => address.trim().toLowerCase())
   ) ?? [];
 
   // verify deprecation of pagination parameters
