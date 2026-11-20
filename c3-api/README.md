@@ -182,6 +182,31 @@ subrequests for the 29 markets of the source over 30 days. A `[limits]`
 section changes them for one Worker, for example to a million subrequests
 and 60 seconds of CPU an invocation.
 
+A page of an account's transaction history reads at most 200 ranges of logs
+across its markets, whether KV holds them or not.
+`TRANSACTION_HISTORY_RANGES_PER_PAGE` lowers that for one Worker, but a page
+reads one range of each group of markets it reads whatever it is set to:
+markets that share a rewards contract are read together. A range
+costs at most one KV read, two calls to the proxy and one KV write. An item
+the page enriches costs at most a KV read and a KV write, a call for its
+block, and two calls for each supply, withdrawal or absorbed debt in it. A
+page enriches at most 51 items, with up to ten more in flight for each
+rewards contract it reads, so it makes at most about 650 KV operations, and
+its calls keep it far inside 10,000 subrequests. Cloudflare's KV limits page
+allows an invocation, on either plan, "up to 1,000 operations to external
+services (for example, 500 Workers KV reads and 500 R2 reads)", fewer than
+the 10,000 subrequests its Workers limits page gives the Paid plan; the
+budget keeps a page under the lower figure. A first page, whatever its
+`limit`, reads every market whose history is quiet down to its creation
+block, which costs a KV read for each range KV holds: about 130 to 145 ranges
+for an account without history, with the markets served in November 2026.
+With `markets[]`, a page reads only the markets read together with one it
+names. Lowered below what a first page needs to reach an item, or, for an
+account without history, to read its markets down to their creation blocks,
+the budget leaves the page empty and not `done`, and since the ranges KV
+holds count as well, first pages stay so for as long as the budget is that
+low.
+
 # The Comet Market Registry
 
 Markets, their tokens, and their price feeds come from the registry in
@@ -212,13 +237,14 @@ What that means for the endpoints:
 - an address the active version does not describe is not a market, and is
   refused with `400`, on any network;
 - transaction history cursors carry the version they were issued against,
-  the markets it reads, and the block their ranges of logs are counted
-  from. A cursor stays valid across versions that read the same markets
-  from the same blocks; one from a version that read others, or counted
-  from another block, is refused with `409 REGISTRY_VERSION_CHANGED`,
-  whatever mainnet market its `markets[]` names, and the client restarts
-  pagination. So is a cursor issued before the registry, which carries no
-  version, whatever it reads;
+  the markets it reads, the block their ranges of logs are counted from,
+  and the size of those ranges. A cursor stays valid across versions that
+  read the same markets from the same blocks in ranges of the same size;
+  one from a version that read others, or counted from another block, is
+  refused with `409 REGISTRY_VERSION_CHANGED`, whatever mainnet market its
+  `markets[]` names, and the client restarts pagination. So is a cursor
+  issued before the registry, which carries no version, whatever it reads,
+  and one whose ranges were of another size, whatever version answers it;
 - routes that resolve no market — V2 and gas price — never read `APP_DB`,
   and governance reads it only to name the markets of proposal actions,
   which the static constants do not. The proposal list, and the vote
@@ -585,8 +611,9 @@ NOTE that the node endpoint for the network _must_ support all of the
 `eth_*` JSON-RPCs corresponding with the computations defined in
 `lib/computations/evm`. For example, `lib/computations/evm/eth-call.ts`
 requires `eth_call` support; `lib/computations/evm/eth-get-logs.ts`
-requires `eth_getLogs` support, with arbitrarily-sized block ranges; and
-so on.
+requires `eth_getLogs` support, with block ranges of any size; a range
+the node refuses, as providers refuse one whose logs do not fit a single
+answer, is read again in halves; and so on.
 
 1. Adding a network description
 

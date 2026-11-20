@@ -34,6 +34,9 @@ type RegistryConfig = {
 
 type NumericSetting = Exclude<keyof RegistryConfig, 'invalid'>;
 
+// the whole numbers a setting takes, the largest a safe integer unless it says otherwise
+type Range = { minimum: number, maximum?: number };
+
 /*
  * Each number by the variable that sets it, with its default and the least
  * value it takes: only the fallback window takes zero, which is how an
@@ -72,13 +75,13 @@ const REQUIREMENTS: Record<string, string> = {
  * number, so both are read as the digits they are written with; a sign, a
  * fraction or an exponent is not a whole number written out.
  */
-function numberOf(value: unknown, minimum: number): number | null | undefined {
+function numberOf(value: unknown, { minimum, maximum = Number.MAX_SAFE_INTEGER }: Range): number | null | undefined {
   const text = value === undefined || value === null ? '' : String(value).trim();
   if (text.length === 0) {
     return undefined;
   }
   const parsed = /^[0-9]+$/.test(text) ? Number(text) : NaN;
-  return Number.isSafeInteger(parsed) && parsed >= minimum ? parsed : null;
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : null;
 }
 
 function registryConfig(env: Env): RegistryConfig {
@@ -88,8 +91,8 @@ function registryConfig(env: Env): RegistryConfig {
     ...(isRef(String(env.COMET_SOURCE_REF ?? '')) ? [] : [ 'COMET_SOURCE_REF' ]),
   ];
   const read = (setting: NumericSetting): number => {
-    const { name, fallback, minimum } = NUMBERS[setting];
-    const value = numberOf(env[name], minimum);
+    const { name, fallback } = NUMBERS[setting];
+    const value = numberOf(env[name], NUMBERS[setting]);
     if (value === null) {
       invalid.push(name);
     }
@@ -120,4 +123,4 @@ function assertImportable(config: RegistryConfig): void {
 }
 
 export type { RegistryConfig };
-export { assertImportable, registryConfig };
+export { assertImportable, numberOf, registryConfig };

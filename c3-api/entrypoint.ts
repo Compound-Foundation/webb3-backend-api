@@ -97,6 +97,8 @@ interface Env extends Flags.Env, ServiceBindings {
   // quota configuration
   QUOTA_SUBREQUESTS?: number;
   QUOTA_CACHE_OPERATIONS?: number;
+  // the ranges of logs one page of transaction history reads, at most and by default 200 (src/transaction-history-handler)
+  TRANSACTION_HISTORY_RANGES_PER_PAGE?: string;
 }
 
 export { Env, ServiceBindings };
