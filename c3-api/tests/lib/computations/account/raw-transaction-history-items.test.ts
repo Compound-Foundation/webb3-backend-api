@@ -21,13 +21,19 @@ import * as account from '../../../../lib/computations/account.js';
 import '../../../../shim/node-self.js';
 
 import { setupTestEnvVars } from '../../../util/setupTestEnvVars.js';
+import { fixtureCatalog } from '../../../util/registry-fixture.js';
 
 /*
  * High-level test suite configuration.
  */
 const network: KnownNetwork.Name = 'ethereum-mainnet';
 const accountAddress = '0x420f253087044b8BCf028dd89F8fe83Ba6275E84';
-const contract = Eth.wellKnownContractsByNetwork[network]['Comet']['cUSDCv3'];
+/*
+ * Markets and tokens are resolved through the registry, so this test builds
+ * the same request catalog the worker does, from the frozen snapshot fixture.
+ */
+const catalog  = fixtureCatalog();
+const contract = catalog.marketAt(network, '0xc3d688b66703497daa19211eedff47f25384cdc3')!.comet;
 const startBlock: Eth.Block = {
   date: '2023-02-01',
   number: 16_535_586,
@@ -105,8 +111,9 @@ t.test(`test rawTransactionHistoryItems`, async t => {
       proxyAddresses: [],
       network: 'ethereum-mainnet',
       marketContracts: [contract],
-      rewardsContract: contract.rewards.contract,
+      rewardsContract: contract.rewards!.contract,
       blockNumber: startBlock.number,
+      catalog,
     },
   }));
 

@@ -1,9 +1,7 @@
 import t from 'tap';
 
-import * as Eth      from '../../../../lib/eth-constants.js';
 import * as Debug    from '../../../../lib/debug-log.js';
 import * as Flags    from '../../../../lib/flags.js';
-import * as Fallible from '../../../../lib/fallible/fallible.js';
 
 import { BigNumber } from '../../../../lib/bignumber.js';
 import { BigFixnum } from '../../../../lib/bigfixnum.js';
@@ -19,6 +17,7 @@ import * as market from '../../../../lib/computations/market.js';
 import '../../../../shim/node-self.js';
 
 import { setupTestEnvVars } from '../../../util/setupTestEnvVars.js';
+import { fixtureComet }     from '../../../util/registry-fixture.js';
 
 /*
  * Global env.
@@ -61,7 +60,7 @@ t.test(`market-summary@block:15435126`, async t => {
     apiHost,
     nodeHost,
     nodeKey,
-    contract: Eth.wellKnownContractsByNetwork['ethereum-mainnet']['Comet']['cUSDCv3'],
+    contract: fixtureComet('ethereum-mainnet', '0xc3d688b66703497daa19211eedff47f25384cdc3'),
     network: 'ethereum-mainnet',
     block: { number: 15_435_126 },
   };
@@ -69,8 +68,9 @@ t.test(`market-summary@block:15435126`, async t => {
   t.strictSame(result, {
     chainId: 1,
     comet: {
-      address: '0xc3d688b66703497daa19211eedff47f25384cdc3',
+      address: '0xc3d688B66703497DAA19211EEdff47f25384cdc3',
     },
+    status: 'success',
     borrowApr: '0.040676825873232',
     supplyApr: '0.023842766908944',
     totalBorrowValue:     '4314230.2466899356248',
@@ -84,7 +84,14 @@ t.test(`market-summary@block:15435126`, async t => {
       'WETH',
       'UNI',
       'LINK'
-    ]
+    ],
+    collaterals: [
+      { address: '0xc00e94Cb662C3520282E6f5717214004A7f26888', symbol: 'COMP', status: 'success' },
+      { address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', symbol: 'WBTC', status: 'success' },
+      { address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', symbol: 'WETH', status: 'success' },
+      { address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', symbol: 'UNI',  status: 'success' },
+      { address: '0x514910771AF9Ca656af840dff83E8264EcF986CA', symbol: 'LINK', status: 'success' },
+    ],
   });
 });
 
@@ -100,46 +107,39 @@ t.test(`market-day-summary@block:16380543`, async t => {
     { ...evm, ...comet, ...market },
     { cache, debug, flags },
   );
+  /*
+   * The history asks for a day at the first block of its UTC day, with that
+   * block's timestamp; the summary reports the block and timestamp it is
+   * given.
+   */
   const context: market.MarketDaySummary['expects'] = {
     apiHost,
     nodeHost,
     nodeKey,
-    contract: Eth.wellKnownContractsByNetwork['ethereum-mainnet']['Comet']['cUSDCv3'],
+    contract: fixtureComet('ethereum-mainnet', '0xc3d688b66703497daa19211eedff47f25384cdc3'),
     network: 'ethereum-mainnet',
     block: {
-      number:    16_380_543,
-      timestamp: 1_673_432_423,
+      number:    16_375_778,
+      timestamp: 1_673_374_861,
     },
   };
-
-  /*
-   * check projection
-   */
-  const projected = Fallible.must(
-    market.marketDaySummary.index.project(context)
-  );
-  t.strictSame(
-    projected,
-    { ...context, block: { number: 16_375_778 } },
-    `index projects to expected sample block`
-  );
 
   /*
    * check result
    */
   const [ result1, expected ] = await evaluator.evaluate(evaluator.split([
     evaluator.pull1({ marketDaySummary: context }),
-    evaluator.pull1({ marketSummary:  projected }),
+    evaluator.pull1({ marketSummary:  context }),
   ]));
   t.match(result1, expected,
-    `market-day-summary is the same as the market-summary at`
-    + ` the indexed block for that day`
+    `market-day-summary is the same as the market-summary at its block`
   );
   t.strictSame(result1, {
     chainId: 1,
     comet: {
-      address: '0xc3d688b66703497daa19211eedff47f25384cdc3',
+      address: '0xc3d688B66703497DAA19211EEdff47f25384cdc3',
     },
+    status: 'success',
     date: '2023-01-10',
     timestamp: 1_673_374_861,
     borrowApr: '0.033119718020784',
@@ -155,27 +155,24 @@ t.test(`market-day-summary@block:16380543`, async t => {
       'WETH',
       'UNI',
       'LINK'
-    ]
+    ],
+    collaterals: [
+      { address: '0xc00e94Cb662C3520282E6f5717214004A7f26888', symbol: 'COMP', status: 'success' },
+      { address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', symbol: 'WBTC', status: 'success' },
+      { address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', symbol: 'WETH', status: 'success' },
+      { address: '0x1f9840a85d5aF5bf1D1762F925BDADdC4201F984', symbol: 'UNI',  status: 'success' },
+      { address: '0x514910771AF9Ca656af840dff83E8264EcF986CA', symbol: 'LINK', status: 'success' },
+    ],
   });
 
   /*
-   * check for select expected cache keys
+   * check for select expected cache keys: the market at the block, and the
+   * day by its date
    */
   const cachedKeys1 = Object.keys(cache.store);
   const expectedKeys = [
-    `${versionedName('marketSummary', market.marketSummary.version)}:(block:${projected.block.number};contract:${context.contract.address};network:${context.network})`,
-    /*
-     * FIXME(jordan): since we project(..) within compute(..), the
-     * index.includes(..) check fails on the block unless it happens
-     * to be an indexed block, so marketDaySummary does not get cached.
-     *
-     * This is fine for marketDaySummary, which transparently invokes
-     * marketSummary anyway; in the general case, however, this is a bug:
-     * if a computation is set up to always project its input onto its
-     * index, then it should also properly cache the result at the
-     * projection from the input.
-     */
-    // `marketDaySummary-v2:(contract:${context.contract.address};date:2023-01-10;network:${context.network})`,
+    `${versionedName('marketSummary', market.marketSummary.version)}:(block:${context.block.number};contract:${context.contract.key()};network:${context.network})`,
+    `${versionedName('marketDaySummary', market.marketDaySummary.version)}:(contract:${context.contract.key()};date:2023-01-10;network:${context.network})`,
   ];
   for (const key of expectedKeys) {
     const similar = cachedKeys1.find(k => k.startsWith(key));
@@ -183,37 +180,26 @@ t.test(`market-day-summary@block:16380543`, async t => {
   }
 
   /*
-   * verify that requesting another block in the same index window
-   * returns the same result from cache.
+   * verify that another block of the same day returns the day kept by its
+   * date, without reading the market at that block.
    */
   const block2 = {
-    ...context.block,
-    number: 16_380_552,
-    timestamp: 1_673_432_531,
+    number: 16_376_000,
+    timestamp: 1_673_374_861 + 2_676,
   };
   const diff = block2.number - context.block.number;
-
-  const projected2 = Fallible.must(
-    market.marketDaySummary.index.project({ ...context, block: block2 })
-  );
-  t.strictSame(
-    projected2,
-    { ...context, block: { number: 16_375_778 } },
-    `index projects to same sample block still for block + ${diff}`
-  );
 
   const result2 = await evaluator.evaluate(evaluator.pull1({
     marketDaySummary: { ...context, block: block2 },
   }));
-  // due to the timeskew fix/hack, we should not compare timestamps
   t.strictSame(result2, result1,
-    `block + ${diff} should give the same result`
+    `block + ${diff}, the same day, should give the same result`
   );
 
   /*
    * check that cache is unchanged
    */
   t.strictSame(Object.keys(cache.store), cachedKeys1,
-    `cache does not change after computing again at block + ${diff}`,
+    `cache does not change after asking again at block + ${diff}`,
   );
 });

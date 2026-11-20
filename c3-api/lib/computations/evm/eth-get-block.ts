@@ -7,7 +7,7 @@ import * as Compute from '../../symbolic/computation.js';
 
 import * as KnownNetwork from '../../well-known/networks/network.js';
 
-import { EvmRpc } from './rpc.js';
+import { EvmRpc, notServed } from './rpc.js';
 
 type EthGetBlock = Compute.Spec<{
   name: 'ethGetBlock',
@@ -65,9 +65,9 @@ const ethGetBlock = implement({
       { evmRpc: { frame: { apiHost, nodeHost, nodeKey, network }, items: [ call ] } },
       ([{ result, error }]) => {
         if (error) {
-          const message = `${method}: ${jsonRpc.formatError(error)}`;
-          debug.error(message, { error, result });
-          throw new Error(message);
+          const failure = notServed(method, error);
+          debug.error(failure.message, { error, result });
+          throw failure;
         }
         if (!validateResult(result, { showTransactionDetails })) {
           const message = `${method}: malformed result`;

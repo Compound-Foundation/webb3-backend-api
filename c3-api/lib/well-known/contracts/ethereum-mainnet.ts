@@ -1,5 +1,4 @@
 import {
-  Comet,
   ERC20,
   CTokenv2,
   PriceFeed,
@@ -874,17 +873,6 @@ const COMP_USD_priceFeed = PriceFeed(<const>{
   },
 });
 
-const COMP_ETH_priceFeed = PriceFeed(<const>{
-  decimals: 18,
-  // location
-  network: "ethereum-mainnet",
-  address: "0x1B39Ee86Ec5979ba5C322b826B3ECb8C79991699",
-  block: {
-    number: 10640564,
-    timestamp: 1597174495, // 2020-08-11
-  },
-});
-
 const USDC_USD_priceFeed = PriceFeed(<const>{
   decimals: 8,
   // location
@@ -893,27 +881,6 @@ const USDC_USD_priceFeed = PriceFeed(<const>{
   block: {
     number: 11869355,
     timestamp: 1613455478,
-  },
-});
-
-const Comet_01usdc = Comet(<const>{
-  displayName: "cUSDCv3",
-  aliases: ["01-usdc", "cUSDCv3"],
-  base: {
-    asset: USDC,
-    priceFeed: USDC_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: CometRewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  // location
-  network: "ethereum-mainnet",
-  address: "0xc3d688b66703497daa19211eedff47f25384cdc3",
-  block: {
-    number: 15331586,
-    timestamp: 1660368917,
   },
 });
 
@@ -934,7 +901,6 @@ const market01usdc = <const>[
   CometFactory1,
   COMP_USD_priceFeed,
   USDC_USD_priceFeed,
-  Comet_01usdc,
   Bulker_01usdc,
 ];
 
@@ -946,38 +912,6 @@ const WETH_Constant_priceFeed = PriceFeed(<const>{
   block: {
     number: 16400683,
     timestamp: 1673646779,
-  },
-});
-
-const WETH_USD_priceFeed = PriceFeed(<const>{
-  decimals: 8,
-  network: "ethereum-mainnet",
-  address: "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419",
-  block: {
-    number: 10606501,
-    timestamp: 1596720671,
-  },
-});
-
-const Comet_01weth = Comet(<const>{
-  // location
-  aliases: ["01-weth", "cWETHv3"],
-  network: "ethereum-mainnet",
-  address: "0xa17581a9e3356d9a858b789d68b4d866e593ae94",
-  block: {
-    number: 16400710,
-    timestamp: 1673647103,
-  },
-  //
-  base: {
-    asset: WETH,
-    priceFeed: WETH_Constant_priceFeed,
-    usdPriceFeed: WETH_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: CometRewards,
-    priceFeed: COMP_ETH_priceFeed,
   },
 });
 
@@ -995,7 +929,6 @@ const market01weth = <const>[
   CometRewards,
   WETH_Constant_priceFeed,
   COMP_USD_priceFeed,
-  Comet_01weth,
   Bulker_01weth,
 ];
 
@@ -1009,27 +942,7 @@ const USDT_USD_priceFeed = PriceFeed(<const>{
   },
 });
 
-const Comet_01usdt = Comet(<const>{
-  displayName: "cUSDTv3",
-  aliases: ["01-usdt", "cUSDTv3"],
-  base: {
-    asset: USDT,
-    priceFeed: USDT_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: CometRewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: "ethereum-mainnet",
-  address: "0x3Afdc9BCA9213A35503b077a6072F3D0d5AB0840",
-  block: {
-    number: 20190637,
-    timestamp: 1719583139,
-  },
-});
-
-const market01usdt = <const>[USDT_USD_priceFeed, Comet_01usdt];
+const market01usdt = [USDT_USD_priceFeed] as const;
 
 const wstETH_Constant_priceFeed = PriceFeed(<const>{
   decimals: 8,
@@ -1063,29 +976,6 @@ const COMP_wstETH_priceFeed = PriceFeed(<const>{
   },
 });
 
-const Comet_01wstEth = Comet(<const>{
-  // location
-  displayName: 'cwstETHv3',
-  aliases: ["01-wstETH", "cwstETHv3"],
-  network: "ethereum-mainnet",
-  address: "0x3D0bb1ccaB520A66e607822fC55BC921738fAFE3",
-  block: {
-    number: 20683535,
-    timestamp: 1725529079,
-  },
-  //
-  base: {
-    asset: wstETH,
-    priceFeed: wstETH_Constant_priceFeed,
-    usdPriceFeed: wstETH_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: CometRewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-});
-
 const Bulker_01wstEth = UntypedContract("Bulker", {
   aliases: ["01-wstETH", "cwstETHv3"],
   network: "ethereum-mainnet",
@@ -1100,7 +990,6 @@ const market01wstETH = <const>[
   wstETH_Constant_priceFeed,
   wstETH_USD_priceFeed,
   COMP_wstETH_priceFeed,
-  Comet_01wstEth,
   Bulker_01wstEth,
 ];
 
@@ -1114,27 +1003,7 @@ const USDS_USD_priceFeed = PriceFeed(<const>{
   },
 });
 
-const Comet_01usds = Comet(<const>{
-  displayName: "cUSDSv3",
-  aliases: ["01-usds", "cUSDSv3"],
-  base: {
-    asset: USDS,
-    priceFeed: USDS_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: CometRewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: "ethereum-mainnet",
-  address: "0x5D409e56D886231aDAf00c8775665AD0f9897b56",
-  block: {
-    number: 20987551,
-    timestamp: 1729195427,
-  },
-});
-
-const market01usds = <const>[USDS_USD_priceFeed, Comet_01usds];
+const market01usds = [USDS_USD_priceFeed] as const;
 
 const BTC_USD_priceFeed = PriceFeed(<const>{
   aliases: ['WBTC-USD'],
@@ -1147,80 +1016,7 @@ const BTC_USD_priceFeed = PriceFeed(<const>{
   },
 });
 
-const Comet_01wbtc = Comet(<const>{
-  displayName: "cWBTCv3",
-  aliases: ["01-wbtc", "cWBTCv3"],
-  base: {
-    asset: WBTC,
-    priceFeed: BTC_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: CometRewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: "ethereum-mainnet",
-  address: "0xe85dc543813b8c2cfeaac371517b925a166a9293",
-  block: {
-    number: 21820087,
-    timestamp: 1739238359,
-  },
-});
-
-const market01wbtc = <const>[BTC_USD_priceFeed, Comet_01wbtc];
-
-/*
- * "Compound Institutional USDC" (ciUSDCv3).
- *
- * A separately-operated USDC market: WETH, wstETH, cbBTC and WBTC collateral,
- * priced by production feeds ("ETH / USD", "wstETH / USD CAPO SVR",
- * "CBBTC / USD", "Custom price feed for WBTC / USD").
- *
- * Two things about it differ from the other ethereum-mainnet markets, neither
- * of which the API needs to special-case, but both of which are worth knowing
- * when its numbers look surprising:
- *
- *   - governor() is a Gnosis Safe (0x4f05F11ca5DE8946958d58AD765F16755F23b113)
- *     and the proxy admin is 0x362739f84FFE4e5f06395301617a90f62Ee1f4cf, not
- *     the mainnet Timelock / CometProxyAdmin. Its parameters and price feeds
- *     can therefore change without a governance proposal; the summary endpoint
- *     reports whatever it is currently set to.
- *
- *   - it has no rewards configured: rewardConfig(ciUSDCv3) on the canonical
- *     CometRewards returns rewardToken == 0x0, so /account/{address}/rewards
- *     skips it via the NullAddress guard in src/account-handlers/rewards.ts.
- *     It is declared against the canonical CometRewards anyway, which keeps the
- *     one-CometRewards-per-network assumption in get-reward-configs-sleuth.ts
- *     true and means RewardClaimed events are already covered by the existing
- *     per-network rewardsContractAddress in the transaction-history handler.
- *     If rewards are ever configured on a *different* CometRewards, both of
- *     those assumptions need revisiting.
- *
- * Transaction history additionally requires an entry in GetAllStreamEvents()
- * in src/transaction-history-handler/transaction-history-items-handler.ts --
- * declaring a Comet here is not sufficient for that endpoint.
- */
-const Comet_01iusdc = Comet(<const>{
-  displayName: "ciUSDCv3",
-  aliases: ["01-iusdc", "ciUSDCv3"],
-  base: {
-    asset: USDC,
-    priceFeed: USDC_USD_priceFeed,
-  },
-  rewards: {
-    asset: COMP,
-    contract: CometRewards,
-    priceFeed: COMP_USD_priceFeed,
-  },
-  network: "ethereum-mainnet",
-  address: "0x207158a267CBD2598BB3d611D8CBdEE2709F2F8C",
-  block: {
-    number: 25881203,
-    timestamp: 1788250907,
-  },
-});
-
-const market01iusdc = <const>[Comet_01iusdc];
+const market01wbtc = [BTC_USD_priceFeed] as const;
 
 // governance
 const Timelock = UntypedContract("Timelock", <const>{
@@ -1942,6 +1738,33 @@ const BaseL1StandardBridge = UntypedContract("BaseL1StandardBridge", {
   },
 });
 
+/*
+ * Optimism bridge contracts. Governance decodes the actions a proposal
+ * bridges to Optimism against these, exactly as it does for Base.
+ */
+const OptimismL1CrossDomainMessenger = UntypedContract(
+  "OptimismL1CrossDomainMessenger",
+  {
+    aliases: ["default"],
+    network: "ethereum-mainnet",
+    address: "0x25ace71c97B33Cc4729CF772ae268934F7ab5fA1",
+    block: {
+      number: 12686757,
+      timestamp: 1624400997,
+    },
+  },
+);
+
+const OptimismL1StandardBridge = UntypedContract("OptimismL1StandardBridge", {
+  aliases: ["default"],
+  network: "ethereum-mainnet",
+  address: "0x99C9fc46f92E8a1c0deC1b1747d010903E884bE1",
+  block: {
+    number: 12686786,
+    timestamp: 1624401464,
+  },
+});
+
 // Circle CCTP contract
 const CCTPTokenMessenger = UntypedContract("CCTPTokenMessenger", {
   aliases: ["default"],
@@ -1981,6 +1804,8 @@ const misc = <const>[
   // Base bridge contracts
   BaseL1CrossDomainMessenger,
   BaseL1StandardBridge,
+  OptimismL1CrossDomainMessenger,
+  OptimismL1StandardBridge,
   // Circle CCTP contract
   CCTPTokenMessenger,
 ];
@@ -1999,7 +1824,6 @@ const contractData = [
   ...market01wstETH,
   ...market01usds,
   ...market01wbtc,
-  ...market01iusdc,
   // everything else...
   ...misc,
 ] as const;

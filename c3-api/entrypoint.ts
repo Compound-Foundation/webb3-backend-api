@@ -129,7 +129,7 @@ function secured(response: Response, cors: Record<string, string> = {}): Respons
  * What a request is answered with, whichever router answers it: its context,
  * the id it is answered under, what it may spend, and every computation the
  * legacy router's evaluators evaluate. The registry router is handed the
- * context and the id alone, and the legacy router everything but the id.
+ * context and the id alone.
  */
 function prepare(env: Env) {
   /*
@@ -154,9 +154,9 @@ function prepare(env: Env) {
   return {
     context,
     /*
-     * One id per request, made here: every error answer of the registry
-     * carries it, and so does the log line written about it, so a client's
-     * report leads to the line that explains it.
+     * One id per request, made here: every error answer carries it, and so
+     * does the log line written about it, so a client's report leads to the
+     * line that explains it.
      */
     requestId: crypto.randomUUID(),
     quota,
@@ -198,10 +198,10 @@ export default {
     if (request.method === 'OPTIONS') {
       return secured(new Response(null, { status: 204 }), corsHeaders('legacy', { preflight: true }));
     }
-    const { context, quota, computations } = prepare(env);
+    const { context, requestId, quota, computations } = prepare(env);
     const response = await route(
       request,
-      context,
+      { ...context, requestId },
       Evaluator.preInstantiate(quota, context, computations),
     );
     return secured(response, corsHeaders('legacy'));

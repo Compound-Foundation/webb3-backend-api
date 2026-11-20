@@ -13,7 +13,14 @@ import {
 } from '../router.js';
 
 import { getPageData, PaginationSummary } from '../pagination.js';
-import { decodeFunctionDataFromSignature, getNetworkIfCrossChain } from '../../lib/well-known/contracts/utils.js';
+import {
+  contractForLocation,
+  decodeFunctionDataFromSignature,
+  describeContractCallForHumans,
+  getNetworkIfCrossChain,
+  withRegistryContracts,
+} from '../../lib/well-known/contracts/utils.js';
+import type { Contract, WellKnownContractsByNetworkAddress } from '../../lib/well-known/contracts/utils.js';
 import { defaultAbiCoder } from '@ethersproject/abi';
 
 import type * as Type from '../../lib/type-utilities.js'
@@ -26,8 +33,79 @@ const knownGovernanceContracts = (network: Extract<KnownNetwork.Name, `ethereum-
   Eth.wellKnownContractsByNetwork[network]['GovernorCharlie']['default'],
 ];
 
+/*
+ * The contracts governance names, with the markets the version holds but
+ * does not serve beside those it serves. An address the constants or a
+ * served market already name keeps that name.
+ */
+function withUnservedMarkets(
+  contracts: WellKnownContractsByNetworkAddress,
+  unserved: Contract[],
+): WellKnownContractsByNetworkAddress {
+  if (unserved.length === 0) {
+    return contracts;
+  }
+  const merged = new Map<KnownNetwork.Name, Record<string, Contract>>();
+  for (const market of unserved) {
+    const named = merged.get(market.network) ?? { ...contracts[market.network] };
+    merged.set(market.network, named);
+    named[market.address.toLowerCase()] ??= market;
+  }
+  return { ...contracts, ...Object.fromEntries(merged) };
+}
+
+/*
+ * Describes every action of the page again, against the constants with the
+ * markets of the active version merged in: those it serves, with their base
+ * and reward tokens, and those it holds without serving them
+ * (Catalog.unservedMarkets). The constants name no market, and an action
+ * can name one anywhere — as its target, as an argument, or in what it
+ * bridges to another chain — so none is singled out: telling whether one
+ * does costs about what describing it does. A Comet the version does not
+ * hold reads as its address.
+ *
+ * A page with no action never reads the registry. If the registry cannot be
+ * loaded, the actions keep the description they already have rather than
+ * failing the whole proposal list.
+ */
+async function describeRegistryTargets(
+  proposals: governanceModel.proposal.Proposal[],
+  network: Extract<KnownNetwork.Name, `ethereum-${'mainnet'}`>,
+  { registry, debug }: Pick<GovernanceRouteData, 'registry'> & { debug: Context['debug'] },
+): Promise<void> {
+  if (proposals.every(proposal => proposal.actions.length === 0)) {
+    return;
+  }
+
+  let catalog;
+  try {
+    catalog = await registry.load();
+  } catch (error) {
+    debug?.error(`proposal actions not described from the registry`, { error });
+    return;
+  }
+
+  const contracts = withUnservedMarkets(
+    withRegistryContracts(Eth.wellKnownContractsByNetwork, catalog.markets()),
+    catalog.unservedMarkets(),
+  );
+  for (const proposal of proposals) {
+    for (const action of proposal.actions) {
+      const redescribed = describeContractCallForHumans(
+        contractForLocation({ network, address: action.target }, contracts),
+        action.signature,
+        action.data,
+        action.value,
+        contracts,
+      );
+      action.title     = redescribed.title;
+      action.subtitles = redescribed.subtitles ?? [];
+    }
+  }
+}
+
 async function getProposals(
-  { apiHost, nodeHost, nodeKey, network, contract, queryParams }: GovernanceRouteData,
+  { apiHost, nodeHost, nodeKey, network, contract, queryParams, registry }: GovernanceRouteData,
   context: Context,
 ): Promise<Response> {
   const { evaluate, join, pull1 } = context.evaluator;
@@ -69,21 +147,13 @@ async function getProposals(
   // For any proposals that affect cross chain, attempt to add those states to the mainnet proposal.
   // await hydrateCrossChainProposalsWithMoreStates(network, context, proposalsComputation);
 
-  // Format each proposal computation result to have a backwards compatible schema with V2
-  // (Also inserts in timestamps for each proposal state transition, which is currently displayed on the web app)
-  let profilesByAddress = {};
-  try { profilesByAddress = await profilesByAddressPromise } catch (e) {
-    context.debug?.error(`swallowing error:`, { error: e });
-  }
-  const formattedProposals = formatProposals(proposalsComputation, network, latestBlock, profilesByAddress);
-
   // Check if the client is filtering on any specific proposals, and if
   // so, fetch those proposals (otherwise get all).
   const selectedProposalIds = queryParams.get('proposal_ids')?.split(',');
   const selectedProposals = (
     selectedProposalIds != null
-      ? formattedProposals.filter(p => selectedProposalIds.includes(p.id.toString()))
-      : formattedProposals
+      ? proposalsComputation.filter(proposal => selectedProposalIds.includes(proposal.id.toString()))
+      : [ ...proposalsComputation ]
   );
 
   // Check if the client is interested in any specific page numbers/sizes, otherwise use defaults.
@@ -91,13 +161,30 @@ async function getProposals(
   const pageNumber = parseInt(queryParams.get('page_number') ??   '1');
 
   // Paginate from newest -> oldest proposals.
-  selectedProposals.sort((a, b) => b.start_block - a.start_block);
-  const [ proposalsPage, paginationSummary ] = (
+  selectedProposals.sort((a, b) => b.startBlock - a.startBlock);
+  const [ page, paginationSummary ] = (
     getPageData(selectedProposals, pageSize, pageNumber)
   );
 
+  /*
+   * Markets are named here, from the registry, after the cached decoding,
+   * whose constants name none. The proposal computation is a recurrence over
+   * years of logs, and keying it by registry version would rebuild the whole
+   * chain whenever anything in the registry changed. This describes the page
+   * the client asked for, not every proposal ever made, so the registry is
+   * read for what is about to be answered.
+   */
+  await describeRegistryTargets(page, network, { registry, debug: context.debug });
+
+  // Format each proposal computation result to have a backwards compatible schema with V2
+  // (Also inserts in timestamps for each proposal state transition, which is currently displayed on the web app)
+  let profilesByAddress = {};
+  try { profilesByAddress = await profilesByAddressPromise } catch (e) {
+    context.debug?.error(`swallowing error:`, { error: e });
+  }
+
   return new Response(JSON.stringify({
-    proposals: proposalsPage,
+    proposals: formatProposals(page, network, latestBlock, profilesByAddress),
     pagination_summary: paginationSummary,
   }));
 }
@@ -319,6 +406,7 @@ type ProposalsPage = {
 };
 
 export {
+  describeRegistryTargets,
   getProposals,
   formatProposals,
   knownGovernanceContracts,

@@ -8,7 +8,7 @@ import * as Compute from '../../symbolic/computation.js';
 
 import * as KnownNetwork from '../../well-known/networks/network.js';
 
-import { EvmRpc } from './rpc.js';
+import { EvmRpc, notServed } from './rpc.js';
 
 type EthGetLogs = Compute.Spec<{
   name: 'ethGetLogs',
@@ -95,13 +95,12 @@ const ethGetLogs = implement({
       { evmRpc: { frame: { apiHost, nodeHost, nodeKey,network }, items: [ call ] } },
       ([{ result, error }]) => {
         if (error) {
-          const formatted = jsonRpc.formatError(error);
           logsDebug.error(`eth_getLogs`, { error }, debugPayload);
-          throw new Error(
+          throw notServed(
             `ethGetLogs(${debugPayload.addresses}`
             + ` on ${debugPayload.network}`
-            + ` from ${debugPayload.blockRange.join(' to ')})`
-            + `: call error: ${formatted}`
+            + ` from ${debugPayload.blockRange.join(' to ')})`,
+            error,
           );
         }
         return result as EthGetLogs['returns'];

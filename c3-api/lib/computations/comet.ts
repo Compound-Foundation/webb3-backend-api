@@ -16,7 +16,6 @@ import { AssetTotalCollateral } from './comet/asset-total-collateral.js';
 import { BaseBorrowMin        } from './comet/base-borrow-min.js';
 import { BaseUsdPrice         } from './comet/base-usd-price.js';
 import { Symbol               } from './comet/symbol.js';
-import { CollateralAssetSymbols } from './comet/collateral-asset-symbols.js';
 import { SupplyPerSecondInterestRateBase      } from './comet/rate/supply-per-second-interest-rate-base.js';
 import { SupplyPerSecondInterestRateSlopeLow  } from './comet/rate/supply-per-second-interest-rate-slope-low.js';
 import { SupplyPerSecondInterestRateSlopeHigh } from './comet/rate/supply-per-second-interest-rate-slope-high.js';
@@ -49,10 +48,10 @@ export type Comet = (
   | BaseBorrowMin
   | BaseUsdPrice
   | Symbol
-  | CollateralAssetSymbols
 );
 
 export { GetPrice,     getPrice     } from './comet/get-price.js';
+export type { PriceError, PriceRead } from './comet/get-price.js';
 export { NumAssets,    numAssets    } from './comet/num-assets.js';
 export { AssetInfo,    assetInfo    } from './comet/asset-info.js';
 export { BasePrice,    basePrice    } from './comet/base-price.js';
@@ -97,8 +96,3 @@ export {
   BaseBorrowMin, 
   baseBorrowMin
 } from './comet/base-borrow-min.js';
-
-export { 
-  CollateralAssetSymbols, 
-  collateralAssetSymbols
-} from './comet/collateral-asset-symbols.js';

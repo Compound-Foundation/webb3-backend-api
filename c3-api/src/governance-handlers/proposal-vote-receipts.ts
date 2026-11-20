@@ -8,13 +8,14 @@ import * as governanceModel from '../../lib/model/governance.js';
 
 import { Context } from './handlers.js';
 import {
+  describeRegistryTargets,
   formatProposals,
   knownGovernanceContracts,
 } from './proposals.js';
 import { getPageData, PaginationSummary } from '../pagination.js';
 
 async function getProposalVoteReceipts(
-  { apiHost, nodeHost, nodeKey, network, queryParams }: GovernanceRouteData,
+  { apiHost, nodeHost, nodeKey, network, queryParams, registry }: GovernanceRouteData,
   context: Context
 ): Promise<Response> {
   const { evaluate, join, pull1 } = context.evaluator;
@@ -86,6 +87,29 @@ async function getProposalVoteReceipts(
     return true;
   })
 
+  // From each (filtered) proposal, filter the vote entries the receipts are made of.
+  const cast = filteredProposals.flatMap((proposal) => proposal.voteEntries
+    .filter((voteEntry) => true
+      && (voteSideToFilter === null || voteEntry.support === voteSideToFilter)
+      && (accountToFilter === null  || voteEntry.voter.toLowerCase() === accountToFilter.toLowerCase())
+    )
+    .map((voteEntry) => ({ proposal, voteEntry, votes: voteEntry.votes.toString() }))
+    // Sort the vote receipts so that paginated results are returned with most votes first.
+    .sort((a, b) => parseFloat(b.votes) - parseFloat(a.votes))
+  );
+  const [castPage, paginationSummary] = getPageData(cast, pageSize, pageNumber);
+  const pageProposals = [ ...new Set(castPage.map(({ proposal }) => proposal)) ];
+
+  /*
+   * A receipt's proposal names its markets as the proposal list names them,
+   * and only the proposals of the page are described and formatted: an
+   * account may have voted on every proposal ever made. The registry is read
+   * while Tally is still answering for the profiles.
+   */
+  if (shouldIncludeProposalData) {
+    await describeRegistryTargets(pageProposals, network, { registry, debug: context.debug });
+  }
+
   let profilesByAddress: { [_ in Eth.Address]: governanceModel.Profile } = {};
   try { profilesByAddress = await profilesByAddressPromise } catch (e) {
     context.debug?.error(`swallowing error:`, { error: e });
@@ -94,7 +118,7 @@ async function getProposalVoteReceipts(
   const maybeFormattedProposalsById: { [key: string]: governanceModel.proposal.FormattedProposal } = {};
   if (shouldIncludeProposalData) {
     const formattedProposals = formatProposals(
-      filteredProposals,
+      pageProposals,
       network,
       latestBlock,
       profilesByAddress,
@@ -104,34 +128,25 @@ async function getProposalVoteReceipts(
     }
   }
 
-  // From each (filtered) proposal, filter the vote entries and transform them into vote receipts.
-  const voteReceiptsNoProposalData = filteredProposals.map((proposal) =>
-    proposal.voteEntries.filter((voteEntry) => true
-      && (voteSideToFilter === null || voteEntry.support === voteSideToFilter)
-      && (accountToFilter === null  || voteEntry.voter.toLowerCase() === accountToFilter.toLowerCase())
-    ).map((voteEntry) => ({
-        proposal_id: proposal.id.toNumber(),
-        proposal: maybeFormattedProposalsById[proposal.id.toString()] ?? null,
-        voter: profilesByAddress[voteEntry.voter.toLowerCase() as `0x${string}`] ?? {
-          image_url: null,
-          account_url: null,
-          display_name: null,
-          address: voteEntry.voter,
-        },
-        // Map for/against votes to true/false respectively, and abstain to null.
-        support: (
-            voteEntry.support === governanceModel.proposal.VoteSupport.For     ? true
-          : voteEntry.support === governanceModel.proposal.VoteSupport.Against ? false
-          : null
-        ),
-        votes: voteEntry.votes.toString(),
-      })
-      // Sort the vote receipts so that paginated results are returned with most votes first.
-    ).sort((a, b) => parseFloat(b.votes) - parseFloat(a.votes))
-  )
-  .flat();
+  // Transform the vote entries of the page into vote receipts.
+  const voteReceiptsPage = castPage.map(({ proposal, voteEntry, votes }) => ({
+    proposal_id: proposal.id.toNumber(),
+    proposal: maybeFormattedProposalsById[proposal.id.toString()] ?? null,
+    voter: profilesByAddress[voteEntry.voter.toLowerCase() as `0x${string}`] ?? {
+      image_url: null,
+      account_url: null,
+      display_name: null,
+      address: voteEntry.voter,
+    },
+    // Map for/against votes to true/false respectively, and abstain to null.
+    support: (
+        voteEntry.support === governanceModel.proposal.VoteSupport.For     ? true
+      : voteEntry.support === governanceModel.proposal.VoteSupport.Against ? false
+      : null
+    ),
+    votes,
+  }));
 
-  const [voteReceiptsPage, paginationSummary] = getPageData(voteReceiptsNoProposalData, pageSize, pageNumber);
   const responseData: VoteReceiptsResponseData = {
     proposal_vote_receipts: voteReceiptsPage,
     pagination_summary: paginationSummary,

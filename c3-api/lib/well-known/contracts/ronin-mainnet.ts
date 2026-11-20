@@ -1,5 +1,4 @@
 import {
-  Comet,
   ERC20,
   PriceFeed,
   UntypedContract,
@@ -120,47 +119,6 @@ const RON_USD_priceFeed = PriceFeed(<const>{
   },
 });
 
-const Comet_01weth = Comet(<const>{
-  displayName: 'cWETHv3',
-  aliases: [ '01-weth', 'cWETHv3' ],
-  base: {
-    asset: WETH,
-    priceFeed: WETH_ETH_priceFeedConstant,
-    usdPriceFeed: WETH_USD_priceFeed,
-  },
-  rewards: {
-    asset: USDC, //TODO: There is no COMP, USDC for now???
-    priceFeed: COMP_USD_priceFeed,
-    contract: Comet_Rewards,
-  },
-  network: 'ronin-mainnet',
-  address: '0x4006eD4097Ee51c09A04c3B0951D28CCf19e6DFE',
-  block: {
-    number: 43343876,
-    timestamp: 1741884205,
-  },
-});
-
-const Comet_01wron = Comet(<const>{
-  displayName: 'cWRONv3',
-  aliases: [ '01-wron', 'cWRONv3' ],
-  base: {
-    asset: WRON,
-    priceFeed: RON_USD_priceFeed,
-  },
-  rewards: {
-    asset: USDC, //TODO: There is no COMP, USDC for now???
-    priceFeed: COMP_USD_priceFeed,
-    contract: Comet_Rewards,
-  },
-  network: 'ronin-mainnet',
-  address: '0xc0afdbd1ceb621ef576ba969ce9d4cef78dbc0c0',
-  block: {
-    number: 44084652,
-    timestamp: 1744106923,
-  },
-});
-
 const Bulker = UntypedContract('Bulker', <const>{
   network: 'ronin-mainnet',
   address: '0x840281FaD56DD88afba052B7F18Be2A65796Ecc6',
@@ -173,7 +131,7 @@ const Bulker = UntypedContract('Bulker', <const>{
 const market01weth = <const>([
   CometAdmin, Comet_Rewards, Bulker,
   WETH_USD_priceFeed, WETH_ETH_priceFeedConstant, COMP_USD_priceFeed,
-  RON_USD_priceFeed, Comet_01weth, Comet_01wron,
+  RON_USD_priceFeed,
 ]);
 
 const Configurator = UntypedContract('Configurator', <const>{

@@ -118,7 +118,8 @@ request's.
 
 Every value is one the API acted on before the registry, taken from where it
 was decided then. The static constants below are `lib/well-known/contracts`
-as the file was frozen from them, at `56d75ff`.
+as the file was frozen from them, at `56d75ff`: their Comets, and the feeds
+only those named, have been removed since.
 
 | Field | Where it comes from |
 |---|---|
@@ -182,3 +183,12 @@ file byte for byte. At that commit,
 proposal after parsing. `bootstrap.ts` and the proposal routes were removed
 after that commit, so the file is now changed by hand
 ([Changing it](#changing-it)).
+
+That deployment's summary serves the 29 markets with the same labels: 174 of
+174 values — display name, base asset name, wrapped native, slug, default,
+institutional — are equal. One decision is known to differ from its
+overlays: it quotes `59144/weth`'s reward feed in `usd`, which it inherited
+from before the proposal quoted it in the base asset, and the file says
+`base`, which is right
+([REGISTRY_RUNBOOK.md](../../REGISTRY_RUNBOOK.md#when-something-goes-wrong),
+Linea WETH's reward price).

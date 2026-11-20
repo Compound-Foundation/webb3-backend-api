@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import type { MarketV1, NetworkV1, RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
+import type * as KnownNetwork from '../../lib/well-known/networks/network.js';
+import type { Address, MarketV1, NetworkV1, RegistryComet, RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
+import type { Catalog } from '../../src/registry/catalog.js';
+import { catalogOf } from '../../src/registry/catalog.js';
 import type { NetworkOverlay } from '../../src/registry/overlay.js';
 import { orderNetworks, overlayOfException } from '../../src/registry/overlay.js';
 import {
@@ -25,6 +28,27 @@ const FIXTURE_PATH = './tests/fixtures/registry/registry-snapshot-v1.json';
 
 function loadRegistrySnapshotFixture(): RegistrySnapshotV1 {
   return JSON.parse(readFileSync(FIXTURE_PATH, 'utf8'));
+}
+
+/*
+ * The fixture as a request catalog, for tests of computations that resolve
+ * markets and tokens through the registry. It is the same materialization the
+ * worker builds per request, so a test exercises the path production takes.
+ */
+function fixtureCatalog(snapshot: RegistrySnapshotV1 = loadRegistrySnapshotFixture()): Catalog {
+  return catalogOf(snapshot);
+}
+
+/*
+ * One Comet of the fixture, as the catalog materializes it: the only kind of
+ * Comet a computation is handed, so the one a test of a computation hands it.
+ */
+function fixtureComet(network: KnownNetwork.Name, address: string): RegistryComet {
+  const comet = fixtureCatalog().marketAt(network, address as Address)?.comet;
+  if (comet === undefined) {
+    throw new Error(`the registry fixture has no market at ${address} on ${network}`);
+  }
+  return comet;
 }
 
 function sha256Hex(value: string): string {
@@ -192,6 +216,8 @@ export type { SeedOptions, SeededCandidate };
 export {
   activateSeeded,
   clearCandidateSnapshot,
+  fixtureCatalog,
+  fixtureComet,
   loadRegistrySnapshotFixture,
   overlayOfNetwork,
   seedCandidate,

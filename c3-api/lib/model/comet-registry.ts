@@ -11,6 +11,8 @@
 
 import { keccak256 } from '../hash.js';
 
+import type { Comet, Contract, StandaloneContract } from '../well-known/contracts/types.js';
+
 // same shape as Eth.Address, without importing the runtime constants module
 type Address = `0x${string}`;
 
@@ -503,6 +505,41 @@ type ValidationSummaryV1 = {
   checks:  ValidationCheckV1[],
 };
 
+/*
+ * What a Comet contract carries when it was materialized from the registry:
+ * the version that described it, the market as that version describes it, and
+ * the exceptions of its network.
+ *
+ * It travels on the contract object itself so that a computation which
+ * already receives a contract needs no second parameter threaded through
+ * every caller. `digest` identifies the market's content, and is what keeps
+ * cached results of two different versions apart when, and only when, the
+ * version changed something a computation can observe.
+ */
+type RegistryAnnotation = {
+  versionId:       string,
+  digest:          string,
+  chainId:         number,
+  deploymentKey:   string,
+  market:          MarketV1,
+  priceExceptions: PriceExceptionV1[],
+};
+
+/*
+ * A Comet as the catalog materializes it: the contract shape, and the
+ * registry's description of it.
+ *
+ * It is the only kind of market a computation takes. The routes resolve every
+ * market through the request's catalog, so a computation reads one kind of
+ * Comet, and the compiler refuses it a Comet as the static constants type
+ * one, which describes none of what a computation reads here. No mainnet's
+ * constants hold a Comet any more, but their `Comet` key still types one
+ * read from them (WellKnownContractsByNetworkAddress), which is what the
+ * refusal rests on; a cast, or a read the compiler cannot type, is not
+ * refused.
+ */
+type RegistryComet = Contract<StandaloneContract<Comet>> & { registry: RegistryAnnotation };
+
 export type {
   ActivationAction,
   ActivationRecordV1,
@@ -533,6 +570,8 @@ export type {
   RegistrySnapshotV1,
   RegistryTables,
   RegistryVersionRefV1,
+  RegistryAnnotation,
+  RegistryComet,
   RegistryVersionRow,
   RewardAssetV1,
   SyncItemStatus,

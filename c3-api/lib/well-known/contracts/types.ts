@@ -304,11 +304,19 @@ interface Comet extends TypedContract, ContractNamedInterface {
      */
     usdPriceFeed?: Contract<StandaloneContract<PriceFeed>>;
   };
-  rewards: {
+  /*
+   * What a market has of its rewards: the CometRewards contract its claims
+   * go through, the token it pays, and the feed that prices that token. Every
+   * market of the constants has all three. A market the registry describes
+   * has what the chain and its review state — no rewards contract, a contract
+   * that pays no token, a token nothing prices — and lacks the rest here
+   * too: nothing stands in for a part a market does not have.
+   */
+  rewards?: {
     // FIXME: Contract<StandaloneContract<...>> is gnarly
-    asset:     Contract<StandaloneContract<ERC20>>;
-    contract:  Contract<StandaloneContract>;
-    priceFeed: Contract<StandaloneContract<PriceFeed>>;
+    asset?:     Contract<StandaloneContract<ERC20>>;
+    contract:   Contract<StandaloneContract>;
+    priceFeed?: Contract<StandaloneContract<PriceFeed>>;
   };
 }
 function Comet<
@@ -320,15 +328,15 @@ function Comet<
   return Object.assign(UntypedContract(Comet.tag, options), {
     [ContractTypeTag]: Comet.tag,
     base:    options.base,
-    rewards: options.rewards,
+    ...(options.rewards === undefined ? {} : { rewards: options.rewards }),
   });
 }
 namespace Comet {
   export const tag = 'Comet' as const;
   export type  Tag = typeof tag;
   export type Options = {
-    base:    Comet['base'];
-    rewards: Comet['rewards'];
+    base:     Comet['base'];
+    rewards?: NonNullable<Comet['rewards']>;
   };
   export function is(candidate: any): candidate is Comet {
     return typeof(candidate) === 'object'

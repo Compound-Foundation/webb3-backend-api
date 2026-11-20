@@ -40,14 +40,9 @@ const PUBLIC_PREFLIGHT: Record<string, string> = {
   'Access-Control-Max-Age':       '86400',
 };
 
-// the legacy routes answer every origin, and carry no header to expose
-const LEGACY_CORS: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
-};
-
 // the legacy routes take GET alone, and their preflight says no more
 const LEGACY_PREFLIGHT: Record<string, string> = {
-  ...LEGACY_CORS,
+  ...PUBLIC_CORS,
   'Access-Control-Allow-Methods': 'GET',
 };
 
@@ -55,11 +50,14 @@ const LEGACY_PREFLIGHT: Record<string, string> = {
 type CorsRoute = 'legacy' | 'public' | 'admin';
 
 /*
- * What each kind answers with. An administrative route answers none, to a
- * preflight as to anything else, and the caller must not add any.
+ * What each kind answers with. A legacy route's are the public registry
+ * reads' own: a legacy route that resolves a market names the version it was
+ * computed from in the same headers, and a browser has to be able to read
+ * them there too. An administrative route answers none, to a preflight as to
+ * anything else, and the caller must not add any.
  */
 const CORS: Record<CorsRoute, { response: Record<string, string>, preflight: Record<string, string> }> = {
-  legacy: { response: LEGACY_CORS, preflight: LEGACY_PREFLIGHT },
+  legacy: { response: PUBLIC_CORS, preflight: LEGACY_PREFLIGHT },
   public: { response: PUBLIC_CORS, preflight: PUBLIC_PREFLIGHT },
   admin:  { response: {},          preflight: {} },
 };
