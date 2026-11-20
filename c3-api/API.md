@@ -72,7 +72,10 @@ or `Error: Not a valid resource API`.
 Outside the registry, a request a node provider did not serve is a `503`
 with the code `UPSTREAM_UNAVAILABLE`: the node provider proxy failed it or
 could not be reached, or answered a call with an error that is not a revert,
-such as a rate limit. It can succeed later — after the seconds `Retry-After`
+such as a rate limit. A range of logs the node refuses, as a provider refuses
+one whose logs do not fit a single answer, is first read again in halves, and
+fails the request only when the node refuses it down to a single block or
+refuses it too often. It can succeed later — after the seconds `Retry-After`
 names, when the proxy said, which a browser can read. A call the contract
 reverted is its answer instead: a price read reports it as a
 [status](#market-status), and any other call that reverts fails the request
