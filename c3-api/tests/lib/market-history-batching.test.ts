@@ -142,7 +142,7 @@ function contextOf({ recursive = false }: { recursive?: boolean } = {}) {
 const networks = [ ...new Set(catalog.markets().map(entry => entry.network)) ];
 const comets   = new Set(catalog.markets().map(entry => entry.comet.address.toLowerCase()));
 
-t.test('a cold history of every market makes three node requests per market and one per network', async t => {
+t.test('a cold history of every market makes three node requests per market, two to find its days, and one per network', async t => {
   const node = nodeOf();
   serve(t, node);
   const { context, asked } = contextOf();
@@ -153,9 +153,21 @@ t.test('a cold history of every market makes three node requests per market and 
   t.equal(days.length, DAYS * catalog.markets().length, 'thirty days of every market');
   t.ok(days.every(day => day.status === 'success'), 'each of them read');
 
+  /*
+   * Before its reads, each market's history finds the first block of each
+   * past day (dayOpeningBlock). This node's blocks keep the network's
+   * average pace, so the search's first guess lands on the day's start, and
+   * a second read takes the block next to it.
+   */
+  const isSearch = (calls: Call[]) => calls.every(call => call.method === 'eth_getBlockByNumber' && call.params[0] !== 'latest');
   for (const network of networks) {
-    t.equal(node.requests.filter(request => request.network === network).length, 3 * catalog.marketsOn(network).length + 1,
+    const requests = node.requests.filter(request => request.network === network);
+    const searches = requests.filter(({ calls }) => isSearch(calls));
+    t.equal(requests.length - searches.length, 3 * catalog.marketsOn(network).length + 1,
       `${network}: its latest block, then three rounds of reads for each of its markets, whatever its days`);
+    t.equal(searches.length, 2 * catalog.marketsOn(network).length,
+      `${network}: and two rounds of the search for the first block of each past day, for each of its markets`);
+    t.ok(searches.every(({ calls }) => calls.length === DAYS - 1), `${network}: each round asks for the ${DAYS - 1} past days at once`);
   }
   const reads    = node.requests.filter(({ calls }) => calls.some(call => call.method === 'eth_call'));
   const cometsOf = (calls: Call[]) => new Set(calls
