@@ -2,7 +2,6 @@ import t from 'tap';
 
 import * as Debug    from '../../../../lib/debug-log.js';
 import * as Flags    from '../../../../lib/flags.js';
-import * as Fallible from '../../../../lib/fallible/fallible.js';
 
 import { BigNumber } from '../../../../lib/bignumber.js';
 import { BigFixnum } from '../../../../lib/bigfixnum.js';
@@ -108,6 +107,11 @@ t.test(`market-day-summary@block:16380543`, async t => {
     { ...evm, ...comet, ...market },
     { cache, debug, flags },
   );
+  /*
+   * The history asks for a day at the first block of its UTC day, with that
+   * block's timestamp; the summary reports the block and timestamp it is
+   * given.
+   */
   const context: market.MarketDaySummary['expects'] = {
     apiHost,
     nodeHost,
@@ -115,33 +119,20 @@ t.test(`market-day-summary@block:16380543`, async t => {
     contract: fixtureComet('ethereum-mainnet', '0xc3d688b66703497daa19211eedff47f25384cdc3'),
     network: 'ethereum-mainnet',
     block: {
-      number:    16_380_543,
-      timestamp: 1_673_432_423,
+      number:    16_375_778,
+      timestamp: 1_673_374_861,
     },
   };
-
-  /*
-   * check projection
-   */
-  const projected = Fallible.must(
-    market.marketDaySummary.index.project(context)
-  );
-  t.strictSame(
-    projected,
-    { ...context, block: { number: 16_375_778 } },
-    `index projects to expected sample block`
-  );
 
   /*
    * check result
    */
   const [ result1, expected ] = await evaluator.evaluate(evaluator.split([
     evaluator.pull1({ marketDaySummary: context }),
-    evaluator.pull1({ marketSummary:  projected }),
+    evaluator.pull1({ marketSummary:  context }),
   ]));
   t.match(result1, expected,
-    `market-day-summary is the same as the market-summary at`
-    + ` the indexed block for that day`
+    `market-day-summary is the same as the market-summary at its block`
   );
   t.strictSame(result1, {
     chainId: 1,
@@ -175,23 +166,13 @@ t.test(`market-day-summary@block:16380543`, async t => {
   });
 
   /*
-   * check for select expected cache keys
+   * check for select expected cache keys: the market at the block, and the
+   * day by its date
    */
   const cachedKeys1 = Object.keys(cache.store);
   const expectedKeys = [
-    `${versionedName('marketSummary', market.marketSummary.version)}:(block:${projected.block.number};contract:${context.contract.key()};network:${context.network})`,
-    /*
-     * FIXME(jordan): since we project(..) within compute(..), the
-     * index.includes(..) check fails on the block unless it happens
-     * to be an indexed block, so marketDaySummary does not get cached.
-     *
-     * This is fine for marketDaySummary, which transparently invokes
-     * marketSummary anyway; in the general case, however, this is a bug:
-     * if a computation is set up to always project its input onto its
-     * index, then it should also properly cache the result at the
-     * projection from the input.
-     */
-    // `marketDaySummary-v2:(contract:${context.contract.key()};date:2023-01-10;network:${context.network})`,
+    `${versionedName('marketSummary', market.marketSummary.version)}:(block:${context.block.number};contract:${context.contract.key()};network:${context.network})`,
+    `${versionedName('marketDaySummary', market.marketDaySummary.version)}:(contract:${context.contract.key()};date:2023-01-10;network:${context.network})`,
   ];
   for (const key of expectedKeys) {
     const similar = cachedKeys1.find(k => k.startsWith(key));
@@ -199,37 +180,26 @@ t.test(`market-day-summary@block:16380543`, async t => {
   }
 
   /*
-   * verify that requesting another block in the same index window
-   * returns the same result from cache.
+   * verify that another block of the same day returns the day kept by its
+   * date, without reading the market at that block.
    */
   const block2 = {
-    ...context.block,
-    number: 16_380_552,
-    timestamp: 1_673_432_531,
+    number: 16_376_000,
+    timestamp: 1_673_374_861 + 2_676,
   };
   const diff = block2.number - context.block.number;
-
-  const projected2 = Fallible.must(
-    market.marketDaySummary.index.project({ ...context, block: block2 })
-  );
-  t.strictSame(
-    projected2,
-    { ...context, block: { number: 16_375_778 } },
-    `index projects to same sample block still for block + ${diff}`
-  );
 
   const result2 = await evaluator.evaluate(evaluator.pull1({
     marketDaySummary: { ...context, block: block2 },
   }));
-  // due to the timeskew fix/hack, we should not compare timestamps
   t.strictSame(result2, result1,
-    `block + ${diff} should give the same result`
+    `block + ${diff}, the same day, should give the same result`
   );
 
   /*
    * check that cache is unchanged
    */
   t.strictSame(Object.keys(cache.store), cachedKeys1,
-    `cache does not change after computing again at block + ${diff}`,
+    `cache does not change after asking again at block + ${diff}`,
   );
 });

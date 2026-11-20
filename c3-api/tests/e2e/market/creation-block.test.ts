@@ -173,7 +173,12 @@ t.test('the history answers every day of a market created past the latest block 
   const ofUsdt = days.filter(isUsdt);
   const ofUsdc = days.filter(day => day.comet.address.toLowerCase() === USDC);
   t.equal(ofUsdt.length, 30, 'that market reports every day the history covers');
-  t.same(ofUsdt.map(({ date, timestamp }) => ({ date, timestamp })), ofUsdc.map(({ date, timestamp }) => ({ date, timestamp })),
+  /*
+   * The same dates: a market that read a day reports the timestamp of the
+   * block it read, the day's first, where a day nothing was read on steps
+   * back from the latest block's, a day at a time.
+   */
+  t.same(ofUsdt.map(({ date }) => date), ofUsdc.map(({ date }) => date),
     'the days the other markets of its network report');
   t.strictSame(ofUsdt.at(-1), { ...unreached(snapshot), timestamp: LATEST.timestamp, date: '2026-09-21' },
     'each an error naming its block, up to the day of the latest block');

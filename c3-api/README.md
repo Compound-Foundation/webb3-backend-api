@@ -9,6 +9,7 @@ used by the Compound III frontend. See [./API.md](./API.md).
 # Getting Started
 
 Install dependencies with Node.js 22 or newer:
+
 ```sh
 npm install
 ```
@@ -17,6 +18,7 @@ The worker reads its markets from the registry in its D1 database, and the
 chain through the node provider proxy, so a local run needs both.
 
 Create the local database, with every migration applied:
+
 ```sh
 npm run d1:migrate:local
 ```
@@ -26,6 +28,7 @@ its provider keys in `../node-provider-proxy/.dev.vars` (see
 [Configuration](../node-provider-proxy/README.md#configuration) in its
 README). It is a package of its own, so its dependencies are installed there,
 the first time, before it starts:
+
 ```sh
 cd ../node-provider-proxy
 npm install
@@ -34,6 +37,7 @@ npm start -- --port 8788
 
 Then, in a second terminal and from this directory, run a local
 auto-reloading development build of the worker bound to it:
+
 ```sh
 npx wrangler dev --local -c wrangler.local-proxy.toml entrypoint.ts
 ```
@@ -53,6 +57,7 @@ worker ([The admin token](./REGISTRY_RUNBOOK.md#the-admin-token)), and follow
 with `API=http://localhost:8787`.
 
 Then hit an endpoint:
+
 ```
 curl 'http://localhost:8787/market/{network}/{contract}/summary'
 ```
@@ -78,6 +83,7 @@ whether it is institutional — and `0004` drops the columns and indexes
 nothing uses.
 
 Apply migrations to the local Miniflare database under `.wrangler/state`:
+
 ```sh
 npm run d1:migrate:local
 npx wrangler d1 execute APP_DB --local --command "PRAGMA foreign_key_check;"
@@ -85,6 +91,7 @@ npx wrangler d1 execute APP_DB --local --command "PRAGMA foreign_key_check;"
 
 Remote migrations always name the environment and must run before the
 worker release that needs them:
+
 ```sh
 npm run d1:migrate:stage
 npm run d1:migrate:production
@@ -147,6 +154,7 @@ Run the worker with the scheduled-event test route and trigger the Cron
 handler locally — with the node provider proxy on this machine, add
 `--test-scheduled` to the command in [Getting Started](#getting-started)
 instead of `npm run start:scheduled`:
+
 ```sh
 npm run start:scheduled
 curl "http://localhost:8787/cdn-cgi/handler/scheduled?cron=0+*+*+*+*"
@@ -472,6 +480,7 @@ its file, and says why. A new test runs there, in whichever directory it
 lives, unless it is added to that list as one that needs either.
 
 ## How to Update E2E test dumps
+
 The E2E tests have been configured with dumps in order to significantly cut down on requests to
 node providers. There are two types of dump files which are used in tests
 
@@ -545,8 +554,6 @@ secret_access_key = 🤐
 
 endpoint = https://<r2-id>.r2.cloudflarestorage.com
 ```
-
-
 
 After setting that up, you can now run the sync script. This will update the files in the r2 bucket.
 
@@ -633,6 +640,11 @@ time skew, which can present as user-facing bugs in some circumstances.
 You should add test-cases to `./tests/lib/timestamp-estimate.test.ts` for
 your new network to ensure that estimations don't error too widely.
 
+The historical market summary does not rely on them: it finds the first
+block of each UTC day from the blocks' own timestamps
+(`lib/computations/market/day-opening-block.ts`), and takes the estimate only
+as its first guess.
+
 The accuracy of `Eth.estimateBlockTimestampRelative(..)` should not error
 more than 1hr (3,600s) for a new network when performing estimates
 relative to the 'latest' block
@@ -698,6 +710,7 @@ In `src/governance-handlers/proposals.ts`, there is a function called
 to support the new network.
 
 # Request Routing
+
 The server accepts requests at the Cloudflare worker
 [entrypoint](./entrypoint.ts), which decides by the path, and nowhere else,
 which of two routers answers a request:
@@ -731,13 +744,13 @@ In this case, the symbols are the names of computations. This is like
 dependency injection: rather than invoking a function like:
 
 ```ts
-utilization({ blockNumber: 123 })
+utilization({ blockNumber: 123 });
 ```
 
 You can reference the utilization at block 123 symbolically:
 
 ```ts
-pull({ utilization: { blockNumber: 123 } })
+pull({ utilization: { blockNumber: 123 } });
 ```
 
 A 'pull' is a special type of expression that symbolizes looking up the
@@ -747,6 +760,7 @@ looks up the utilization at block 123.
 
 Since we aren't invoking the utilization function directly, the evaluator
 gets to decide:
+
 - _how_ to pull the utilization at block 123, and
 - _when_ to pull the utilization at block 123.
 
@@ -770,10 +784,7 @@ A `pipe` looks up some symbols by name in a given context and computes
 something out of the results. So, for example:
 
 ```ts
-pipe([
-  { ethGetBlock: { blockReference: 'latest' } },
-  ({ ethGetBlock: block }) => block.timestamp
-])
+pipe([{ ethGetBlock: { blockReference: "latest" } }, ({ ethGetBlock: block }) => block.timestamp]);
 ```
 
 The above `pipe` gets the `'latest'` block and extracts its timestamp.
@@ -791,19 +802,17 @@ A `join`, on the other hand, is recursive: it reduces an array of other
 redexes and computes something out of the results. So, for example:
 
 ```ts
-const blockTimestamp = (blockReference: Eth.BlockReference) => pipe([
-    { ethGetBlock: { blockReference } },
-    ({ ethGetBlock: block }) => block.timestamp
-])
+const blockTimestamp = (blockReference: Eth.BlockReference) =>
+  pipe([{ ethGetBlock: { blockReference } }, ({ ethGetBlock: block }) => block.timestamp]);
 
 join([
   [
     blockTimestamp({ blockReference: 10000 }),
     blockTimestamp({ blockReference: 20000 }),
-    blockTimestamp({ blockReference: 30000 }),
+    blockTimestamp({ blockReference: 30000 })
   ],
-  ([ t1, t2, t3 ]) => ((t2 - t1) + (t3 - t2)) / 20000,
-])
+  ([t1, t2, t3]) => (t2 - t1 + (t3 - t2)) / 20000
+]);
 ```
 
 The above `join` computes the average time between blocks for blocks
@@ -818,7 +827,7 @@ in a series of `pipe`s.
 In addition to `pull`, there are many other shorthand redexes for common
 types of `pipe` and `join`. Notably:
 
-- `pull`  is a `pipe` that returns the result of the lookup unchanged
+- `pull` is a `pipe` that returns the result of the lookup unchanged
 - `split` is a `join` that returns the results of its redexes unchanged
 - `value` is a `pipe` with an empty lookup that just returns a value
 - `pull1` is a `pull` that looks up only one symbol and unwraps it
@@ -827,25 +836,19 @@ types of `pipe` and `join`. Notably:
 An example for each expression:
 
 ```ts
-pull({ ethGetBlock: { blockReference: 'latest' } })
+pull({ ethGetBlock: { blockReference: "latest" } });
 // reduces to `{ ethGetBlock: <latest block> }`
 
-pull1({ ethGetBlock: { blockReference: 'latest' } })
+pull1({ ethGetBlock: { blockReference: "latest" } });
 // reduces to <latest block> (unwrapped from `{ ethGetBlock: ... }`)
 
-pipe1([
-  { ethGetBlock: { blockReference: 'latest' } },
-  latestBlock => latestBlock.timestamp
-])
+pipe1([{ ethGetBlock: { blockReference: "latest" } }, (latestBlock) => latestBlock.timestamp]);
 // note that with pipe1, you don't need to unwrap the result of the lookup
 
-split([
-  pull1({ ethGetBlock: { blockReference: 0 } }),
-  pull1({ ethGetBlock: { blockReference: 'latest' } }),
-])
+split([pull1({ ethGetBlock: { blockReference: 0 } }), pull1({ ethGetBlock: { blockReference: "latest" } })]);
 // reduces to [ <block 0>, <latest block> ]
 
-value(5)
+value(5);
 // reduces to 5
 // equivalent to pipe([ {}, ({}) => 5 ])
 ```
@@ -857,10 +860,7 @@ are in "scope". So the general type looks less like (pseudocode):
 ```ts
 // pipe-type: [ Lookup, (results: any) => Return | Redex<Return> ]
 // join-type: [ Redex<Return>[], (results: any[]) => Return | Redex<Return> ]
-type Redex<Return> = [
-  (Lookup | Redex<Return>[]),
-  (results: any) => (Return | Redex<Return>)
-]
+type Redex<Return> = [Lookup | Redex<Return>[], (results: any) => Return | Redex<Return>];
 ```
 
 and more like (pseudocode):
@@ -868,10 +868,7 @@ and more like (pseudocode):
 ```ts
 // pipe-type: [ Lookup<Scope>, (results: any) => Return | Redex<Scope, Return> ]
 // join-type: [ Redex<Scope, Return>[], (results: any[]) => Return | Redex<Scope, Return> ]
-type Redex<Scope, Return> = [
-  (Lookup<Scope> | Redex<Scope, Return>[]),
-  (results: any) => (Return | Redex<Scope, Return>)
-]
+type Redex<Scope, Return> = [Lookup<Scope> | Redex<Scope, Return>[], (results: any) => Return | Redex<Scope, Return>];
 ```
 
 The `Scope` type is a union of the `Compute.Spec`s upon which the
@@ -880,10 +877,10 @@ following:
 
 ```ts
 type SpecLike = {
-  name: string,                // e.g. 'utilization'
-  depends: Spec[],             // e.g. [ EthCall ]
-  expects: Key.ProducesKey,    // string|number|boolean|Array<...>|...
-  returns: Json.Representable, // Json values and implementors of toJSON()
+  name: string; // e.g. 'utilization'
+  depends: Spec[]; // e.g. [ EthCall ]
+  expects: Key.ProducesKey; // string|number|boolean|Array<...>|...
+  returns: Json.Representable; // Json values and implementors of toJSON()
 };
 ```
 
@@ -893,11 +890,11 @@ utilization computation might look like:
 
 ```ts
 type Utilization = {
-  name: 'utilization';
-  depends: [ EthCall ];
+  name: "utilization";
+  depends: [EthCall];
   returns: BigNumber;
   expects: {
-    network: ('ethereum-mainnet' | 'ethereum-goerli');
+    network: "ethereum-mainnet" | "ethereum-goerli";
     blockNumber: number;
     contract: {
       address: `0x${string}`;
@@ -964,7 +961,7 @@ This way it's not necessary to write code by constantly passing in the
 same generics. So you should never need to write:
 
 ```ts
-pull<EthGetBlock>({ ethGetBlock: { blockReference: 'latest' } });
+pull<EthGetBlock>({ ethGetBlock: { blockReference: "latest" } });
 ```
 
 which would indeed be pretty tedious.
@@ -976,9 +973,9 @@ implement computation `Spec`s:
 // Compute.Spec is a constructor for SpecLike types
 // NOTE that we do not provide a `depends`, it defaults to empty: []
 type A = Compute.Spec<{
-  name: 'a',
-  expects: number,
-  returns: string,
+  name: "a";
+  expects: number;
+  returns: string;
 }>;
 
 const a = Compute.Functor<A>().implement({
@@ -987,7 +984,7 @@ const a = Compute.Functor<A>().implement({
   // ... and the return type must be `A['returns']` or `string`.
   compute(num) {
     return num.toString();
-  },
+  }
 });
 ```
 
@@ -997,21 +994,21 @@ require methods other than `compute`. The `AbiFunction` computation
 we can look at `./lib/computations/comet/get-price.ts`:
 
 ```ts
-import { BigFixnum }    from '../../bigfixnum.js';
-import * as Eth         from '../../eth-constants.js';
-import * as AbiFunction from '../abi-function.js';
+import { BigFixnum } from "../../bigfixnum.js";
+import * as Eth from "../../eth-constants.js";
+import * as AbiFunction from "../abi-function.js";
 
 type GetPrice = AbiFunction.Spec<{
-  name: 'getPrice',
-  expects: { priceFeed: Eth.Address },
-  returns: BigFixnum,
+  name: "getPrice";
+  expects: { priceFeed: Eth.Address };
+  returns: BigFixnum;
 }>;
 
 const { implement } = AbiFunction.Functor<GetPrice>();
 const getPrice = implement({
   signature: `function getPrice(address) view returns (uint256)`,
-  parameters: ({ priceFeed }) => [ priceFeed ],
-  parser: ([ u256 ]) => BigFixnum.from({ decimals: 8, value: u256 }),
+  parameters: ({ priceFeed }) => [priceFeed],
+  parser: ([u256]) => BigFixnum.from({ decimals: 8, value: u256 })
 });
 
 export { GetPrice, getPrice };
