@@ -863,6 +863,7 @@ Query parameters:
 - `markets[]` (optional): array of markets filter to be included in the response. Default is every market whose history the active version serves. A market of a testnet is refused with `TESTNET_NOT_SERVED` ([The market registry](#the-market-registry)), and one whose history the active version does not serve with a `400`, `Invalid market address …`. (e.g. filter only Ethereum cUSDCv3 market `markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3`)
 - `actions[]` (optional): array of actions to filter transactions by. Default is all actions. (e.g. filter only borrow actions `actions[]=Borrow`)
 - `cursor` (optional): The first response (with no cursor parameter) will return with a cursor value, to pass that cursor value will allow request to get more transaction history further in the past.
+- `initiated_by[]` (optional): `me`, `other` or `me,other`, described below.
 
 A cursor holds a position in the logs of every market whose history its
 version serves, whatever `markets[]` keeps. Markets that share a rewards
@@ -913,6 +914,18 @@ Items come newest first across networks. When a page spends its budget before
 every network has been read back to its next item, the items it has read are
 answered first, and a later page can hold an item newer than some that were
 answered before it.
+
+`initiated_by[]` (optional) keeps the items the account initiated, with
+`me`, or those another address initiated, with `other`; `me,other`, like
+leaving it out, keeps both. An item's initiator, its `initiated_by`, is the
+address that sent its transaction, unless every action in it went through the
+account's DeFi Saver proxy, or through a Compound migrator, which is then the
+initiator. `me` is the account itself, so `other` keeps the items of its DeFi
+Saver proxy and of a migrator too. The account and the initiator are compared
+whatever their casing, so a checksummed, a lowercase and an uppercase path
+keep the same items. Both `initiated_by[]` and `actions[]` drop items a page
+has already enriched, so a filter that keeps few items makes short and empty
+pages, while `done` is `false`, more common.
 
 ```sh
 $ curl 'localhost:8787/account/0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5/transaction_history?limit=30&actions[]=Borrow&markets[]=1_0xc3d688B66703497DAA19211EEdff47f25384cdc3'
