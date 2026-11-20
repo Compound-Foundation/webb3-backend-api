@@ -19,7 +19,8 @@ import { registryHeaders } from './version-headers.js';
  * headers.
  *
  * Loading is lazy: V2 and gas price never pay a D1 read, and governance reads
- * it only to name the markets of proposal actions, and answers without it.
+ * it only to name the markets, tokens, and feeds of proposal actions, and
+ * answers without it.
  */
 type RequestCatalog = {
   /*

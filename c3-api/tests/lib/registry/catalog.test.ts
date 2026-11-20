@@ -111,7 +111,8 @@ t.test('a disabled market is unreachable, a deprecated one is readable', async t
 /*
  * Governance names a market whatever the version says of it, so the catalog
  * also hands it the markets it does not serve: each as a name at its Comet,
- * which no computation takes and nothing serves.
+ * which no computation takes and nothing serves, with the tokens it names and
+ * the feeds it reads, as a served market's Comet carries them.
  */
 t.test('a market the catalog does not serve is still named for governance', async t => {
   t.same(catalogOf(snapshot).unservedMarkets(), [], 'a version that serves every market it holds has none besides');
@@ -123,8 +124,19 @@ t.test('a market the catalog does not serve is still named for governance', asyn
       markets: network.markets.map(market => ({ ...market, status: 'disabled' as const, isDefault: false })),
     }),
   };
-  t.same(catalogOf(offScroll).unservedMarkets().map(contract => `${contract.network}: ${contract.displayName}`),
+  const unserved = catalogOf(offScroll).unservedMarkets();
+  t.same(unserved.map(({ comet }) => `${comet.network}: ${comet.displayName}`),
     [ `${SCROLL}: cUSDCv3` ], 'a network that serves nothing has its markets named too');
+  const [ scroll ] = unserved;
+  t.same(scroll?.tokens.map(token => `${token.canonicalName} ${token.decimals}`), [ 'USDC 6', 'COMP 18', 'WETH 18', 'wstETH 18' ],
+    'with its base, reward and collateral tokens, at the scale the version read');
+  const market = snapshot.networks.find(network => network.key === SCROLL)!.markets[0]!;
+  t.same(scroll?.feeds.map(feed => feed.address.toLowerCase()),
+    [ market.baseAsset.priceFeed.address, ...market.collateralAssets.map(asset => asset.priceFeed.address) ],
+    'and the feeds it reads: its reward token has none');
+  const unpaid = catalogOf(withMarket('usdc', entry => ({ ...entry, contracts: { ...entry.contracts, rewards: null } }), offScroll));
+  t.same(unpaid.unservedMarkets()[0]?.tokens.map(token => token.canonicalName), [ 'USDC', 'WETH', 'wstETH' ],
+    'nor a reward token where the market pays none');
   const unnameable = catalogOf({
     ...offScroll,
     networks: offScroll.networks.map(network => network.key !== SCROLL ? network : { ...network, key: 'nowhere-mainnet', chainId: 999999 }),

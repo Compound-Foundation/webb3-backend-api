@@ -18,9 +18,11 @@ import {
   decodeFunctionDataFromSignature,
   describeContractCallForHumans,
   getNetworkIfCrossChain,
+  mergeRegistryToken,
   withRegistryContracts,
 } from '../../lib/well-known/contracts/utils.js';
 import type { Contract, WellKnownContractsByNetworkAddress } from '../../lib/well-known/contracts/utils.js';
+import type { UnservedMarket } from '../registry/catalog.js';
 import { defaultAbiCoder } from '@ethersproject/abi';
 
 import type * as Type from '../../lib/type-utilities.js'
@@ -35,38 +37,50 @@ const knownGovernanceContracts = (network: Extract<KnownNetwork.Name, `ethereum-
 
 /*
  * The contracts governance names, with the markets the version holds but
- * does not serve beside those it serves. An address the constants or a
- * served market already name keeps that name.
+ * does not serve beside those it serves, and their tokens and feeds. An
+ * address the constants or a served market already name keeps that name,
+ * and a token takes the scale the version read, as a served market's does.
  */
 function withUnservedMarkets(
   contracts: WellKnownContractsByNetworkAddress,
-  unserved: Contract[],
+  unserved: UnservedMarket[],
 ): WellKnownContractsByNetworkAddress {
   if (unserved.length === 0) {
     return contracts;
   }
   const merged = new Map<KnownNetwork.Name, Record<string, Contract>>();
-  for (const market of unserved) {
-    const named = merged.get(market.network) ?? { ...contracts[market.network] };
-    merged.set(market.network, named);
-    named[market.address.toLowerCase()] ??= market;
+  for (const { comet, tokens, feeds } of unserved) {
+    const named = merged.get(comet.network) ?? { ...contracts[comet.network] };
+    merged.set(comet.network, named);
+    named[comet.address.toLowerCase()] ??= comet;
+    for (const token of tokens) {
+      mergeRegistryToken(named, token);
+    }
+    for (const feed of feeds) {
+      named[feed.address.toLowerCase()] ??= feed;
+    }
   }
   return { ...contracts, ...Object.fromEntries(merged) };
 }
 
 /*
  * Describes every action of the page again, against the constants with the
- * markets of the active version merged in: those it serves, with their base
- * and reward tokens, and those it holds without serving them
- * (Catalog.unservedMarkets). The constants name no market, and an action
- * can name one anywhere — as its target, as an argument, or in what it
- * bridges to another chain — so none is singled out: telling whether one
- * does costs about what describing it does. A Comet the version does not
- * hold reads as its address.
+ * markets of the active version merged in, those it serves and those it
+ * holds without serving them (Catalog.unservedMarkets) alike, with every
+ * token they name and every feed they read. The constants name no market,
+ * and an action can name one anywhere — as its target, as an argument, or
+ * in what it bridges to another chain — so none is singled out: telling
+ * whether one does costs about what describing it does. A Comet the version
+ * does not hold reads as its address.
  *
  * A page with no action never reads the registry. If the registry cannot be
- * loaded, the actions keep the description they already have rather than
- * failing the whole proposal list.
+ * loaded, every action is described again against the constants alone,
+ * which name no market, and of the tokens and feeds only those they keep
+ * (lib/eth-constants.ts), rather than failing the whole proposal list. Either
+ * way this build describes every action: the proposal list caches each
+ * description as the build that computed it gave it, and is not computed
+ * again when a description changes, since that would read every governor's
+ * logs again from its creation.
  */
 async function describeRegistryTargets(
   proposals: governanceModel.proposal.Proposal[],
@@ -82,13 +96,15 @@ async function describeRegistryTargets(
     catalog = await registry.load();
   } catch (error) {
     debug?.error(`proposal actions not described from the registry`, { error });
-    return;
+    catalog = null;
   }
 
-  const contracts = withUnservedMarkets(
-    withRegistryContracts(Eth.wellKnownContractsByNetwork, catalog.markets()),
-    catalog.unservedMarkets(),
-  );
+  const contracts = catalog === null
+    ? Eth.wellKnownContractsByNetwork
+    : withUnservedMarkets(
+      withRegistryContracts(Eth.wellKnownContractsByNetwork, catalog.markets()),
+      catalog.unservedMarkets(),
+    );
   for (const proposal of proposals) {
     for (const action of proposal.actions) {
       const redescribed = describeContractCallForHumans(

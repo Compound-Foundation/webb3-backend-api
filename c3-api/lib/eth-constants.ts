@@ -37,11 +37,18 @@ import type { WellKnownContractsByNetworkAddress } from './well-known/contracts/
  * These are the contracts this API is built against: governors, COMP, the V2
  * protocol, the bridges, the migrators.
  *
- * No market of a mainnet is among them. Markets, their tokens, and their
- * feeds are resolved from the activated registry version through the request
- * catalog, and governance names markets from it too; what remains here names
- * the rest of a governance action. The testnet files keep their Comets until
- * the files themselves go, and nothing resolves a market through them.
+ * No market of a mainnet is among them, and of the tokens and price feeds
+ * only these: COMP on every chain that has one, which the governance routes
+ * find by name; WETH on Ethereum, Optimism and Base, where governance finds
+ * it by its alias; ETH and the underlyings of the V2 cTokens; Arbitrum's
+ * bridged USDC (USDC.e), which its chain calls USDC, as it does native USDC;
+ * and the tokens and the two feeds of Ethereum these files write in
+ * lowercase, so that the links governance gives them keep their case.
+ * Markets, their tokens, and their feeds are resolved from the activated
+ * registry version through the request catalog, and governance names them
+ * from it too; what remains here names the rest of a governance action. The
+ * testnet files keep their Comets until the files themselves go, and nothing
+ * resolves a market through them.
  */
 
 const wellKnownContractsByNetwork: WellKnownContractsByNetworkAddress = {

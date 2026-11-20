@@ -1,38 +1,9 @@
 import {
   ERC20,
-  PriceFeed,
   UntypedContract,
   StaticWellKnownContracts,
 } from './utils.js';
 
-const USDC = ERC20('USDC', <const>{
-  description: 'USD Coin',
-  decimals: 6,
-  network: 'polygon-mainnet',
-  address: '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174',
-  block: {
-    number: 5013591,
-  },
-});
-const WBTC = ERC20('WBTC', <const>{
-  description: 'Wrapped BTC',
-  decimals: 8,
-  network: 'polygon-mainnet',
-  address: '0x1BFD67037B42Cf73acF2047067bd4F2C47D9BfD6',
-  block: {
-    number: 4196820,
-  },
-});
-const WETH = ERC20('WETH', <const>{
-  aliases: [ 'default' ],
-  description: 'Wrapped Ether',
-  decimals: 18,
-  network: 'polygon-mainnet',
-  address: '0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619',
-  block: {
-    number: 3678215,
-  },
-});
 const COMP = ERC20('COMP', <const>{
   aliases: [ 'default' ],
   description: 'Compound Governance Token',
@@ -43,51 +14,8 @@ const COMP = ERC20('COMP', <const>{
     number: 4196299,
   },
 });
-const WMATIC = ERC20('WMATIC', <const>{
-  aliases: [ 'default' ],
-  description: 'Wrapped Matic',
-  decimals: 18,
-  network: 'polygon-mainnet',
-  address: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270',
-  block: {
-    number: 4931456,
-  },
-});
 
-const MATICX = ERC20('MATICX', <const>{
-  aliases: [ 'default' ],
-  description: 'Stader MaticX',
-  decimals: 18,
-  network: 'polygon-mainnet',
-  address: '0xfa68FB4628DFF1028CFEc22b4162FCcd0d45efb6',
-  block: {
-    number: 27403468 ,
-  },
-});
-
-const USDT = ERC20('USDT', <const>{
-  description: 'Tether',
-  decimals: 6,
-  network: 'polygon-mainnet',
-  address: '0xc2132D05D31c914a87C6611C10748AEb04B58e8F',
-  block: {
-    number: 4196335,
-    timestamp: 1599512847,
-  },
-});
-
-const STMATIC = ERC20('STMATIC', <const>{
-  aliases: [ 'default' ],
-  description: 'Stader Matic',
-  decimals: 18,
-  network: 'polygon-mainnet',
-  address: '0x3A58a54C066FdC0f2D55FC9C89F0415C92eBf3C4',
-  block: {
-    number: 25330572 ,
-  },
-});
-
-const erc20s = <const>([ USDC, COMP, WBTC, WETH, WMATIC, MATICX, USDT, STMATIC ]);
+const erc20s = [ COMP ] as const;
 
 const CometAdmin = UntypedContract('CometAdmin', <const>{
   network: 'polygon-mainnet',
@@ -114,35 +42,6 @@ const Comet_Rewards = UntypedContract('cUSDCv3Rewards', <const>{
   },
 });
 
-const USDC_USD_priceFeed = PriceFeed(<const>{
-  decimals: 8,
-  network: 'polygon-mainnet',
-  address: '0xfE4A8cc5b5B2366C1B58Bea3858e81843581b2F7',
-  block: {
-    number: 6275360,
-  },
-});
-
-const COMP_USD_priceFeed = PriceFeed(<const>{
-  aliases: ['COMP-USD'],
-  decimals: 8,
-  network: 'polygon-mainnet',
-  address: '0x2A8758b7257102461BC958279054e372C2b1bDE6',
-  block: {
-    number: 16646407,
-  },
-});
-
-const USDT_USD_priceFeed = PriceFeed(<const>{
-  decimals: 8,
-  network: 'polygon-mainnet',
-  address: '0x0A6513e40db6EB1b165753AD52E80663aeA50545',
-  block: {
-    number: 6275356,
-    timestamp: 1603802811
-  },
-});
-
 const Bulker = UntypedContract('Bulker', {
   aliases: ['01-usdc', 'cUSDCv3', '01-usdt', 'cUSDTv3'],
   network: 'polygon-mainnet',
@@ -154,7 +53,6 @@ const Bulker = UntypedContract('Bulker', {
 
 const markets = <const>([
   CometAdmin, Comet_Rewards, CometFactory, Bulker,
-  COMP_USD_priceFeed, USDC_USD_priceFeed, USDT_USD_priceFeed,
 ]);
 
 const Configurator = UntypedContract('Configurator', <const>{

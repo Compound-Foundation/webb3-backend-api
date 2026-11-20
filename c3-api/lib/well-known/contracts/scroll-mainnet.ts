@@ -1,41 +1,9 @@
 import {
   ERC20,
-  PriceFeed,
   UntypedContract,
   StaticWellKnownContracts,
 } from './utils.js';
 
-const USDC = ERC20('USDC', <const>{
-  description: 'USD Coin',
-  decimals: 6,
-  network: 'scroll-mainnet',
-  address: '0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4',
-  block: {
-    number: 37,
-    timestamp: 1696919085
-  },
-});
-const wstETH = ERC20('wstETH', <const>{
-  description: 'Lido Wrapped Staked ETH',
-  decimals: 18,
-  network: 'scroll-mainnet',
-  address: '0xf610A9dfB7C89644979b4A0f27063E9e7d7Cda32',
-  block: {
-    number: 136,
-    timestamp: 1696920347
-  },
-});
-const WETH = ERC20('WETH', <const>{
-  aliases: [ 'default' ],
-  description: 'Wrapped Ether',
-  decimals: 18,
-  network: 'scroll-mainnet',
-  address: '0x5300000000000000000000000000000000000004',
-  block: {
-    number: 0,
-    timestamp: 1696917600
-  },
-});
 const COMP = ERC20('COMP', <const>{
   aliases: [ 'default' ],
   description: 'Compound Governance Token',
@@ -48,7 +16,7 @@ const COMP = ERC20('COMP', <const>{
   },
 });
 
-const erc20s = <const>([ USDC, COMP, wstETH, WETH ]);
+const erc20s = [ COMP ] as const;
 
 const CometAdmin = UntypedContract('CometAdmin', <const>{
   network: 'scroll-mainnet',
@@ -78,27 +46,6 @@ const Comet_01usdc_Rewards = UntypedContract('cUSDCv3Rewards', <const>{
   },
 });
 
-const USDC_USD_priceFeed = PriceFeed(<const>{
-  decimals: 8,
-  network: 'scroll-mainnet',
-  address: '0x43d12Fb3AfCAd5347fA764EeAB105478337b7200',
-  block: {
-    number: 308880,
-    timestamp: 1698312294
-  },
-});
-
-// TODO: There is no COMP PF on Scroll
-// const COMP_USD_priceFeed = PriceFeed(<const>{
-//   aliases: ['COMP-USD'],
-//   decimals: 8,
-//   network: 'scroll-mainnet',
-//   address: '0x2A8758b7257102461BC958279054e372C2b1bDE6',
-//   block: {
-//     number: 4481000,
-//   },
-// });
-
 const Bulker_01usdc = UntypedContract('Bulker', <const>{
   aliases: ['01-usdc', 'cUSDCv3'],
   network: 'scroll-mainnet',
@@ -111,7 +58,6 @@ const Bulker_01usdc = UntypedContract('Bulker', <const>{
 
 const market01usdc = <const>([
   CometAdmin, Comet_01usdc_Rewards, CometFactory, Bulker_01usdc,
-  USDC_USD_priceFeed, /*COMP_USD_priceFeed, */
 ]);
 
 const Configurator = UntypedContract('Configurator', <const>{
