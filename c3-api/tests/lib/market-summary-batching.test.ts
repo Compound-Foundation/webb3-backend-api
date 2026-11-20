@@ -112,7 +112,7 @@ function context(evaluations: Promise<unknown>[] = []): Context {
   return { flags, evaluator } as unknown as Context;
 }
 
-// how `handler` failed over every market, once every evaluation it started has ended
+// how `handler` failed over every market, once every evaluation it started has ended, and no more start
 async function failureOf(node: FakeNode, t: Test, handler: typeof marketHandlers.latestSummary): Promise<unknown> {
   serve(t, node);
   const evaluations: Promise<unknown>[] = [];
@@ -120,9 +120,18 @@ async function failureOf(node: FakeNode, t: Test, handler: typeof marketHandlers
     () => null,
     (error: unknown) => error,
   );
-  await Promise.allSettled(evaluations);
+  // a market of the history starts only once its network's block is read, which can be after the route failed
+  for (let waited = -1; waited !== evaluations.length;) {
+    waited = evaluations.length;
+    await Promise.allSettled(evaluations);
+  }
   return failure;
 }
+
+const NETWORKS = [ ...new Set(catalog.markets().map(entry => entry.network)) ];
+
+// what the route asked the node of a network
+const requestsOf = (node: FakeNode, network: string) => node.requests.filter(request => request.network === network);
 
 t.test('the summary of every market makes four node requests per network', async t => {
   const node = nodeOf();
@@ -146,6 +155,34 @@ t.test('the summary of every market makes four node requests per network', async
     const distinct = new Set(calls.map(({ method, params }) => JSON.stringify([ method, params ])));
     t.equal(distinct.size, calls.length, `${network}: no call is sent twice in one batch`);
   }
+});
+
+/*
+ * The rewards of a market are read in one round once the block is known:
+ * each APR reads the base price it divides by beside the reward price and the
+ * rates (rewards-apr.ts), not in a round of its own once they are in.
+ */
+t.test('the rewards of every market make two node requests per network', async t => {
+  const node = nodeOf();
+  serve(t, node);
+
+  const response = await marketHandlers.rewardsDappData(everyMarket(), context());
+  t.equal(response.status, 200);
+
+  const rewarded = catalog.markets().filter(entry => entry.comet.registry.market.capabilities.rewards);
+  const networks = [ ...new Set(rewarded.map(entry => entry.network)) ];
+  for (const network of networks) {
+    const requests = node.requests.filter(request => request.network === network);
+    t.equal(requests.length, 2, `${network}: the latest block, then one round of reads, whatever its market count`);
+  }
+  t.equal(node.requests.length, 2 * networks.length);
+
+  // a market whose APRs divide by the USD price of its base asset, as the rewards summary reads them
+  const wbtc = rewarded.find(entry => entry.comet.address.toLowerCase() === WBTC)!;
+  node.requests.length = 0;
+  const summary = await marketHandlers.latestRewardsSummary({ ...everyMarket(), network: wbtc.network, contract: wbtc.comet }, context());
+  t.equal(summary.status, 200);
+  t.equal(node.requests.length, 2, 'and so does the rewards summary of one market');
 });
 
 /*
@@ -505,4 +542,60 @@ t.test('a market whose base feed reverts answers every field it can', async t =>
 
   const others = (summary: Summary[]) => summary.filter(entry => ![ WBTC, USDC ].includes(entry.comet.address.toLowerCase()));
   t.strictSame(others(reverting), others(reading), 'and every other market as read');
+});
+
+/*
+ * Where the base feed the version names reverts, a market's base asset is
+ * priced through the feed its Comet names at the block: USDC's here, a
+ * market quoted in USD, so its USD price too. Asking the Comet for that feed,
+ * and reading it, takes two rounds after the one that reverted, which the
+ * summary takes anyway for the collateral, so no network sends another
+ * request. The rewards are read in one round, so the network of such a
+ * market takes two more.
+ */
+t.test('a base feed that reverts is read through the Comet\'s in the requests the summary makes anyway', async t => {
+  const own   = marketOf(USDC).baseAsset.priceFeed.address;
+  const OTHER = '0x2222222222222222222222222222222222222222';
+  // USDC's Comet names OTHER for its base asset, which answers 2.0, where the feed the version names reverts
+  const fallingBack = () => fakeNode(snapshot, LATEST, {
+    answer: ({ comet, name, argument }) => {
+      if (comet === USDC && name === 'baseTokenPriceFeed') {
+        return [ OTHER ];
+      }
+      if (comet === USDC && name === 'getPrice' && (argument === own || argument === OTHER)) {
+        return argument === own ? 'revert' : [ 200_000_000 ];
+      }
+      return name === 'getPrice' && PRICES.has(argument!) ? [ PRICES.get(argument!) ] : undefined;
+    },
+  });
+
+  const reading = await summaryFrom(t, nodeOf());
+  const node    = fallingBack();
+  const summary = await summaryFrom(t, node);
+  t.strictSame(entryOf(summary, USDC), {
+    ...entryOf(reading, USDC),
+    total_borrow_value:     '200.0',
+    total_supply_value:     '200.0',
+    base_usd_price:         '2.0',
+    base_price:             '2.0',
+  }, 'USDC: a success, its totals and both prices at the 2.0 of the feed its Comet names');
+  const others = (entries: Summary[]) => entries.filter(entry => entry.comet.address.toLowerCase() !== USDC);
+  t.strictSame(others(summary), others(reading), 'and every other market as read');
+
+  for (const network of NETWORKS) {
+    t.equal(requestsOf(node, network).length, 4, `${network}: four requests, as without the revert`);
+  }
+  for (const { network, calls } of node.requests) {
+    const distinct = new Set(calls.map(({ method, params }) => JSON.stringify([ method, params ])));
+    t.equal(distinct.size, calls.length, `${network}: no call is sent twice in one batch`);
+  }
+
+  const rewarding = fallingBack();
+  serve(t, rewarding);
+  const rewards = await marketHandlers.rewardsDappData(everyMarket(), context());
+  t.equal(rewards.status, 200);
+  t.ok((await rewards.json() as Array<{ status: string }>).every(entry => entry.status === 'success'), 'the rewards of every market are answered');
+  const requestsOn = (network: string) => rewarding.requests.filter(request => request.network === network).length;
+  t.equal(requestsOn('ethereum-mainnet'), 4, 'the rewards of USDC\'s network take two requests more');
+  t.equal(requestsOn('base-mainnet'), 2, 'and those of another network none');
 });

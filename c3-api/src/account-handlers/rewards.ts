@@ -1,8 +1,14 @@
 import * as Eth                from '../../lib/eth-constants.js';
 import * as Fallible           from '../../lib/fallible/fallible.js';
 import { snakeifyCamelObject } from '../../lib/camel-snake.js';
+import { throttle }            from '../../lib/throttle.js';
 
 import * as KnownNetwork from '../../lib/well-known/networks/network.js';
+
+import type { MarketIdentity } from '../../lib/computations/market/market-summary.js';
+import type { PriceError } from '../../lib/computations/comet/get-price.js';
+import { normalizeAddress } from '../../lib/model/comet-registry.js';
+import type { RegistryComet } from '../../lib/model/comet-registry.js';
 
 import type { CatalogMarket } from '../registry/catalog.js';
 
@@ -38,6 +44,62 @@ function rewardGroups(
     }
     return [ ...byRewards.values() ].map(contracts => ({ network, contracts }));
   });
+}
+
+/*
+ * Whether an account's rewards in a market are read, from the token its
+ * rewards contract pays now and the one the registry version describes:
+ *
+ * - `none`: the contract pays nothing for the market, so nothing is owed or
+ *   can be claimed there, and the market is left out, as it always was;
+ * - `read`: it pays the token the version describes, which the amounts are
+ *   read, scaled, priced and labelled as;
+ * - otherwise it pays another token. A version imported from this contract
+ *   cannot get here — CometRewards sets a market's token once
+ *   (`AlreadyConfigured`), and the import reads it there — but the check
+ *   stays, because an amount of one token scaled and priced as another would
+ *   be a wrong number. The market is answered in the error envelope of a
+ *   market whose rewards cannot be valued, until a version describes what it
+ *   pays.
+ */
+type RewardsInclusion = 'none' | 'read' | MarketIdentity & PriceError;
+
+function rewardsInclusion(comet: RegistryComet, paid: Eth.Address): RewardsInclusion {
+  if (paid === Eth.NullAddress) {
+    return 'none';
+  }
+  const described = comet.registry.market.rewardAsset?.token;
+  if (described === undefined) {
+    // validation gives a reward token to every market whose account rewards are served
+    throw new Error(`invariant violated: ${comet.address} pays no reward token`);
+  }
+  if (normalizeAddress(paid) === described.address) {
+    return 'read';
+  }
+  reportMismatch(comet, paid);
+  return {
+    chainId: comet.registry.chainId,
+    comet:   { address: comet.address },
+    status:  'error',
+    message: `the rewards contract pays ${paid}, not the ${described.symbol} the registry version describes`,
+  };
+}
+
+/*
+ * When this isolate reports each market whose rewards contract pays another
+ * token than the version describes. That never happens to a version imported
+ * from the contract, so the line says the version was not built from it; the
+ * chain drift check does not read reward tokens, so the line is what tells an
+ * operator to import the market again. Once a minute per market names it for
+ * as long as it lasts, as a feed that reverts is named (get-price.ts).
+ */
+const due = throttle(60_000);
+
+function reportMismatch(comet: RegistryComet, paid: Eth.Address): void {
+  if (!due(`${comet.network}:${comet.address.toLowerCase()}`)) {
+    return;
+  }
+  console.warn(`reward token differs from the registry: ${comet.address} on ${comet.network} pays ${paid}, the version describes ${comet.registry.market.rewardAsset?.token.address}`);
 }
 
 async function rewardsSummary(
@@ -80,8 +142,12 @@ async function rewardsSummary(
                 if (!accountComputations.accountRewards.index.covers(origin)) {
                   return evaluator.value(unreachedMarket(contracts[index], latestBlock));
                 }
-                if (rewardConfig.rewardConfig.rewardToken === Eth.NullAddress) {
+                const inclusion = rewardsInclusion(contracts[index]!, rewardConfig.rewardConfig.rewardToken);
+                if (inclusion === 'none') {
                   return evaluator.value('SKIP' as const);
+                }
+                if (inclusion !== 'read') {
+                  return evaluator.value(inclusion);
                 }
                 const accountRewards = Fallible.must(accountComputations.accountRewards.index.project(origin));
                 return evaluator.pull1({ accountRewards });
@@ -110,4 +176,4 @@ async function rewardsSummary(
   return new Response(JSON.stringify(flattedAccountRewards));
 }
 
-export { rewardGroups, rewardsSummary };
+export { rewardGroups, rewardsInclusion, rewardsSummary };

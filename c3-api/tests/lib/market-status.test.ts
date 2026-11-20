@@ -36,7 +36,6 @@ const MAINNET = 'ethereum-mainnet' as const;
 const USDC    = '0xc3d688b66703497daa19211eedff47f25384cdc3';
 const WBTC    = '0xe85dc543813b8c2cfeaac371517b925a166a9293';
 const AERO    = '0x784efeb622244d2348d4f2522f8860b96fbece89';
-const COMP    = '0xc00e94cb662c3520282e6f5717214004a7f26888';
 const WETH    = '0xa17581a9e3356d9a858b789d68b4d866e593ae94';
 const ACCOUNT = '0x1111111111111111111111111111111111111111';
 
@@ -85,8 +84,9 @@ function answers(reverting: string[]) {
     if (name === 'ethGetBlock') {
       return LATEST;
     }
+    // each rewards contract pays the token the version describes for its market
     if (name === 'getRewardConfigsSleuth') {
-      return context.cometMarkets.map(() => ({ rewardConfig: { rewardToken: COMP } }));
+      return context.cometMarkets.map((market: any) => ({ rewardConfig: { rewardToken: market.rewards.asset.address } }));
     }
     const comet = { address: context.contract.address };
     if (reverting.includes(comet.address.toLowerCase())) {
@@ -251,8 +251,8 @@ t.test('the rewards summary reads the reward feed its version states', async t =
   t.equal(asked.length, 1, 'one summary is asked for');
   t.equal(asked[0].rewardsTokenPriceFeed, feed, 'of the feed the version states');
   t.equal(
-    await rewards.rewardsSummary.key('rewardsSummary-v3', asked[0]),
-    `rewardsSummary-v3:(block:${asked[0].block.number};contract:${usdc.key()};network:${MAINNET};`
+    await rewards.rewardsSummary.key('rewardsSummary-v5', asked[0]),
+    `rewardsSummary-v5:(block:${asked[0].block.number};contract:${usdc.key()};network:${MAINNET};`
       + `rewardsTokenPriceFeed:(address:${feed.address};decimals:${feed.decimals}))`,
     'and kept under that feed',
   );

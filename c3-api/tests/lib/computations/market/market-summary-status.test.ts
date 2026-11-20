@@ -1,13 +1,8 @@
 import t from 'tap';
 
-import * as Debug    from '../../../../lib/debug-log.js';
 import * as Flags    from '../../../../lib/flags.js';
 import { BigNumber } from '../../../../lib/bignumber.js';
 import { BigFixnum } from '../../../../lib/bigfixnum.js';
-
-import * as Compute    from '../../../../lib/symbolic/computation.js';
-import * as Evaluator  from '../../../../lib/symbolic/evaluator.js';
-import { MemoryCache } from '../../../../lib/symbolic/cache.js';
 
 import * as comet  from '../../../../lib/computations/comet.js';
 import * as market from '../../../../lib/computations/market.js';
@@ -16,6 +11,7 @@ import { collateralValue } from '../../../../lib/computations/market/collaterals
 
 import { catalogOf } from '../../../../src/registry/catalog.js';
 
+import { evaluatorOver, stub } from '../../../util/evaluator.js';
 import { fixtureCatalog, loadRegistrySnapshotFixture } from '../../../util/registry-fixture.js';
 
 import '../../../../shim/node-self.js';
@@ -26,7 +22,6 @@ import '../../../../shim/node-self.js';
  * answer from a table instead of a node.
  */
 const flags = Flags.parseWithDefaults(process.env);
-const debug = Debug.MakeLogger([]).configure(process.env);
 
 const network = 'ethereum-mainnet' as const;
 const usdt    = fixtureCatalog().marketsOn(network).find(entry => entry.deploymentKey === 'usdt')!.comet;
@@ -41,13 +36,9 @@ const one = (decimals = 8) => BigFixnum.from({ decimals, value: BigNumber.from(1
 const read     = (price: BigFixnum) => ({ status: 'success' as const, price });
 const reverted = { status: 'error' as const, message: 'execution reverted' };
 
-function stub(answer: (context: any) => unknown) {
-  return Compute.Functor<any>({}).implement({ version: 0, compute: context => answer(context) });
-}
-
-function evaluator(computations: Record<string, unknown>) {
-  const cache = new MemoryCache({}, [ BigFixnum.JsonReviver, BigNumber.JsonReviver ]);
-  return Evaluator.instantiate<any>(computations as any, { cache, debug, flags });
+// on the algorithm the environment sets, unless a test names one
+function evaluator(computations: Record<string, unknown>, algorithm: 'recursive' | 'workingset' = flags.evaluatorAlgorithm) {
+  return evaluatorOver(computations, { algorithm });
 }
 
 /*
@@ -104,6 +95,103 @@ t.test('a collateral that reverts makes the market partial', async t => {
     ],
   }, 'the rest of the market is reported in full, and its value leaves the collateral out');
   t.notOk('message' in (summary as any), 'the market itself carries no message');
+});
+
+/*
+ * The base asset's USD price is in USD whatever unit the market quotes in,
+ * so it is read from the feed the version's quote calls for, at the scale
+ * the version states, and never from whichever feed happens to be there. On
+ * a market quoted in USD it is the base price, whose feed answers here, so
+ * the Comet is not asked for its own.
+ */
+t.test('the base asset\'s USD price is read from the feed the quote calls for', async t => {
+  const feeds: string[] = [];
+  const { evaluate, pull1 } = evaluator({
+    baseUsdPrice:   comet.baseUsdPrice,
+    basePrice:      comet.basePrice,
+    getPrice:       stub(({ priceFeed }) => { feeds.push(`${priceFeed.address.toLowerCase()}/${priceFeed.decimals}`); return read(one()); }),
+    cometBasePrice: stub(() => { feeds.push('the Comet\'s feed'); return read(one()); }),
+  });
+  const priceOf = (contract: typeof usdt) => evaluate(pull1({
+    baseUsdPrice: { apiHost: '', nodeHost: '', nodeKey: '', network, contract, blockNumber: block.number },
+  }));
+  const snapshot = loadRegistrySnapshotFixture();
+  const marketOf = (key: string) => snapshot.networks.find(entry => entry.chainId === 1)!.markets.find(each => each.deploymentKey === key)!;
+  const comets   = fixtureCatalog();
+  const cometOf  = (key: string) => comets.marketsOn(network).find(entry => entry.deploymentKey === key)!.comet;
+
+  await priceOf(cometOf('usdt'));
+  await priceOf(cometOf('weth'));
+  await priceOf(cometOf('wbtc'));
+  t.strictSame(feeds, [
+    `${marketOf('usdt').baseAsset.priceFeed.address}/8`,
+    `${marketOf('weth').baseAsset.usdPriceFeed!.address}/8`,
+    `${marketOf('wbtc').baseAsset.usdPriceFeed!.address}/8`,
+  ], 'USDT through its own USD feed; WETH through ETH / USD and WBTC through BTC / USD, the units their own feeds answer in');
+
+  const unconverted = catalogOf({
+    ...snapshot,
+    networks: snapshot.networks.map(entry => entry.chainId !== 1 ? entry : {
+      ...entry,
+      markets: entry.markets.map(each => each.deploymentKey !== 'weth' ? each : { ...each, baseAsset: { ...each.baseAsset, usdPriceFeed: null } }),
+    }),
+  }).marketsOn(network).find(entry => entry.deploymentKey === 'weth')!.comet;
+  await t.rejects(priceOf(unconverted), /quoted in its base asset without a USD feed/,
+    'a market quoted in its base asset without one, which validation refuses, is not priced through its own feed instead');
+});
+
+/*
+ * A market's base price is read from the feed the version names for its base
+ * asset, at the scale the version states. The Comet is asked for its own feed
+ * only where that one reverts, and here it answers, so the evaluator below
+ * has nothing to answer such a call with. A market quoted in USD prices its
+ * base asset in USD with that same read, which the summary route's evaluator
+ * then makes once for both.
+ */
+t.test('the base price is read from the feed the version names', async t => {
+  const reads: string[] = [];
+  const { evaluate, pull1 } = evaluator({
+    marketSummary: market.marketSummary,
+    basePrice:     comet.basePrice,
+    baseUsdPrice:  comet.baseUsdPrice,
+    getPrice:      stub(({ priceFeed }) => { reads.push(`${priceFeed.address.toLowerCase()}/${priceFeed.decimals}`); return read(one()); }),
+    borrowApr:     stub(() => BigFixnum.from({ decimals: 2, value: 5 })),
+    supplyApr:     stub(() => BigFixnum.from({ decimals: 2, value: 3 })),
+    totalBorrow:   stub(() => BigFixnum.from({ value: 10 })),
+    totalSupply:   stub(() => BigFixnum.from({ value: 20 })),
+    collaterals:   stub(() => []),
+    utilization:   stub(() => BigFixnum.from({ decimals: 2, value: 50 })),
+  }, 'workingset');
+  const summaryAt = (contract: typeof usdt) => evaluate(pull1({
+    marketSummary: { apiHost: '', nodeHost: '', nodeKey: '', network, contract, block },
+  }));
+
+  const snapshot = loadRegistrySnapshotFixture();
+  const marketOf = (key: string) => snapshot.networks.find(entry => entry.chainId === 1)!.markets.find(each => each.deploymentKey === key)!;
+  t.match(await summaryAt(usdt), { status: 'success' });
+  t.strictSame(reads, [ `${marketOf('usdt').baseAsset.priceFeed.address}/8` ],
+    'USDT: its base feed, read once for its base price and its USD price');
+
+  reads.length = 0;
+  const weth = fixtureCatalog().marketsOn(network).find(entry => entry.deploymentKey === 'weth')!.comet;
+  await summaryAt(weth);
+  t.strictSame(reads.sort(), [ `${marketOf('weth').baseAsset.priceFeed.address}/8`, `${marketOf('weth').baseAsset.usdPriceFeed!.address}/8` ].sort(),
+    'WETH: its own feed, which answers in ETH, and ETH / USD');
+
+  const MOVED = '0x2222222222222222222222222222222222222222';
+  const moved = catalogOf({
+    ...snapshot,
+    networks: snapshot.networks.map(entry => entry.chainId !== 1 ? entry : {
+      ...entry,
+      markets: entry.markets.map(each => each.deploymentKey !== 'usdt' ? each : {
+        ...each,
+        baseAsset: { ...each.baseAsset, priceFeed: { address: MOVED as `0x${string}`, decimals: 18 } },
+      }),
+    }),
+  }).marketsOn(network).find(entry => entry.deploymentKey === 'usdt')!.comet;
+  reads.length = 0;
+  await summaryAt(moved);
+  t.strictSame(reads, [ `${MOVED}/18` ], 'a version that names another feed is priced through it, at the scale it states');
 });
 
 t.test('a base price that reverts makes the market an error', async t => {

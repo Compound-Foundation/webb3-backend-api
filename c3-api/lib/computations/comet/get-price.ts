@@ -2,6 +2,7 @@ import { BigFixnum }    from '../../bigfixnum.js';
 import * as Eth         from '../../eth-constants.js';
 import * as Key         from '../../symbolic/key.js';
 import * as abiFunction from '../abi-function.js';
+import { throttle }     from '../../throttle.js';
 
 /*
  * A price as a Comet reads it, or why it could not be read.
@@ -21,15 +22,14 @@ type GetPrice = abiFunction.Spec<{
       address: Eth.Address,
       decimals: number,
     },
-    // a read whose revert the caller reports, or answers another way (asset-price.ts)
+    // a read whose revert the caller reports, or answers another way (asset-price.ts, base-price.ts)
     unreported?: true,
   },
   returns: PriceRead,
 }>;
 
 /*
- * When this isolate last reported each feed that reverts, by network and
- * feed.
+ * When this isolate reports each feed that reverts, by network and feed.
  *
  * A retired feed is an expected degradation — the summary reports the price
  * it could not read beside the ones it could — so the line is a warning. It
@@ -38,18 +38,12 @@ type GetPrice = abiFunction.Spec<{
  * minute per feed still names it for as long as it reverts, which is what an
  * operator looks for and what an alert matches.
  */
-const reported = new Map<string, number>();
-
-const REPORT_EVERY_MS = 60_000;
+const due = throttle(60_000);
 
 function reportRevert(message: string, feed: Eth.Address, comet: Eth.Address, network: string, blockNumber: unknown): void {
-  const key  = `${network}:${feed.toLowerCase()}`;
-  const at   = Date.now();
-  const last = reported.get(key);
-  if (last !== undefined && at - last < REPORT_EVERY_MS) {
+  if (!due(`${network}:${feed.toLowerCase()}`)) {
     return;
   }
-  reported.set(key, at);
   console.warn(`price feed reverted: ${feed} read by ${comet} on ${network} at block ${blockNumber}: ${message}`);
 }
 

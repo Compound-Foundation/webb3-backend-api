@@ -1,4 +1,6 @@
-import type { PriceFeedV1, RegistryComet } from '../../model/comet-registry.js';
+import type { RegistryComet } from '../../model/comet-registry.js';
+
+import { convertsToUsd, usdPriceFeedOf } from '../comet/base-usd-price.js';
 
 /*
  * A rewards APR divides the annual value of the rewards by the value of the
@@ -12,12 +14,14 @@ import type { PriceFeedV1, RegistryComet } from '../../model/comet-registry.js';
  *
  * The registry states both units and the USD feed, so this replaces the
  * branches on network and display name that used to encode the same four
- * markets by hand.
+ * markets by hand. The feed is the one BaseUsdPrice reads, so a market quoted
+ * in its base asset without one, which validation refuses, fails here as its
+ * summary does rather than being measured in its base asset.
  */
-function usdBasePriceFeedFor(contract: RegistryComet): PriceFeedV1 | null {
+function usdBasePriceFeedFor(contract: RegistryComet): RegistryComet['base']['priceFeed'] | null {
   const market = contract.registry.market;
-  return market.rewardAsset?.priceFeedQuote === 'usd' && market.collateralValueQuote === 'base'
-    ? market.baseAsset.usdPriceFeed
+  return market.rewardAsset?.priceFeedQuote === 'usd' && convertsToUsd(market)
+    ? usdPriceFeedOf(contract)
     : null;
 }
 

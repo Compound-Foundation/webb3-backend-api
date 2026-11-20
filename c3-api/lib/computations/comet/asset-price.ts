@@ -115,4 +115,4 @@ const assetPrice = implement({
   ]),
 });
 
-export { AssetPrice, assetPrice, exceptionFor };
+export { AssetPrice, assetPrice, decimalsOf, exceptionFor };

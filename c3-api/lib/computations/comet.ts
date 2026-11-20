@@ -2,6 +2,7 @@ import { GetPrice             } from './comet/get-price.js';
 import { NumAssets            } from './comet/num-assets.js';
 import { AssetInfo            } from './comet/asset-info.js';
 import { BasePrice            } from './comet/base-price.js';
+import { CometBasePrice       } from './comet/comet-base-price.js';
 import { BalanceOf            } from './comet/balance-of.js';
 import { AssetPrice           } from './comet/asset-price.js';
 import { TotalSupply          } from './comet/total-supply.js';
@@ -28,6 +29,7 @@ export type Comet = (
   | NumAssets
   | AssetInfo
   | BasePrice
+  | CometBasePrice
   | BalanceOf
   | AssetPrice
   | TotalSupply
@@ -62,6 +64,11 @@ export { TotalSupply,  totalSupply  } from './comet/total-supply.js';
 export { TotalBorrow,  totalBorrow  } from './comet/total-borrow.js';
 export { Utilization,  utilization  } from './comet/utilization.js';
 export { Symbol,       symbol       } from './comet/symbol.js';
+
+export {
+  CometBasePrice,
+  cometBasePrice,
+} from './comet/comet-base-price.js';
 
 export {
   SupplyRatePerSecond,
