@@ -72,6 +72,8 @@ type Item = { network: Network, block: number, n?: number, from?: string, logs?:
 type History = {
   latest: Partial<Record<Network, number>>,
   items:  Item[],
+  // the most logs the node answers at once; more and it refuses the call, as a provider does and as the proxy masks it
+  cap?:   number,
   // what the node was asked, by the page that asked it
   asked:  Map<number, Array<{ network: Network, method: string, fromBlock?: number, toBlock?: number }>>,
 };
@@ -145,14 +147,17 @@ function answer(history: History, network: Network, { method, params }: Call): o
       const matches = (condition: Condition, topic: string | undefined) => (
         condition === null || [ condition ].flat().some(value => value.toLowerCase() === topic)
       );
-      return { result: history.items
+      const logs = history.items
         .filter(item => item.network === network && item.block >= parseInt(fromBlock, 16) && item.block <= parseInt(toBlock, 16))
         .flatMap(logsOf)
         .sort((a, b) => parseInt(a.blockNumber, 16) - parseInt(b.blockNumber, 16) || parseInt(a.logIndex, 16) - parseInt(b.logIndex, 16))
         .filter(log => true
           && address.some(contract => contract.toLowerCase() === log.address)
           && topics.every((condition, index) => matches(condition, log.topics[index]))
-        ) };
+        );
+      return history.cap !== undefined && logs.length > history.cap
+        ? { error: { code: -32000, message: 'upstream error' } }
+        : { result: logs };
     }
     // getAllProxies: the account has no DeFi Saver proxy
     case 'eth_call': return { result: defaultAbiCoder.encode([ 'address', 'address[]' ], [ Eth.NullAddress, [] ]) };
@@ -271,6 +276,25 @@ t.test('a history older than ten ranges of 50,000 blocks is answered, and done o
   t.equal(pages.length, 1, 'one page');
   t.same(pages[0]!.items, items.map(hashOf), 'answers both, newest first');
   t.equal(pages[0]!.done, true, 'and is done: it has read every stream to its first block');
+});
+
+/*
+ * A very active account: forty Base items in the newest range, where the node
+ * answers at most six logs at once and refuses a call for more, as providers
+ * refuse a range too full for one answer and as the proxy masks it. Every
+ * call for a whole range of ten million blocks is refused. Before, the page
+ * failed with 503 UPSTREAM_UNAVAILABLE, whatever its filter.
+ */
+t.test('a very active account, whose ranges hold more logs than the node answers at once, is answered', async t => {
+  const latest = FIRST['base-mainnet'] + 2 * BASE + 9_000_000;
+  const items: Item[] = Array.from({ length: 40 }, (_, index) => ({ network: 'base-mainnet' as const, block: latest - 100_000 * (index + 1) }));
+  const { pages, asked } = await walk(t, 'busy', { latest: { 'ethereum-mainnet': MAINNET_LATEST, 'base-mainnet': latest }, items, cap: 6 }, 'limit=50');
+
+  t.ok(pages.every(page => page.status === 200), 'every page is answered', { statuses: pages.map(page => page.status) });
+  t.same(pages.flatMap(page => page.items), items.map(hashOf), 'and the pages hold all forty items, newest first');
+  t.equal(pages[pages.length - 1]!.done, true, 'the last one done');
+  const based = rangesAsked(asked, 1, 'base-mainnet');
+  t.ok(based.some(([ from, to ]) => to - from + 1 <= 9_000_000 / 8), 'Base was read in parts of its newest range', { ranges: based.length });
 });
 
 /*

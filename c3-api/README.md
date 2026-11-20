@@ -611,8 +611,9 @@ NOTE that the node endpoint for the network _must_ support all of the
 `eth_*` JSON-RPCs corresponding with the computations defined in
 `lib/computations/evm`. For example, `lib/computations/evm/eth-call.ts`
 requires `eth_call` support; `lib/computations/evm/eth-get-logs.ts`
-requires `eth_getLogs` support, with arbitrarily-sized block ranges; and
-so on.
+requires `eth_getLogs` support, with block ranges of any size; a range
+the node refuses, as providers refuse one whose logs do not fit a single
+answer, is read again in halves; and so on.
 
 1. Adding a network description
 
