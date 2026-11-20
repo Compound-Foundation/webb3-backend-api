@@ -3,11 +3,17 @@ import type { Test } from 'tap';
 import { Interface, defaultAbiCoder, type FunctionFragment } from '@ethersproject/abi';
 import { BigNumber } from '@ethersproject/bignumber';
 
+import * as Eth from '../../lib/eth-constants.js';
+
+import type * as KnownNetwork from '../../lib/well-known/networks/network.js';
 import type { RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
 
 /*
  * A node provider for the reads of Comet markets, answering from a registry
- * snapshot at one latest block. What a Comet is made of is answered as the
+ * snapshot at one latest block. A block below it is as many seconds older as
+ * its distance times the network's average block time (eth-constants.ts), so
+ * a search by timestamp finds the first block of a day where the average
+ * puts it. What a Comet is made of is answered as the
  * snapshot describes it: its collaterals, by asset index; its base asset's
  * feed; its tokens' symbols. Of its values, a market holds one unit of every
  * collateral, its totals are accrued at the latest block, and every other
@@ -93,10 +99,18 @@ function fakeNode(snapshot: RegistrySnapshotV1, latest: Block, script: NodeScrip
 
   const answer = (network: string, { id, method, params }: Call) => {
     if (method === 'eth_getBlockByNumber') {
-      const block = script.block?.() ?? latest;
-      return block === 'fail'
-        ? { jsonrpc: '2.0', id, error: { code: -32000, message: 'header not found' } }
-        : { jsonrpc: '2.0', id, result: { number: `0x${block.number.toString(16)}`, timestamp: `0x${block.timestamp.toString(16)}`, transactions: [] } };
+      const head = script.block?.() ?? latest;
+      if (head === 'fail') {
+        return { jsonrpc: '2.0', id, error: { code: -32000, message: 'header not found' } };
+      }
+      const [ tag ] = params;
+      const number  = tag === 'latest' ? head.number : Number.parseInt(tag, 16);
+      if (number > head.number) {
+        return { jsonrpc: '2.0', id, result: null };
+      }
+      const age   = Math.floor((head.number - number) * Eth.estimateSecondsTakenForBlock(network as KnownNetwork.Name, head));
+      const block = { number, timestamp: head.timestamp - age };
+      return { jsonrpc: '2.0', id, result: { number: `0x${block.number.toString(16)}`, timestamp: `0x${block.timestamp.toString(16)}`, transactions: [] } };
     }
     const [ { to, data }, tag ] = params;
     const contract = to.toLowerCase();
