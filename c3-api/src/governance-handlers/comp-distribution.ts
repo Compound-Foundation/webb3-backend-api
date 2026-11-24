@@ -6,6 +6,7 @@ import * as Index from '../../lib/symbolic/index.js';
 
 import { ctokenv2s } from '../../lib/well-known/contracts/ethereum-mainnet.js';
 
+import { jsonResponse } from '../http/json.js';
 import { AllContracts, GovernanceRouteData } from '../router.js';
 
 import type { Context } from './handlers.js';
@@ -97,7 +98,7 @@ async function getCompDistribution(
     markets: marketDistributionData,
   }
 
-  return new Response(JSON.stringify(responseData));
+  return jsonResponse(responseData);
 }
 
 const estimateDailyCompFromSpeed = (compPerBlock: BigFixnum) => {

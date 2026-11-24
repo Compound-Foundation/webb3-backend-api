@@ -87,6 +87,12 @@ envelope: the market, governance and account endpoints still answer it with
 a `400` and a short message — a line of plain text, or `{"error": "…"}`
 from some market endpoints.
 
+The market, account and governance endpoints and `/legacy/mainnet/ctokens`
+send what they answer in JSON — their data, the envelope, and the
+`{"error": "…"}` of some market endpoints — as
+`application/json; charset=utf-8`, like the registry. Only their `400` lines
+of plain text are sent as `text/plain;charset=UTF-8`.
+
 ## Market status
 
 Every price is read through its feed's `latestRoundData`, which reverts once

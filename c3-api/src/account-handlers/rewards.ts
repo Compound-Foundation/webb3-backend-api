@@ -6,6 +6,7 @@ import * as KnownNetwork from '../../lib/well-known/networks/network.js';
 
 import type { CatalogMarket } from '../registry/catalog.js';
 
+import { jsonResponse } from '../http/json.js';
 import { unreachedMarket } from '../market.js';
 import { AccountRouteData } from '../router.js';
 
@@ -107,7 +108,7 @@ async function rewardsSummary(
   }));
 
   const flattedAccountRewards = accountRewards.flat();
-  return new Response(JSON.stringify(flattedAccountRewards));
+  return jsonResponse(flattedAccountRewards);
 }
 
 export { rewardGroups, rewardsSummary };
