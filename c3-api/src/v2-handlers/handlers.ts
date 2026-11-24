@@ -19,4 +19,3 @@ export type {
 };
 
 export { getCTokens } from './ctokens.js';
-export { getGasPrice } from './gas-price.js';

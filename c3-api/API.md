@@ -828,26 +828,16 @@ $ curl 'localhost:8787/legacy/mainnet/ctokens'
 ## `/legacy/mainnet/gas-price`
 ### description:
 
-Retreive gas prices for Ethereum mainnet.
+Retired. It served gas prices to the V2 app. Every `GET` is answered with
+`410` and the code `GONE`, in the [envelope](#errors), with the header
+`Deprecation: @1793923200`: the instant the route was deprecated,
+2026-11-06T00:00:00Z, in seconds since the epoch, as RFC 9745 writes it.
 
 ```sh
 $ curl 'localhost:8787/legacy/mainnet/gas-price'
 ```
 ```json
-{
-   "fastest":{
-      "value":"23000000000"
-   },
-   "fast":{
-      "value":"23000000000"
-   },
-   "average":{
-      "value":"23000000000"
-   },
-   "safe_low":{
-      "value":"23000000000"
-   }
-}
+{ "error": { "code": "GONE", "message": "/legacy/mainnet/gas-price is retired", "requestId": "4f6c1a2e-…" } }
 ```
 
 ## `/account/{account_address}/transaction_history`

@@ -76,6 +76,14 @@ const AllNetworks = 'all-networks' as const;
  */
 const DefaultCompContract = 'comp' as const;
 
+/*
+ * When /legacy/mainnet/gas-price was deprecated, in seconds since the epoch:
+ * 2026-11-06T00:00:00Z, the day its retirement was decided. The route sends
+ * it in its Deprecation header as `@` and the seconds, the form RFC 9745
+ * gives that header.
+ */
+const GAS_PRICE_DEPRECATED_AT = 1793923200;
+
 interface MarketRouteData {
   apiHost: string;
   nodeHost: string;
@@ -260,14 +268,18 @@ async function unsafeRoute(
       );
     }
     /*
-     * /legacy/mainnet/gas-price
-     * NOTE: does not depend on an evaluator.
+     * /legacy/mainnet/gas-price, retired: it served the V2 app gas prices
+     * from an API that no longer answers, and failed every request. It reads
+     * nothing, and answers 410 in the envelope with the instant it was
+     * deprecated.
      */
     else if (true
       && route.startsWith('/legacy/mainnet/gas-price')
       && request.method === 'GET'
     ) {
-      return v2Handlers.getGasPrice(context.env.BLOCK_NATIVE_API_KEY || '');
+      throw new ApiError('GONE', `/legacy/mainnet/gas-price is retired`, undefined, {
+        'Deprecation': `@${GAS_PRICE_DEPRECATED_AT}`,
+      });
     }
     /*
      * /account/{wallet-address}/transaction_history

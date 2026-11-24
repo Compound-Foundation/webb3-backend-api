@@ -15,6 +15,7 @@ type ApiErrorCode = (
   | 'NOT_FOUND'
   | 'METHOD_NOT_ALLOWED'
   | 'CONFLICT'
+  | 'GONE'
   | 'PAYLOAD_TOO_LARGE'
   | 'UNPROCESSABLE'
   | 'RATE_LIMITED'
@@ -33,6 +34,7 @@ const STATUS: Record<ApiErrorCode, number> = {
   NOT_FOUND:                404,
   METHOD_NOT_ALLOWED:       405,
   CONFLICT:                 409,
+  GONE:                     410,
   PAYLOAD_TOO_LARGE:        413,
   UNPROCESSABLE:            422,
   RATE_LIMITED:             429,
