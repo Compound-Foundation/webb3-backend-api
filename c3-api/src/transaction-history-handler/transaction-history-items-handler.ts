@@ -699,6 +699,20 @@ async function getTransactionHistory(
   const actions = queryParams.get('actions[]')?.split(',') ?? [];
   const initiatedBy = queryParams.get('initiated_by[]')?.split(',') ?? [];
 
+  /*
+   * A limit is decimal digits alone, not all of them zeros: a count of 1 or
+   * more, which parseInt above reads whole and Math.min below caps. Leading
+   * zeros are accepted, as parseInt reads them in decimal, and so is any
+   * number of digits, which the cap makes MAX_ITEMS_LIMIT. Anything else is
+   * refused before anything is read. parseInt alone would read 1.5 as 1 and
+   * 0x10 as 16, and make of 0, a negative number or text a page of no items
+   * that is not done, whose cursor stays where it was, so that a client that
+   * pages until the history is done never gets there.
+   */
+  const limitParam = queryParams.get('limit');
+  if (limitParam !== null && !/^0*[1-9][0-9]*$/.test(limitParam)) {
+    return new Response(`Invalid limit ${limitParam}`, { status: 400 });
+  }
   // Max to be MAX_ITEMS_LIMIT items
   const itemsLimit = Math.min(limit, MAX_ITEMS_LIMIT);
 
