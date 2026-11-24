@@ -987,6 +987,16 @@ $ curl 'localhost:8787/account/0xcfc50541c3dEaf725ce738EF87Ace2Ad778Ba0C5/transa
 }
 ```
 
+`markets[]`, `actions[]` and `initiated_by[]` each take one value or more,
+with the parameter repeated, as in `actions[]=Borrow&actions[]=Supply`,
+separated by commas, as in `actions[]=Borrow,Supply`, or both. Spaces around
+a value and empty values are left out, and a value named more than once
+counts once. `actions[]` takes `Claim`, `Repay`, `Supply`, `Borrow`,
+`Seized`, `Transfer`, `Withdraw` and `Refund`, and `initiated_by[]` takes
+`me` and `other`, both in any case; any other value is a `400` that names
+it, `Invalid action …` or `Invalid initiated by …`. Every market of
+`markets[]` is checked as above.
+
 # Registry v1
 
 Everything under `/registry/v1` is answered by the registry, including its
