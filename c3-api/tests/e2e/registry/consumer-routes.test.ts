@@ -267,25 +267,9 @@ t.test('without an active version the market and account routes fail explicitly'
     t.equal(response.headers.get('x-registry-version'), null, 'and no version, because none answered');
   }
 
-  // blocknative's estimates, in gwei, by the confidence the route labels them with
-  fetch.expect(Eth.mainnetGasPriceEndpoint).returns(JSON.stringify({
-    blockPrices: [ {
-      estimatedPrices: [
-        { confidence: 99, price: 40 },
-        { confidence: 95, price: 30 },
-        { confidence: 90, price: 25 },
-        { confidence: 80, price: 20 },
-      ],
-    } ],
-  }));
   const gasPrice = await get(env, '/legacy/mainnet/gas-price');
-  t.equal(gasPrice.status, 200, 'a route that needs no registry is unaffected');
-  t.same(await gasPrice.json(), {
-    fastest:  { value: '40000000000' },
-    fast:     { value: '30000000000' },
-    average:  { value: '25000000000' },
-    safe_low: { value: '20000000000' },
-  }, 'and answers what it was given');
+  t.equal(gasPrice.status, 410, 'a route that needs no registry is unaffected');
+  t.equal((await envelopeOf(t, gasPrice)).code, 'GONE', 'and answers that it is retired');
 
   /*
    * A path that names no market endpoint is the client's mistake whatever

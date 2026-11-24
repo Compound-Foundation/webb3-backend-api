@@ -99,7 +99,6 @@ function nodeEndpoint(nodeHost:string, nodeKey:string, network: KnownNetwork.Nam
   return `https://${nodeHost}/${network}/${nodeKey}`;
 }
 
-const mainnetGasPriceEndpoint = `https://api.blocknative.com/gasprices/blockprices`;
 const governanceTallyQueryEndpoint = `https://api.tally.xyz/query`;
 
 /*
@@ -464,7 +463,6 @@ export {
   //
   nodeEndpoint,
   parseTransaction,
-  mainnetGasPriceEndpoint,
   wellKnownContractsByNetwork,
   //
   DefiSaverBotAddresses,

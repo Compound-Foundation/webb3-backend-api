@@ -60,7 +60,6 @@ interface Env extends Flags.Env, ServiceBindings {
    */
   MEMORY_CACHE_SEED: string,
   TALLY_API_KEY: string,
-  BLOCK_NATIVE_API_KEY?: string,
   V3_API_HOST: string,
   NODE_PROXY_HOST: string,
   NODE_PROXY_KEY: string,
