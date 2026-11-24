@@ -20,6 +20,7 @@ import {
 } from '../../lib/model/transaction-history/item.js';
 
 import {
+  ActionTypes,
   TransactionHistoryAction,
   RawTransactionHistoryAction,
 } from '../../lib/model/transaction-history/action.js';
@@ -229,6 +230,37 @@ function filterRawTransactionHistoryItem(
   }
 
   return true;
+}
+
+/*
+ * The values of one of the history's list filters, `markets[]`, `actions[]`
+ * or `initiated_by[]`, from every time the request repeats the parameter,
+ * each split on commas: `actions[]=Borrow&actions[]=Supply`, the form most
+ * clients send an array in, names the same two actions as
+ * `actions[]=Borrow,Supply`. A value is trimmed, empty values are dropped,
+ * and a value named more than once counts once, so a cursor's filter
+ * compares as the same list however a page splits, repeats or pads it. A
+ * filter that takes only certain values, `takes`, reads each in any case and
+ * keeps it as `takes` spells it, the spelling items are filtered by, so the
+ * case of an action or an initiator does not change a cursor's filter
+ * either; `unknown` is the first value it does not take.
+ */
+function filterValuesOf(queryParams: URL['searchParams'], name: string, takes?: readonly string[]): { values: string[], unknown?: string } {
+  const values: string[] = [];
+  for (const sent of queryParams.getAll(name).flatMap(param => param.split(','))) {
+    const trimmed = sent.trim();
+    if (trimmed === '') {
+      continue;
+    }
+    const value = takes === undefined ? trimmed : takes.find(known => known.toLowerCase() === trimmed.toLowerCase());
+    if (value === undefined) {
+      return { values, unknown: trimmed };
+    }
+    if (!values.includes(value)) {
+      values.push(value);
+    }
+  }
+  return { values };
 }
 
 // Filter to apply history item
@@ -695,9 +727,16 @@ async function getTransactionHistory(
   const cursor = queryParams.get('cursor');
   // Default limit is MAX_ITMES_LIMIT
   const limit = parseInt(queryParams.get('limit') ?? MAX_ITEMS_LIMIT.toString());
-  const markets = queryParams.get('markets[]')?.split(',') ?? [];
-  const actions = queryParams.get('actions[]')?.split(',') ?? [];
-  const initiatedBy = queryParams.get('initiated_by[]')?.split(',') ?? [];
+  const { values: markets } = filterValuesOf(queryParams, 'markets[]');
+  const { values: actions, unknown: unknownAction } = filterValuesOf(queryParams, 'actions[]', Object.values(ActionTypes));
+  const { values: initiatedBy, unknown: unknownInitiator } = filterValuesOf(queryParams, 'initiated_by[]', [ 'me', 'other' ]);
+  // a value a filter does not take, which would keep no item, is refused by name, as a market is below
+  if (unknownAction !== undefined) {
+    return new Response(`Invalid action ${unknownAction}`, { status: 400 });
+  }
+  if (unknownInitiator !== undefined) {
+    return new Response(`Invalid initiated by ${unknownInitiator}`, { status: 400 });
+  }
 
   // Max to be MAX_ITEMS_LIMIT items
   const itemsLimit = Math.min(limit, MAX_ITEMS_LIMIT);
