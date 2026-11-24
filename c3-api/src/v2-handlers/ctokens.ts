@@ -5,6 +5,7 @@ import * as v2 from '../../lib/model/v2.js';
 import * as Constants from '../../lib/constants.js';
 import * as Type from '../../lib/type-utilities.js';
 import { BigFixnum } from '../../lib/bigfixnum.js';
+import { jsonResponse } from '../http/json.js';
 import { V2RouteData } from '../router.js';
 import { Context } from './handlers.js';
 import { ctokenv2s } from '../../lib/well-known/contracts/ethereum-mainnet.js';
@@ -160,7 +161,7 @@ async function getCTokens(
   const responseData: ResponseData = {
     cToken: cTokenFormattedData,
   }
-  return new Response(JSON.stringify(responseData));
+  return jsonResponse(responseData);
 }
 
 type ResponseData = {

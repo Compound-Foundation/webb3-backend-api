@@ -13,6 +13,7 @@ import {
 } from '../router.js';
 
 import { getPageData, PaginationSummary } from '../pagination.js';
+import { jsonResponse } from '../http/json.js';
 import {
   contractForLocation,
   decodeFunctionDataFromSignature,
@@ -183,10 +184,10 @@ async function getProposals(
     context.debug?.error(`swallowing error:`, { error: e });
   }
 
-  return new Response(JSON.stringify({
+  return jsonResponse({
     proposals: formatProposals(page, network, latestBlock, profilesByAddress),
     pagination_summary: paginationSummary,
-  }));
+  });
 }
 
 // Format the proposal in human-readable UI-ready style.

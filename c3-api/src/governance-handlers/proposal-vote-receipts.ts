@@ -1,6 +1,7 @@
 import * as Eth      from '../../lib/eth-constants.js';
 import * as Constant from '../../lib/constants.js';
 
+import { jsonResponse } from '../http/json.js';
 import { GovernanceRouteData } from '../router.js';
 
 import * as TallyApi        from '../../lib/model/governance/tally.js';
@@ -151,7 +152,7 @@ async function getProposalVoteReceipts(
     proposal_vote_receipts: voteReceiptsPage,
     pagination_summary: paginationSummary,
   };
-  return new Response(JSON.stringify(responseData));
+  return jsonResponse(responseData);
 }
 
 type VoteReceiptsResponseData = {

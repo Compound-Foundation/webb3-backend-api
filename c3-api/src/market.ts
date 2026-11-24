@@ -15,6 +15,7 @@ import { checksumAddress, type RegistryComet } from '../lib/model/comet-registry
 import type { MarketIdentity } from '../lib/computations/market/market-summary.js';
 
 import { ApiError } from './http/errors.js';
+import { jsonResponse } from './http/json.js';
 import type { Catalog } from './registry/catalog.js';
 
 import {
@@ -193,7 +194,7 @@ async function latestSummary(
    * would change its shape with an activation.
    */
   const flattedSummary = summary.flat();
-  return new Response(JSON.stringify(flattedSummary));
+  return jsonResponse(flattedSummary);
 }
 
 async function latestRewardsSummary(
@@ -201,19 +202,19 @@ async function latestRewardsSummary(
   context: RouterContext,
 ): Promise<Response> {
   if (network === AllNetworks) {
-    return new Response(
-      JSON.stringify({
+    return jsonResponse(
+      {
         error: `Invalid network name for route`,
-      }),
+      },
       { status: 400 }
     );
   }
 
   if (contract === AllContracts) {
-    return new Response(
-      JSON.stringify({
+    return jsonResponse(
+      {
         error: `Invalid contract specifier for route`,
-      }),
+      },
       { status: 400 }
     );
   }
@@ -250,7 +251,7 @@ async function latestRewardsSummary(
     },
   ]));
   const snaked = snakeifyCamelObject(rewardsSummary);
-  return new Response(JSON.stringify(snaked));
+  return jsonResponse(snaked);
 }
 
 async function historicalSummary(
@@ -372,7 +373,7 @@ async function historicalSummary(
   );
 
   const flattedSummary = historicalSummary.flat();
-  return new Response(JSON.stringify(flattedSummary));
+  return jsonResponse(flattedSummary);
 }
 
 async function rewardsDappData(
@@ -419,7 +420,7 @@ async function rewardsDappData(
   );
 
   const flattedMarketRewards = marketRewards.flat();
-  return new Response(JSON.stringify(flattedMarketRewards));
+  return jsonResponse(flattedMarketRewards);
 }
 
 export type {

@@ -2,6 +2,7 @@ import * as Eth      from '../../lib/eth-constants.js';
 import * as Constant from '../../lib/constants.js';
 
 import { BigFixnum } from '../../lib/bigfixnum.js';
+import { jsonResponse } from '../http/json.js';
 import { AllContracts, GovernanceRouteData } from '../router.js';
 import { Context } from './handlers.js';
 import { knownGovernanceContracts } from './proposals.js';
@@ -90,7 +91,7 @@ async function getHistory({ apiHost, nodeHost, nodeKey, network, contract }: Gov
     comp_remaining: compRemaining.toString(),
   }
 
-  return new Response(JSON.stringify(responseData));
+  return jsonResponse(responseData);
 }
 
 type HistoryResponseData = {
