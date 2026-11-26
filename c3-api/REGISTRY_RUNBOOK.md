@@ -23,26 +23,44 @@ Everything here works on one environment at a time, which you choose once,
 before anything else: set `ENVIRONMENT` to the environment's name in
 `wrangler.toml`, as `export ENVIRONMENT=production` does for production.
 Nothing in this runbook sets it again: every command below that reaches an
-environment takes it, and stops while it is not set. Then read the
-environment's address, `API`, from `wrangler.toml`, in the checkout's
-`c3-api`, with its dependencies installed
+environment takes it, and stops while it is not set.
+
+Log in to Cloudflare with `npx wrangler login`, which may do everything this
+runbook does, or set a `CLOUDFLARE_API_TOKEN` that may read Workers KV, the
+environment's zone and its Workers routes (Zone Read and Workers Routes
+Read), and edit Workers scripts. Then read the environment's address, `API`,
+in the checkout's `c3-api`, with its dependencies installed
 ([Getting Started](./README.md#getting-started)):
 
 ```sh
-unset API; npx tsc -p tsconfig.scripts.json && API="$(node dist/scripts/environment-address.js)" && export API && echo "API=$API"
+unset API; npx tsc -p tsconfig.scripts.json && node dist/scripts/environment-routing.js && API="$(node dist/scripts/environment-address.js)" && export API && echo "API=$API"
 ```
 
-It prints the https address of the environment's custom domain, or stops,
-leaving `API` empty, while `ENVIRONMENT` names no environment deployed to one
-custom domain of its own. That is the one address `wrangler.toml` gives:
-Cloudflare creates the custom domain's DNS record, which points to the
-Worker, and its certificate. A route of a zone is no such address: it runs
-the Worker only for the requests the zone's DNS sends through Cloudflare,
-which `wrangler.toml` does not show, and a route written with `http://` only
-for plain http. Nor does `wrangler.toml` show a route of the zone on the
-custom domain's host, which would run first: the status below names the
-environment that answers. For a worker you run on your own machine, such as
-the preflight's, `API` is `http://localhost:8787` instead.
+It prints the https address of the environment's custom domain once it has
+checked how Cloudflare routes it, or stops, leaving `API` empty, so that no
+token goes there:
+
+- while `ENVIRONMENT` names no environment deployed to one custom domain of
+  its own. That is the one address `wrangler.toml` gives: Cloudflare creates
+  the custom domain's DNS record, which points to the Worker, and its
+  certificate. A route of a zone is no such address: it runs the Worker only
+  for the requests the zone's DNS sends through Cloudflare, and a route
+  written with `http://` only for plain http;
+- while Cloudflare routes the domain otherwise, which `wrangler.toml` cannot
+  show. The check reads, with your login, the zone of the host, whose account
+  must hold the environment's `kv_mainnet`, the Worker the custom domain is
+  attached to, which must be the environment's, and the zone's Workers
+  routes, of which none may run another Worker on the host: a route runs
+  before a custom domain, and would take every request, its token too. One
+  that a more specific route without a Worker would negate is refused all
+  the same, since Cloudflare lists exceptions to its route specificity among
+  its known issues: no route of another Worker may cover the host. A login
+  that may not read the zone or its routes stops the check at
+  `no active zone that this login reads …`, or at a `403` for the routes.
+
+For a worker you run on your own machine, such as the preflight's, `API` is
+`http://localhost:8787` instead, with no check: the token does not leave the
+machine.
 
 Wrangler puts or deletes a secret in the Worker `wrangler.toml` names for the
 environment, in the account it uses: the one `CLOUDFLARE_ACCOUNT_ID` names,
@@ -62,11 +80,10 @@ the same way before you create the environment's database or namespaces, as
 `wrangler.toml` asks. The migrations need no check of their own: they write
 to the environment's database by its id, which no other account holds.
 
-The check never asks, so it also stops while you can reach several accounts
-and none is chosen, and while you are not logged in: log in first with
-`npx wrangler login`, or set a `CLOUDFLARE_API_TOKEN` that may read Workers
-KV and edit Workers scripts. `Authentication error [code: 10000]` is a
-login or token that cannot read the environment's account. When it stops for another account, run
+The account check never asks, so it also stops while you can reach several
+accounts and none is chosen, and while you are not logged in.
+`Authentication error [code: 10000]` is a login or token that cannot read
+the environment's account. When it stops for another account, run
 `export CLOUDFLARE_ACCOUNT_ID=<its account ID>` with the account the
 environment runs in, one of those `npx wrangler whoami` lists, and run the
 whole command again: set for the check alone, it would not reach the
@@ -232,7 +249,10 @@ Each entry has these four, and nothing else:
 
 - `name` — who holds the token: 1 to 64 lowercase letters, digits, `.`,
   `_`, `@` or `-`, the first a letter or a digit. Two entries share a name
-  only while their holder rotates a token.
+  only while their holder rotates a token, and then the token it replaces has
+  a `notAfter` within 30 days: the worker refuses a list with two tokens of
+  one name that both last longer, which would leave the old one taken for
+  good.
 - `sha256` — the hash from step 2. A token is listed once.
 - `role` — `monitor`, `reader`, `operator` or `admin`.
 - `notAfter` — `null`, or the last instant the token is taken at, in UTC,
@@ -245,12 +265,12 @@ token, where the next change will start from, such as the password manager.
 
 **4. Put the list into the environment**, from `c3-api`. The command builds
 the scripts it runs, and reads the environment's address into `API` again,
-as [Before you start](#before-you-start) does, and prints it: step 5 checks
-the token there. A list the worker cannot read closes the administrative API
-to every token, the owner's too, so it then reads the file exactly as the
-worker will read the secret, with the worker's own code
-(`scripts/admin-tokens.ts`), and puts nothing the worker would refuse. It
-then checks the account Wrangler uses, as
+its routing checked first, as [Before you start](#before-you-start) does,
+and prints it: step 5 checks the token there. A list the worker cannot read
+closes the administrative API to every token, the owner's too, so it then
+reads the file exactly as the worker will read the secret, with the worker's
+own code (`scripts/admin-tokens.ts`), and puts nothing the worker would
+refuse. It then checks the account Wrangler uses, as
 [Before you start](#before-you-start) says, and makes sure the environment's
 Worker exists in it: put into a Worker that is not there, Wrangler creates
 one by that name, without asking when it reads from a pipe. Wrangler reads
@@ -258,6 +278,7 @@ the secret from the pipe, and it takes effect without a deploy:
 
 ```sh
 unset API; npx tsc -p tsconfig.scripts.json \
+  && node dist/scripts/environment-routing.js \
   && API="$(node dist/scripts/environment-address.js)" && export API && echo "API=$API" \
   && LIST="$(node dist/scripts/admin-tokens.js "$HOME/tokens.${ENVIRONMENT:?export it first}.json")" \
   && npx wrangler kv key list --binding kv_mainnet --env "$ENVIRONMENT" --remote --prefix account-check > /dev/null \
@@ -265,22 +286,22 @@ unset API; npx tsc -p tsconfig.scripts.json \
   && printf '%s\n' "$LIST" | npx wrangler secret put COMET_REGISTRY_ADMIN_TOKENS --env "$ENVIRONMENT"
 ```
 
-While `ENVIRONMENT` names no environment deployed to one custom domain of
-its own, the command stops at the address read, as
-[Before you start](#before-you-start) does, and puts nothing, leaving `API`
-empty.
+Wherever the address read of [Before you start](#before-you-start) would
+stop, the command stops too, and puts nothing, leaving `API` empty.
 
 When the worker would refuse the list, the check prints what the worker
 would log, such as `COMET_REGISTRY_ADMIN_TOKENS[1].sha256 must be 64 hex
 digits` for a hash not yet filled in, or `COMET_REGISTRY_ADMIN_TOKENS[0]
 names notAfter twice` for a field written twice, which JSON alone would read
-by its last value. `cannot read …` is a file that is not there, and
-`… is empty` an empty one. An error from `kv key list` is the account check
-stopping, for one of the reasons [Before you start](#before-you-start)
-gives, and `Worker "…" (env: …) not found` an environment whose Worker is
-not deployed yet. In each case nothing is put: correct it and run the
-command again. A list of no token, `[]`, is put, with a word that it closes
-the administrative API to every request.
+by its last value, or `… are two tokens of … that last more than 30 days`
+for a rotation whose old token has no cutoff within 30 days.
+`cannot read …` is a file that is not there, and `… is empty` an empty one.
+An error from `kv key list` is the account check stopping, for one of the
+reasons [Before you start](#before-you-start) gives, and
+`Worker "…" (env: …) not found` an environment whose Worker is not deployed
+yet. In each case nothing is put: correct it and run the command again. A
+list of no token, `[]`, is put, with a word that it closes the
+administrative API to every request.
 
 For a worker you run on your own machine, write its list as
 `~/tokens.local.json` and run the check alone, from `c3-api`:
@@ -302,7 +323,9 @@ a validation of a version that does not exist, with a body the worker
 refuses, `[]` in place of an object: the role is checked before the body is
 read, so the answer says whether the token is taken, and with which role.
 The second reads the status, which names the environment that takes the
-token at `API`:
+token at `API`. Step 4 has just read `API`, its routing checked; in another
+shell, read it again as [Before you start](#before-you-start) does. For a
+worker on your own machine, `API` is `http://localhost:8787`, with no check:
 
 ```sh
 curl -sS -X POST "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000000000/validate" \
@@ -356,7 +379,9 @@ first request names its `code` and `message`, and the second prints that
 
 **Rotating a token.** Make a new token for the same holder (steps 1 and 2),
 add its entry under the same name and role, give the old entry a `notAfter`
-a few days ahead, and put the list (step 4). Both tokens are taken until
+a few days ahead, and put the list (step 4). Step 4 refuses the list while
+both entries last more than 30 days, but it cannot tell which is the old
+one: put the `notAfter` on the old entry. Both tokens are taken until
 then: the holder switches, and after it the old one is refused as expired.
 Drop its entry the next time you put the list. A token that may have leaked
 is not rotated: drop its entry and put the list, which refuses it from then
