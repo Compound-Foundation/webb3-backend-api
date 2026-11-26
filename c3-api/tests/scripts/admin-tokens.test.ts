@@ -60,6 +60,10 @@ t.test('a list the worker refuses is refused, with its problem, and nothing is p
     [ 'NaN for an expiry',           `[{ ${head}, "notAfter": NaN }]`,                                   'COMET_REGISTRY_ADMIN_TOKENS is not JSON' ],
     [ 'a field besides the four',    `[{ ${head}, "notAfter": null, "comment": "x" }]`,
       'COMET_REGISTRY_ADMIN_TOKENS[0] must have exactly name, sha256, role and notAfter' ],
+    [ 'a rotation with no cutoff',   `[{ ${head}, "notAfter": null }, { "name": "alice", "sha256": "${'b'.repeat(64)}", "role": "admin", "notAfter": null }]`,
+      'COMET_REGISTRY_ADMIN_TOKENS[1] and [0] are two tokens of alice that last more than 30 days: give the one being replaced a notAfter within 30 days' ],
+    [ 'a rotation whose cutoff is far off', `[{ ${head}, "notAfter": "9999-12-31T23:59:59Z" }, { "name": "alice", "sha256": "${'b'.repeat(64)}", "role": "admin", "notAfter": null }]`,
+      'COMET_REGISTRY_ADMIN_TOKENS[1] and [0] are two tokens of alice that last more than 30 days: give the one being replaced a notAfter within 30 days' ],
   ];
   for (const [ what, text, problem ] of files) {
     const { status, stdout, stderr } = check(`refused-${files.findIndex(([ other ]) => other === what)}.json`, text);

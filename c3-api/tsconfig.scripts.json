@@ -1,8 +1,9 @@
 {
   /*
    * The scripts REGISTRY_RUNBOOK.md runs, with what they import, built alone:
-   * the address of an environment, read by "Before you start" and by step 4 of
-   * "The admin tokens", and the token list check of that step. A list can be
+   * the address of an environment and the check of its routing, run by
+   * "Before you start" and by step 4 of "The admin tokens", and the token list
+   * check of that step. A list can be
    * put, and a token dropped, whatever the type check of the tests says. The
    * output is the main build's, in the same place, so the build is never
    * incremental: it writes every script again from the sources checked out,
@@ -14,5 +15,5 @@
     "outDir": "./dist",
     "incremental": false
   },
-  "files": [ "scripts/admin-tokens.ts", "scripts/environment-address.ts" ]
+  "files": [ "scripts/admin-tokens.ts", "scripts/environment-address.ts", "scripts/environment-routing.ts" ]
 }
