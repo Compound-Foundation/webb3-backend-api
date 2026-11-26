@@ -150,7 +150,7 @@ token is: a route can change between one command and the next, and the
 check stops the request when it has:
 
 ```sh
-node dist/scripts/environment-routing.js && curl -sS "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq -r '.environment // .error.code'
+node dist/scripts/environment-routing.js && curl -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq -r '.environment // .error.code'
 ```
 
 The bring-up's requests below carry your token too: check the routing so
@@ -169,7 +169,12 @@ then the headers, then the body. To use them:
 - Create a Postman environment with the variables `API` (the address the
   first command of [Before you start](#before-you-start) prints, or
   `http://localhost:8787` for a worker on your own machine), `TOKEN` (your
-  admin token) and `V` (the draft's id, filled in step 1).
+  admin token) and `V` (the draft's id, filled in step 1). For a worker on
+  your own machine, add `localhost`, `127.0.0.1` and `::1` to the proxy
+  bypass of **Settings → Proxy**, or turn the proxy off, so the token in
+  plain http goes to no proxy. Postman runs no routing check: run the check
+  of [Before you start](#before-you-start) in a terminal right before
+  sending a token to a deployed environment from it.
 - Send every administrative request with `Authorization: Bearer {{TOKEN}}` —
   or set **Authorization → Bearer Token → `{{TOKEN}}`** once on the collection
   and let the requests inherit it.
@@ -334,20 +339,19 @@ a validation of a version that does not exist, with a body the worker
 refuses, `[]` in place of an object: the role is checked before the body is
 read, so the answer says whether the token is taken, and with which role.
 The second reads the status, which names the environment that takes the
-token at `API`. Both go out, from `c3-api`, only once the routing of `API`
-is checked again right before them, the check of
+token at `API`. Each goes out, from `c3-api`, only once the routing of `API`
+is checked again right before it, the check of
 [Before you start](#before-you-start), since a route can change after step
-4, a deploy among the things in between. In another shell, read `API` again
-first, as Before you start does. For a worker on your own machine, `API` is
-`http://localhost:8787`, which the check passes: the token never leaves the
-machine.
+4, a deploy among the things in between, or between the two. In another
+shell, read `API` again first, as Before you start does. For a worker on
+your own machine, `API` is `http://localhost:8787`, which the check passes:
+the token never leaves the machine, and `--noproxy` keeps it off any proxy
+set for plain http.
 
 ```sh
-node dist/scripts/environment-routing.js && {
-  curl -sS -X POST "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000000000/validate" \
-    -H "Authorization: Bearer $NEW_TOKEN" -H 'Content-Type: application/json' -d '[]' | jq -c .error
-  curl -sS "$API/registry/v1/admin/status" -H "Authorization: Bearer $NEW_TOKEN" | jq -r '.environment // .error.code'
-}
+node dist/scripts/environment-routing.js && curl -sS --noproxy localhost,127.0.0.1,::1 -X POST "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000000000/validate" \
+  -H "Authorization: Bearer $NEW_TOKEN" -H 'Content-Type: application/json' -d '[]' | jq -c .error
+node dist/scripts/environment-routing.js && curl -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/status" -H "Authorization: Bearer $NEW_TOKEN" | jq -r '.environment // .error.code'
 ```
 
 - `"code":"BAD_REQUEST"`, "the request body must be a JSON object": the
@@ -366,9 +370,9 @@ as it is where step 4 stopped before reading it, or the host down or out of
 reach — and nothing was checked. Read `API` again, as
 [Before you start](#before-you-start) says, or wait for the host, and run
 the block again. If `jq` reports a parse error, that answer is not JSON: run
-its command again without its `| jq …` to see it. Any other answer to the
-first request names its `code` and `message`, and the second prints that
-`code`:
+its line again, its check with it, without its `| jq …` to see it. Any
+other answer to the first request names its `code` and `message`, and the
+second prints that `code`:
 
 - `UNAUTHORIZED` (`401`), "a bearer token is required": `NEW_TOKEN` is empty
   in this shell.
@@ -439,7 +443,9 @@ proxy, in `../node-provider-proxy/.dev.vars`, the keys of providers that keep
 archive state, and add `-c wrangler.local-proxy.toml` to both commands.
 
 **Bring it up.** In another terminal, from the root of the checkout, with
-`export API=http://localhost:8787` and your first token in `TOKEN`, run steps
+`export API=http://localhost:8787` and your first token in `TOKEN`, and with
+`export NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1`,
+which keeps the token off any proxy set for plain http, run steps
 1 to 7 of [the first bring-up](#bringing-an-environment-up-for-the-first-time),
 step 5 with your second token in `TOKEN`, and time them.
 
