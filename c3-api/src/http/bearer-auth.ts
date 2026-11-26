@@ -167,6 +167,59 @@ function tokenOf(entry: unknown, at: string): Token {
   return { name, sha256: sha256.toLowerCase(), role, notAfter: expiry };
 }
 
+// the fields of an entry, which a problem may name; any other name is the list's own text, which the log never repeats
+const FIELDS: readonly string[] = [ 'name', 'sha256', 'role', 'notAfter' ];
+
+/*
+ * JSON.parse keeps the last of two fields of one name, so an entry that
+ * names `notAfter` twice would be read by the last of them, and a trailing
+ * `"notAfter": null` would cancel an expiry; one that names `role` twice
+ * would be read by its last role. Neither says a word. So the text of a list
+ * JSON.parse took is read again, for a field named twice in one object, at
+ * any depth. A name is compared as JSON.parse reads it, so a letter written
+ * as an escape hides no repeat. Each object's names are its own: the four
+ * fields every entry has are no repeat across entries.
+ *
+ * The text is JSON, so a string ends at the first quote no backslash
+ * escapes, and a string is a field's name where a colon follows it.
+ */
+function repeatedField(text: string): string | undefined {
+  // for each object or list open at this point, the names of the object's fields so far, or null for a list
+  const open: Array<Set<string> | null> = [];
+  let entry = 0;
+  for (let at = 0; at < text.length; at++) {
+    const char = text[at];
+    if (char === '{') {
+      open.push(new Set());
+    } else if (char === '[') {
+      open.push(null);
+    } else if (char === '}' || char === ']') {
+      open.pop();
+    } else if (char === ',' && open.length === 1) {
+      entry++;
+    } else if (char === '"') {
+      let end = at + 1;
+      while (end < text.length && text[end] !== '"') {
+        end += text[end] === '\\' ? 2 : 1;
+      }
+      let next = end + 1;
+      while (next < text.length && ' \t\n\r'.includes(text[next]!)) {
+        next++;
+      }
+      const names = open[open.length - 1];
+      if (names && text[next] === ':') {
+        const name = JSON.parse(text.slice(at, end + 1)) as string;
+        if (names.has(name)) {
+          return `${TOKENS}[${entry}] names ${open.length === 2 && FIELDS.includes(name) ? name : 'a field'} twice`;
+        }
+        names.add(name);
+      }
+      at = end;
+    }
+  }
+  return undefined;
+}
+
 /*
  * The tokens of COMET_REGISTRY_ADMIN_TOKENS, a JSON list of
  * `{ name, sha256, role, notAfter }`, or none while it is unset or blank. A
@@ -191,6 +244,10 @@ function listedTokens(value: unknown): Token[] {
   }
   if (!Array.isArray(list)) {
     throw malformed(`${TOKENS} is not a list`);
+  }
+  const repeated = repeatedField(value);
+  if (repeated !== undefined) {
+    throw malformed(repeated);
   }
   if (list.length > MAX_TOKENS) {
     throw malformed(`${TOKENS} lists more than ${MAX_TOKENS} tokens`);
@@ -258,4 +315,4 @@ function refuseRole(credential: Credential, required: Role): ApiError {
 }
 
 export type { Credential, Role };
-export { ROLES, allows, authenticateAdmin, refuseRole, sha256Hex };
+export { ROLES, allows, authenticateAdmin, listedTokens, refuseRole, sha256Hex };

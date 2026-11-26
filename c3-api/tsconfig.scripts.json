@@ -1,0 +1,15 @@
+{
+  /*
+   * The token list check that step 4 of "The admin tokens" in
+   * REGISTRY_RUNBOOK.md runs, with what it imports, built alone: a list can be
+   * put, and a token dropped, whatever the type check of the tests says. The
+   * output is the main build's, in the same place.
+   */
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "outDir": "./dist",
+    "tsBuildInfoFile": "./dist/scripts.tsbuildinfo"
+  },
+  "files": [ "scripts/admin-tokens.ts" ]
+}
