@@ -20,13 +20,13 @@ switch, users see no change at all, and after it, one command switches back.
 
 - The environment's database has every migration applied, and this happened
   **before** the worker release that needs it:
-  `npm run d1:migrate:stage` or `npm run d1:migrate:production`.
+  `npm run d1:migrate:production`.
 - The worker is deployed, and it reaches the node provider proxy.
 - The environment has admin tokens, and you hold one of your own with the
   role `admin` — the token itself, not its hash. See
   [The admin tokens](#the-admin-tokens) if the environment has none yet, or
   none for you.
-- Stage and production have `COMET_GITHUB_TOKEN` set. Without a token GitHub
+- Production has `COMET_GITHUB_TOKEN` set. Without a token GitHub
   allows the import 60 API requests an hour per address, which the Worker
   shares with every other Worker leaving Cloudflare through it, and an import
   fails with `SOURCE_REQUEST_FAILED`, "its rate limit is used up". A
@@ -34,7 +34,6 @@ switch, users see no change at all, and after it, one command switches back.
   no other permission, is enough; Wrangler prompts for it:
 
   ```sh
-  npx wrangler secret put COMET_GITHUB_TOKEN --env stage
   npx wrangler secret put COMET_GITHUB_TOKEN --env production
   ```
 
@@ -48,7 +47,7 @@ the requests from the root of a checkout of that commit, with `jq`
 installed, after:
 
 ```sh
-export API=https://v3-api-stage.compound.xyz        # the environment you work on
+export API=https://v3-api.compound.xyz
 export TOKEN='<your admin token>'
 ```
 
@@ -61,7 +60,7 @@ Postman, written as the request itself: the method and URL on the first line,
 then the headers, then the body. To use them:
 
 - Create a Postman environment with the variables `API` (the environment's
-  address, e.g. `https://v3-api-stage.compound.xyz`, or `http://localhost:8787`),
+  address, e.g. `https://v3-api.compound.xyz`, or `http://localhost:8787`),
   `TOKEN` (your admin token) and `V` (the draft's id, filled in step 1).
 - Send every administrative request with `Authorization: Bearer {{TOKEN}}` —
   or set **Authorization → Bearer Token → `{{TOKEN}}`** once on the collection
@@ -152,15 +151,15 @@ command first checks the file as you wrote it, and puts the list only when
 the check prints `true`:
 
 ```sh
-jq -n --stream -e '[inputs | select(length == 2) | .[0]] | length == (unique | length)' < ~/tokens.json \
+jq -n --stream -e '[inputs | select(length == 2) | .[0][0:2]] | length == (unique | length)' < ~/tokens.json \
   && jq -c . ~/tokens.json | npx wrangler secret put COMET_REGISTRY_ADMIN_TOKENS --env production
 ```
 
-`false` is an entry that names a field twice, such as a second `notAfter` or
-`role`: JSON keeps the last of the two, and so does `jq -c`, so the worker
-would take the last value, and nothing would show it. An error is a file that
-is not there, or not JSON. Either way nothing is put: correct the file and run
-the command again.
+`false` is an entry that names a field twice, whatever the values, such as a
+second `notAfter` or `role`: JSON keeps the last of the two, and so does
+`jq -c`, so the worker would take the last value, and nothing would show it.
+An error is a file that is not there, or not JSON. Either way nothing is put:
+correct the file and run the command again.
 
 For a worker you run on your own machine, the same line goes into
 `.dev.vars`, which git ignores, in single quotes:
@@ -169,22 +168,23 @@ For a worker you run on your own machine, the same line goes into
 COMET_REGISTRY_ADMIN_TOKENS='[{"name":"alice","sha256":"<the hash from step 2>","role":"admin","notAfter":null}]'
 ```
 
-**5. Check each token** with one request that changes nothing, the
-validation of a version that does not exist. Its answer says whether the
-token is taken, and with which role:
+**5. Check each token** with one request that changes nothing: a
+validation of a version that does not exist, with a body the worker refuses,
+`[]` in place of an object. The role is checked before the body is read, so
+the answer says whether the token is taken, and with which role:
 
 ```sh
 curl -sS -X POST "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000000000/validate" \
-  -H "Authorization: Bearer $NEW_TOKEN" | jq -c .error
+  -H "Authorization: Bearer $NEW_TOKEN" -H 'Content-Type: application/json' -d '[]' | jq -c .error
 ```
 
-- `"code":"NOT_FOUND"`: the token is an `admin`'s. No version has that id,
-  so nothing is validated.
+- `"code":"BAD_REQUEST"`, "the request body must be a JSON object": the
+  token is an `admin`'s. The body is refused before any version is looked
+  up, so nothing is validated, whatever the id.
 - `"code":"FORBIDDEN"` with `"details":{"role":"…","requiredRole":"admin"}`:
   the token is taken, with the role `details.role` names, which must be the
   role its entry lists.
 
-Send exactly this id: with a draft's id, the request validates that draft.
 If `jq` reports a parse error, the answer is not JSON; run the command again
 without `| jq -c .error` to see it. Any other answer names its `code` and
 `message`:
@@ -228,7 +228,7 @@ into `.dev.vars` a `COMET_REGISTRY_ADMIN_TOKENS` that lists an admin token of
 your own (see [The admin tokens](#the-admin-tokens)), a `COMET_GITHUB_TOKEN`,
 and the `NODE_PROXY_HOST` and `NODE_PROXY_KEY` of a deployed node provider
 proxy whose providers keep archive state: the creation blocks are read at
-past blocks. The local source is the one stage and production import,
+past blocks. The local source is the one production imports,
 `Compound-Foundation/comet` at `main`. Then start the worker on an empty
 database, kept apart from your usual local one:
 
