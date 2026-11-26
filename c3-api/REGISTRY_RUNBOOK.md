@@ -18,13 +18,23 @@ switch, users see no change at all, and after it, one command switches back.
 
 ## Before you start
 
-Everything here works on one environment at a time. `ENVIRONMENT` names it
-as `wrangler.toml` does, and every command below that reaches an
-environment takes that name:
+Everything here works on one environment at a time, which you choose once,
+before anything else: set `ENVIRONMENT` to the environment's name in
+`wrangler.toml`, as `export ENVIRONMENT=production` does for production.
+Nothing in this runbook sets it again: every command below that reaches an
+environment takes it, and stops while it is not set. Then read the
+environment's address, `API`, from `wrangler.toml`, in the checkout's
+`c3-api`, with its dependencies installed
+([Getting Started](./README.md#getting-started)):
 
 ```sh
-export ENVIRONMENT=production
+unset API; npx tsc -p tsconfig.scripts.json && API="$(node dist/scripts/environment-address.js)" && export API && echo "API=$API"
 ```
+
+It prints the address the environment is deployed to, or stops, leaving `API`
+empty, while `ENVIRONMENT` names no environment with one address for every
+path of one host. For a worker you run on your own machine, such as the
+preflight's, `API` is `http://localhost:8787` instead.
 
 - The environment's database has every migration applied, and this happened
   **before** the worker release that needs it:
@@ -47,28 +57,27 @@ export ENVIRONMENT=production
 
 - [The preflight](#the-preflight) has passed on the commit being deployed.
 
-Nothing runs on your machine but the requests: the Worker being deployed
-imports the source, and checks the decisions you send it against the source
-and the chain. Those decisions are the seed of the commit being deployed,
+Nothing of the bring-up runs on your machine but the requests and the
+address read above: the Worker being deployed imports the source, and checks
+the decisions you send it against the source and the chain. Those decisions
+are the seed of the commit being deployed,
 [`c3-api/registry/seed/production.json`](./registry/seed/README.md), so send
-the requests from the root of a checkout of that commit, with `jq`
-installed, after:
+the requests to `API` from the root of a checkout of that commit, with `jq`
+installed, after setting your token:
 
 ```sh
-export API=https://v3-api.compound.xyz
 export TOKEN='<your admin token>'
 ```
 
-`API` is the address of `$ENVIRONMENT`, the route `wrangler.toml` gives
-`[env.$ENVIRONMENT]`. The status names the environment that answers there,
-which must be `$ENVIRONMENT`; any other answer is one step 5 of
-[The admin tokens](#the-admin-tokens) explains:
+Once the environment lists your token, the status names the environment that
+answers at `API`, which must be `$ENVIRONMENT`; any other answer is one step 5
+of [The admin tokens](#the-admin-tokens) explains:
 
 ```sh
 curl -sS "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq -r '.environment // .error.code'
 ```
 
-Run every `npm run` and `npx wrangler` command in the checkout's `c3-api`,
+Run every `npm run`, `npx` and `node` command in the checkout's `c3-api`,
 which holds the Worker's configuration and the Wrangler it is built with:
 from the root, npm finds no such script, and Wrangler no Worker.
 
@@ -76,9 +85,10 @@ Every step shows the terminal command, and beside it the same request for
 Postman, written as the request itself: the method and URL on the first line,
 then the headers, then the body. To use them:
 
-- Create a Postman environment with the variables `API` (the environment's
-  address, e.g. `https://v3-api.compound.xyz`, or `http://localhost:8787`),
-  `TOKEN` (your admin token) and `V` (the draft's id, filled in step 1).
+- Create a Postman environment with the variables `API` (the address the
+  first command of [Before you start](#before-you-start) prints, or
+  `http://localhost:8787` for a worker on your own machine), `TOKEN` (your
+  admin token) and `V` (the draft's id, filled in step 1).
 - Send every administrative request with `Authorization: Bearer {{TOKEN}}` —
   or set **Authorization → Bearer Token → `{{TOKEN}}`** once on the collection
   and let the requests inherit it.
@@ -114,16 +124,19 @@ can make a token of any name and role, so leave it to the environment's
 owner. Each environment has tokens and a list of its own: a token is made
 for one environment and listed in no other.
 
-The steps below work on one environment at a time. `ENVIRONMENT` names it
-as `wrangler.toml` does, and the rest follows from that name: its list is
-the file `~/tokens.$ENVIRONMENT.json`, it is put with
-`--env "$ENVIRONMENT"`, and `API` is its address, the route `wrangler.toml`
-gives `[env.$ENVIRONMENT]`:
+The steps below work on the environment `ENVIRONMENT` names, as
+[Before you start](#before-you-start) sets it; set it there first if you came
+here directly. The environment's list is the file
+`~/tokens.$ENVIRONMENT.json`. Step 4 puts it with `--env "$ENVIRONMENT"`, and
+reads the environment's address into `API` again, where step 5 checks the
+token.
 
-```sh
-export ENVIRONMENT=production
-export API=https://v3-api.compound.xyz
-```
+A worker you run on your own machine, such as the preflight's, takes its
+list from `.dev.vars` instead. Make its token and write its list as steps 1
+to 3 say, as `~/tokens.local.json`; put it into `.dev.vars` as the end of
+step 4 says, never with Wrangler, before the worker starts; and check it as
+step 5 says, after `export API=http://localhost:8787`, where the status
+names `local`.
 
 **1. Make a token** for its holder. 32 random bytes are plenty:
 
@@ -172,22 +185,29 @@ so drop the entries of expired tokens whenever you put the list again. It
 never shows a secret again either: keep the file, which holds hashes and no
 token, where the next change will start from, such as the password manager.
 
-**4. Put the list into the environment**, from `c3-api`. A list the worker
-cannot read closes the administrative API to every token, the owner's too,
-so the command builds the check, `scripts/admin-tokens.ts`, and reads the
-file first exactly as the worker will read the secret, with the worker's own
-code, and puts nothing the worker would refuse. It then makes sure the
-environment's Worker exists in the account you are logged into: put into a
-Worker that is not there, Wrangler creates one by that name, without asking
-when it reads from a pipe. Wrangler reads the secret from the pipe, and it
-takes effect without a deploy:
+**4. Put the list into the environment**, from `c3-api`. The command builds
+the scripts it runs, and reads the environment's address into `API` again,
+as [Before you start](#before-you-start) does, and prints it: step 5 checks
+the token there. A list the worker cannot read closes the administrative API
+to every token, the owner's too, so it then reads the file exactly as the
+worker will read the secret, with the worker's own code
+(`scripts/admin-tokens.ts`), and puts nothing the worker would refuse. It
+then makes sure the environment's Worker exists in the account you are
+logged into: put into a Worker that is not there, Wrangler creates one by
+that name, without asking when it reads from a pipe. Wrangler reads the
+secret from the pipe, and it takes effect without a deploy:
 
 ```sh
-npx tsc -p tsconfig.scripts.json \
+unset API; npx tsc -p tsconfig.scripts.json \
+  && API="$(node dist/scripts/environment-address.js)" && export API && echo "API=$API" \
   && LIST="$(node dist/scripts/admin-tokens.js "$HOME/tokens.${ENVIRONMENT:?export it first}.json")" \
   && npx wrangler secret list --env "$ENVIRONMENT" > /dev/null \
   && printf '%s\n' "$LIST" | npx wrangler secret put COMET_REGISTRY_ADMIN_TOKENS --env "$ENVIRONMENT"
 ```
+
+While `ENVIRONMENT` names no environment with one address, the command stops
+at the address read, as [Before you start](#before-you-start) does, and puts
+nothing, leaving `API` empty.
 
 When the worker would refuse the list, the check prints what the worker
 would log, such as `COMET_REGISTRY_ADMIN_TOKENS[1].sha256 must be 64 hex
@@ -232,13 +252,19 @@ curl -sS "$API/registry/v1/admin/status" -H "Authorization: Bearer $NEW_TOKEN" |
 - `"code":"FORBIDDEN"` with `"details":{"role":"…","requiredRole":"admin"}`:
   the token is taken, with the role `details.role` names, which must be the
   role its entry lists.
-- The status prints the environment's name, which must be `$ENVIRONMENT`. A
-  token is listed in its own environment alone, so another environment
-  never names itself here: it refuses the token, as below.
+- The status prints the environment's name, which must be `$ENVIRONMENT`, or
+  `local` for a worker you run on your own machine. A token is listed in its
+  own environment alone, so another environment never names itself here: it
+  refuses the token, as below.
 
-If `jq` reports a parse error, that answer is not JSON: run its command again
-without its `| jq …` to see it. Any other answer to the first request names
-its `code` and `message`, and the second prints that `code`:
+A `curl: (N) …` line means the request did not reach the API — `API` empty,
+as it is where step 4 stopped before reading it, or the host down or out of
+reach — and nothing was checked. Read `API` again, as
+[Before you start](#before-you-start) says, or wait for the host, and run
+the block again. If `jq` reports a parse error, that answer is not JSON: run
+its command again without its `| jq …` to see it. Any other answer to the
+first request names its `code` and `message`, and the second prints that
+`code`:
 
 - `UNAUTHORIZED` (`401`), "a bearer token is required": `NEW_TOKEN` is empty
   in this shell.
@@ -246,8 +272,8 @@ its `code` and `message`, and the second prints that `code`:
   `API` has no entry for this token. Either `API` is not `$ENVIRONMENT`'s
   address, and another environment answered, or the list has no entry for
   it: a hash made with `echo`, another token's, or the token itself, listed
-  in place of its hash. Compare `API` with the route of
-  `[env.$ENVIRONMENT]` in `wrangler.toml` first, then hash the token again
+  in place of its hash. Read `API` again first, as
+  [Before you start](#before-you-start) says, then hash the token again
   (step 2) and put the list again. If step 4 put a list into an environment
   you did not mean, put that environment's own list back the same way.
 - `UNAUTHORIZED` (`401`), "the bearer token has expired": its `notAfter` has
@@ -261,8 +287,8 @@ its `code` and `message`, and the second prints that `code`:
   the file and put it again (step 4).
 - `FORBIDDEN` (`403`), "… is not configured in this environment": the
   environment at `API` has no list, or one with no entry, and an unconfigured
-  admin API is a closed one. Put the list (step 4), or, if you did, check
-  that `API` is `$ENVIRONMENT`'s address.
+  admin API is a closed one. Put the list (step 4), or, if you did, read
+  `API` again, as [Before you start](#before-you-start) says.
 
 **Rotating a token.** Make a new token for the same holder (steps 1 and 2),
 add its entry under the same name and role, give the old entry a `notAfter`
@@ -523,8 +549,9 @@ the Comet of one line of the file.
   nothing was compared: `jq .error changes.json` says why
   ([When something goes wrong](#when-something-goes-wrong)).
 - A `curl: (N) …` line means the request did not reach the API — `API`
-  unset, or the host down or out of reach — and nothing was compared. Set
-  `API`, or wait for the host, and run the block again.
+  unset, or the host down or out of reach — and nothing was compared. Read
+  `API` again, as [Before you start](#before-you-start) says, or wait for the
+  host, and run the block again.
 
 ### 3. Send the seed
 
