@@ -60,9 +60,11 @@ the hash of an admin token of your own into `.dev.vars`, as an entry of
 `COMET_REGISTRY_ADMIN_TOKENS` with the role `admin`, before starting the
 worker ([The admin tokens](./REGISTRY_RUNBOOK.md#the-admin-tokens)), and follow
 [Bringing an environment up for the first time](./REGISTRY_RUNBOOK.md#bringing-an-environment-up-for-the-first-time)
-with `API=http://localhost:8787` and
-`NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1`, which
-keep the token off any proxy set for plain http.
+from the root of the checkout, with your token in `TOKEN`, the scripts its
+requests check the routing with built,
+`(cd c3-api && npx tsc -p tsconfig.scripts.json)`, and
+`export API=http://localhost:8787 NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1`:
+`NO_PROXY` and `no_proxy` keep the token off any proxy set for plain http.
 
 See [API.md](./API.md) for documentation of routes with examples.
 
@@ -302,7 +304,8 @@ Those decisions are checked in as the body of `PUT /versions/{id}/overlays`,
 [`registry/seed/production.json`](./registry/seed/README.md), with each
 market's Comet beside it in `production.comets.json`. The operator checks
 that the candidate holds the seed's markets and sends the file, and nothing
-runs outside the environment but the requests:
+runs outside the environment but the requests, which the runbook sends
+behind a check of the routing, each in the same command:
 
 ```sh
 # 1. import the whole source in one request. The run ends "heldForReview";

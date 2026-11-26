@@ -7,7 +7,8 @@ import { environmentOf, refuse, takesHost } from './environment.js';
  * Cloudflare routes it, which the configuration cannot show.
  * REGISTRY_RUNBOOK.md runs it before it sets API, in "Before you start" and
  * in step 4 of "The admin tokens", so that API is set only to an address
- * this check took.
+ * this check took, and again in every command that sends a token, before
+ * the request, so that a route changed since stops it.
  *
  *   npx tsc -p tsconfig.scripts.json && node dist/scripts/environment-routing.js
  *
