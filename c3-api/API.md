@@ -667,7 +667,8 @@ no other token.
   `details` carries as `role` and `requiredRole`. A method the path does not
   take is still `405`, whatever the role.
 - An environment that lists no token — no list, a blank one, or `[]` — or
-  whose list the worker cannot read, answers every administrative request
+  whose list the worker cannot read, such as one with an entry that names a
+  field twice, answers every administrative request
   `403 FORBIDDEN`, whatever it carries, and asks for no token: a malformed
   list refuses every token, those of its well-formed entries too. The
   message says which: the API is not configured, or

@@ -117,6 +117,17 @@ can make a token of any name and role, so leave it to the environment's
 owner. Each environment has tokens and a list of its own: a token is made
 for one environment and listed in no other.
 
+The steps below work on one environment at a time. `ENVIRONMENT` names it
+as `wrangler.toml` does, and the rest follows from that name: its list is
+the file `~/tokens.$ENVIRONMENT.json`, it is put with
+`--env "$ENVIRONMENT"`, and `API` is its address, the route `wrangler.toml`
+gives `[env.$ENVIRONMENT]`:
+
+```sh
+export ENVIRONMENT=production
+export API=https://v3-api.compound.xyz
+```
+
 **1. Make a token** for its holder. 32 random bytes are plenty:
 
 ```sh
@@ -138,8 +149,8 @@ or ` *stdin` after it — and the list takes the 64 hex digits alone.
 printf '%s' "$NEW_TOKEN" | openssl dgst -sha256 -r | cut -d ' ' -f 1
 ```
 
-**3. Write the list**, `~/tokens.json`, with an entry for each token. Keep it
-outside the checkout, where git does not ignore a `tokens.json`:
+**3. Write the list**, `~/tokens.$ENVIRONMENT.json`, with an entry for each
+token. Keep it outside the checkout, where git would not ignore it:
 
 ```json
 [
@@ -162,42 +173,62 @@ Each entry has these four, and nothing else:
 
 Cloudflare stores a secret of at most 5 KB, which is about thirty entries,
 so drop the entries of expired tokens whenever you put the list again. It
-never shows a secret again either: keep `tokens.json`, which holds hashes
-and no token, where the next change will start from, such as the password
-manager.
+never shows a secret again either: keep the file, which holds hashes and no
+token, where the next change will start from, such as the password manager.
 
-**4. Put the list into the environment**, from `c3-api`. Wrangler reads the
-secret from the pipe, on one line, and it takes effect without a deploy. The
-command first checks the file as you wrote it, and puts the list only when
-the check prints `true`:
+**4. Put the list into the environment**, from `c3-api`. A list the worker
+cannot read closes the administrative API to every token, the owner's too,
+so the command builds the check, `scripts/admin-tokens.ts`, and reads the
+file first exactly as the worker will read the secret, with the worker's own
+code, and puts nothing the worker would refuse. It then makes sure the
+environment's Worker exists in the account you are logged into: put into a
+Worker that is not there, Wrangler creates one by that name, without asking
+when it reads from a pipe. Wrangler reads the secret from the pipe, and it
+takes effect without a deploy:
 
 ```sh
-jq -n --stream -e '[inputs | select(length == 2) | .[0][0:2]] | length == (unique | length)' < ~/tokens.json \
-  && jq -c . ~/tokens.json | npx wrangler secret put COMET_REGISTRY_ADMIN_TOKENS --env production
+npx tsc -p tsconfig.scripts.json \
+  && LIST="$(node dist/scripts/admin-tokens.js "$HOME/tokens.${ENVIRONMENT:?export it first}.json")" \
+  && npx wrangler secret list --env "$ENVIRONMENT" > /dev/null \
+  && printf '%s\n' "$LIST" | npx wrangler secret put COMET_REGISTRY_ADMIN_TOKENS --env "$ENVIRONMENT"
 ```
 
-`false` is an entry that names a field twice, whatever the values, such as a
-second `notAfter` or `role`: JSON keeps the last of the two, and so does
-`jq -c`, so the worker would take the last value, and nothing would show it.
-An error is a file that is not there, or not JSON. Either way nothing is put:
-correct the file and run the command again.
+When the worker would refuse the list, the check prints what the worker
+would log, such as `COMET_REGISTRY_ADMIN_TOKENS[1].sha256 must be 64 hex
+digits` for a hash not yet filled in, or `COMET_REGISTRY_ADMIN_TOKENS[0]
+names notAfter twice` for a field written twice, which JSON alone would read
+by its last value. `cannot read …` is a file that is not there, and
+`… is empty` an empty one. `Worker "…" not found` is an environment or an
+account other than the one you meant. In each case nothing is put: correct
+it and run the command again. A list of no token, `[]`, is put, with a word
+that it closes the administrative API to every request.
 
-For a worker you run on your own machine, the same line goes into
-`.dev.vars`, which git ignores, in single quotes — with two `admin` tokens
-of your own under two names, since a version is switched on by two:
+For a worker you run on your own machine, run the check alone, from
+`c3-api`:
+
+```sh
+npx tsc -p tsconfig.scripts.json && node dist/scripts/admin-tokens.js <the file>
+```
+
+and put the line it prints into `.dev.vars`, which git ignores, in single
+quotes — with two `admin` tokens of your own under two names, since a
+version is switched on by two:
 
 ```
 COMET_REGISTRY_ADMIN_TOKENS='[{"name":"local-admin","sha256":"<the hash from step 2>","role":"admin","notAfter":null},{"name":"local-approver","sha256":"<the hash of a second token>","role":"admin","notAfter":null}]'
 ```
 
-**5. Check each token** with one request that changes nothing: a
-validation of a version that does not exist, with a body the worker refuses,
-`[]` in place of an object. The role is checked before the body is read, so
-the answer says whether the token is taken, and with which role:
+**5. Check each token** with two requests that change nothing. The first is
+a validation of a version that does not exist, with a body the worker
+refuses, `[]` in place of an object: the role is checked before the body is
+read, so the answer says whether the token is taken, and with which role.
+The second reads the status, which names the environment that takes the
+token at `API`:
 
 ```sh
 curl -sS -X POST "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000000000/validate" \
   -H "Authorization: Bearer $NEW_TOKEN" -H 'Content-Type: application/json' -d '[]' | jq -c .error
+curl -sS "$API/registry/v1/admin/status" -H "Authorization: Bearer $NEW_TOKEN" | jq -r '.environment // .error.code'
 ```
 
 - `"code":"BAD_REQUEST"`, "the request body must be a JSON object": the
@@ -206,26 +237,37 @@ curl -sS -X POST "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000
 - `"code":"FORBIDDEN"` with `"details":{"role":"…","requiredRole":"admin"}`:
   the token is taken, with the role `details.role` names, which must be the
   role its entry lists.
+- The status prints the environment's name, which must be `$ENVIRONMENT`. A
+  token is listed in its own environment alone, so another environment
+  never names itself here: it refuses the token, as below.
 
-If `jq` reports a parse error, the answer is not JSON; run the command again
-without `| jq -c .error` to see it. Any other answer names its `code` and
-`message`:
+If `jq` reports a parse error, that answer is not JSON: run its command again
+without its `| jq …` to see it. Any other answer to the first request names
+its `code` and `message`, and the second prints that `code`:
 
-- `UNAUTHORIZED` (`401`), "the bearer token is not valid": the list has no
-  entry for this token — a hash made with `echo`, another token's, or the
-  token itself, listed in place of its hash. Hash it again (step 2) and put
-  the list again.
+- `UNAUTHORIZED` (`401`), "a bearer token is required": `NEW_TOKEN` is empty
+  in this shell.
+- `UNAUTHORIZED` (`401`), "the bearer token is not valid": the environment at
+  `API` has no entry for this token. Either `API` is not `$ENVIRONMENT`'s
+  address, and another environment answered, or the list has no entry for
+  it: a hash made with `echo`, another token's, or the token itself, listed
+  in place of its hash. Compare `API` with the route of
+  `[env.$ENVIRONMENT]` in `wrangler.toml` first, then hash the token again
+  (step 2) and put the list again. If step 4 put a list into an environment
+  you did not mean, put that environment's own list back the same way.
 - `UNAUTHORIZED` (`401`), "the bearer token has expired": its `notAfter` has
   passed.
 - `FORBIDDEN` (`403`), "… COMET_REGISTRY_ADMIN_TOKENS is malformed": the
   worker cannot read the list, such as one with a hash copied with the `  -`
-  or ` *stdin` printed after it, and refuses every token until it can. The
-  worker's log line `registry route refused`, under the answer's
-  `requestId`, names the entry and what is wrong with it; correct the file
-  and put it again (step 4).
+  or ` *stdin` printed after it, or an entry that names a field twice, and
+  refuses every token until it can. Step 4 puts no such list, so it came
+  another way. The worker's log line `registry route refused`, under the
+  answer's `requestId`, names the entry and what is wrong with it; correct
+  the file and put it again (step 4).
 - `FORBIDDEN` (`403`), "… is not configured in this environment": the
-  environment has no list, or one with no entry, and an unconfigured admin
-  API is a closed one. Put the list (step 4).
+  environment at `API` has no list, or one with no entry, and an unconfigured
+  admin API is a closed one. Put the list (step 4), or, if you did, check
+  that `API` is `$ENVIRONMENT`'s address.
 
 **Rotating a token.** Make a new token for the same holder (steps 1 and 2),
 add its entry under the same name and role, give the old entry a `notAfter`
@@ -233,7 +275,7 @@ a few days ahead, and put the list (step 4). Both tokens are taken until
 then: the holder switches, and after it the old one is refused as expired.
 Drop its entry the next time you put the list. A token that may have leaked
 is not rotated: drop its entry and put the list, which refuses it from then
-on.
+on. Step 5 with that token then answers "the bearer token is not valid".
 
 ### The preflight
 

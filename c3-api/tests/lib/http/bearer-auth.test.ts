@@ -195,6 +195,66 @@ t.test('a list the worker cannot read closes the administrative API to every tok
 });
 
 /*
+ * JSON.parse alone reads an entry that names a field twice by the last of
+ * them: a trailing `"notAfter": null` would cancel the expiry before it, and
+ * a second role replace the first, with no word. Such a list is one the
+ * worker cannot read, whatever the values and however the name is written.
+ * The log names the entry, and the field if it is one of the entry's own
+ * four; any other name, or one inside a value, is the list's own text, which
+ * it never repeats.
+ */
+t.test('an entry that names a field twice closes the administrative API to every token', async t => {
+  const alice = await sha256('alice-token');
+  const bob   = await sha256('bob-token');
+  const head  = `"name": "alice", "sha256": "${alice}"`;
+  const lists: Array<[ string, string, string ]> = [
+    [ 'an expiry, then null',               `[{ ${head}, "role": "admin", "notAfter": "2027-05-01T00:00:00Z", "notAfter": null }]`, '[0] names notAfter twice' ],
+    [ 'null, then an expiry',               `[{ ${head}, "notAfter": null, "role": "admin", "notAfter": "2027-05-01T00:00:00Z" }]`, '[0] names notAfter twice' ],
+    [ 'a monitor\'s role, then an admin\'s', `[{ ${head}, "role": "monitor", "notAfter": null, "role": "admin" }]`, '[0] names role twice' ],
+    [ 'the name written with an escape',    `[{ ${head}, "role": "admin", "notAfter": "2027-05-01T00:00:00Z", "not\\u0041fter": null }]`, '[0] names notAfter twice' ],
+    [ 'an object, then null',               `[{ ${head}, "role": "admin", "notAfter": { "at": "2027-05-01T00:00:00Z" }, "notAfter": null }]`, '[0] names notAfter twice' ],
+    [ 'a list, then null',                  `[{ ${head}, "role": "admin", "notAfter": [ "2027-05-01T00:00:00Z" ], "notAfter": null }]`, '[0] names notAfter twice' ],
+    [ 'the second entry',                   `[{ ${head}, "role": "admin", "notAfter": null }, { "name": "bob", "sha256": "${bob}", "role": "reader", "notAfter": null, "role": "admin" }]`,
+      '[1] names role twice' ],
+    [ 'after a value with quotes, braces and a colon', `[{ "name": "a\\"}{:\\\\", "name": "alice", "sha256": "${alice}", "role": "admin", "notAfter": null }]`,
+      '[0] names name twice' ],
+    [ 'a field of its own',                 `[{ ${head}, "role": "admin", "notAfter": null, "comment": "a", "comment": "b" }]`, '[0] names a field twice' ],
+    [ 'a field inside a value',             `[{ ${head}, "role": "admin", "notAfter": { "role": 1, "role": 2 } }]`, '[0] names a field twice' ],
+    [ 'whitespace before the colon',        `[{ ${head}, "role": "admin", "notAfter": "2027-05-01T00:00:00Z",\n  "notAfter"\t : null }]`, '[0] names notAfter twice' ],
+    [ 'after an entry with commas inside',  `[{ ${head}, "role": "admin", "notAfter": [ 1, { "a": 1, "b": 2 } ] }, { "name": "bob", "sha256": "${bob}", "role": "reader", "notAfter": null, "role": "admin" }]`,
+      '[1] names role twice' ],
+  ];
+  for (const [ what, text, problem ] of lists) {
+    t.ok(JSON.parse(text), `${what} is JSON`);
+    const refused = await refusalOf({ COMET_REGISTRY_ADMIN_TOKENS: text }, 'alice-token');
+    t.match(refused, {
+      status:  403,
+      code:    'FORBIDDEN',
+      message: 'the administrative API is misconfigured in this environment: COMET_REGISTRY_ADMIN_TOKENS is malformed',
+      headers: {},
+    }, `${what} refuses the token`);
+    t.equal(refused?.logged?.problem, `COMET_REGISTRY_ADMIN_TOKENS${problem}`, `and the log says ${problem}`);
+    t.notOk(JSON.stringify([ refused?.message, refused?.logged ]).includes('comment'), 'never with a name of the list');
+  }
+});
+
+/*
+ * A list as an operator writes it, over several lines and maybe with
+ * escapes, is read as JSON.parse reads it. Fields of one name in two entries
+ * are no repeat.
+ */
+t.test('a list over several lines, with escapes, is taken', async t => {
+  const alice = await sha256('alice-token');
+  const olga  = await sha256('olga-token');
+  const text  = `[\n  { "name": "alice", "sha256": "${alice}", "role": "admin", "notAfter": null },\r\n`
+    + `\t{ "n\\u0061me" : "olg\\u0061", "sha256": "${olga}", "role": "operator", "notAfter": "2027-05-01T00:00:00Z" }\n]\n`;
+  const settings = { COMET_REGISTRY_ADMIN_TOKENS: text };
+  t.match(await credentialOf(settings, 'alice-token'), { name: 'alice', role: 'admin' }, 'the first entry is taken');
+  t.match(await credentialOf(settings, 'olga-token', Date.parse('2027-01-01T00:00:00Z')), { name: 'olga', role: 'operator' },
+    'and so is the second, its name and field written with escapes');
+});
+
+/*
  * A secret is a string. wrangler.toml [vars] can give a setting as a list or
  * as a number instead, and the worker answers that as the environment's
  * fault, as it answers a string it cannot read, rather than failing on it.
