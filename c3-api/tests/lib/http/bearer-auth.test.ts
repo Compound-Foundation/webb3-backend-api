@@ -174,6 +174,10 @@ t.test('a list the worker cannot read closes the administrative API to every tok
     [ 'milliseconds since the epoch',  named({ notAfter: 1830297600000 }), 'COMET_REGISTRY_ADMIN_TOKENS[0].notAfter must be null or an instant in UTC' ],
     [ 'a missing expiry as a string',  named({ notAfter: 'null' }), 'COMET_REGISTRY_ADMIN_TOKENS[0].notAfter must be null or an instant in UTC' ],
     [ 'a token listed twice',          [ alice, { ...alice, name: 'bob', role: 'reader' } ], 'COMET_REGISTRY_ADMIN_TOKENS[1] names the same token as [0]' ],
+    [ 'a rotation with no cutoff',     [ alice, await entry('alice', 'alice-new-token', 'admin') ],
+      'COMET_REGISTRY_ADMIN_TOKENS[1] and [0] are two tokens of alice that last more than 30 days: give the one being replaced a notAfter within 30 days' ],
+    [ 'a rotation whose cutoff is far off', [ await entry('alice', 'alice-new-token', 'admin', '9999-12-31T23:59:59Z'), alice ],
+      'COMET_REGISTRY_ADMIN_TOKENS[1] and [0] are two tokens of alice that last more than 30 days: give the one being replaced a notAfter within 30 days' ],
     [ 'a good entry before a bad one', [ alice, { ...alice, name: 'Bob' } ], 'COMET_REGISTRY_ADMIN_TOKENS[1].name must be' ],
   ];
   for (const [ what, list, problem ] of lists) {
@@ -323,6 +327,20 @@ t.test('two tokens under one name are one holder\'s, each taken until it expires
   t.match(await refusalOf(settings, 'olga-old-token', after), { status: 401, message: 'the bearer token has expired' },
     'after the overlap the old one has expired');
   t.match(await credentialOf(settings, 'olga-new-token', after), { name: 'olga' }, 'and the new one goes on');
+
+  // the cutoff is counted from now: two months ahead, the old token would last past the rotation
+  const early = await refusalOf(settings, 'olga-new-token', Date.parse('2027-03-01T00:00:00Z'));
+  t.match(early, { status: 403, message: 'the administrative API is misconfigured in this environment: COMET_REGISTRY_ADMIN_TOKENS is malformed' },
+    'a cutoff more than 30 days off is no rotation');
+  t.match(early?.logged, { problem: 'COMET_REGISTRY_ADMIN_TOKENS[1] and [0] are two tokens of olga that last more than 30 days: give the one being replaced a notAfter within 30 days' },
+    'and the log says so');
+
+  // the cutoff may be on either: it is the pair that lasts that is refused
+  const reversed = listing([
+    await entry('olga', 'olga-old-token', 'operator'),
+    await entry('olga', 'olga-new-token', 'operator', '2027-05-01T00:00:00Z'),
+  ]);
+  t.match(await credentialOf(reversed, 'olga-old-token', after), { name: 'olga' }, 'one of them may be the one with no notAfter');
 
   const old = await credentialOf(settings, 'olga-old-token', during) as Credential;
   const replacement = await credentialOf(settings, 'olga-new-token', during) as Credential;

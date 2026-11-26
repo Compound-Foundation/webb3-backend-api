@@ -220,13 +220,17 @@ function repeatedField(text: string): string | undefined {
   return undefined;
 }
 
+// a rotation keeps the token it replaces this long at most: its notAfter falls within it, counted from now
+const ROTATION_DAYS = 30;
+
 /*
  * The tokens of COMET_REGISTRY_ADMIN_TOKENS, a JSON list of
  * `{ name, sha256, role, notAfter }`, or none while it is unset or blank. A
  * secret is a string; a list or a number, which only wrangler.toml [vars]
- * can give, is a list the worker cannot read.
+ * can give, is a list the worker cannot read. Whether a rotation's old token
+ * expires soon enough is counted from now, so a list taken once stays taken.
  */
-function listedTokens(value: unknown): Token[] {
+function listedTokens(value: unknown, now: number = Date.now()): Token[] {
   if (value === undefined || value === null) {
     return [];
   }
@@ -260,6 +264,12 @@ function listedTokens(value: unknown): Token[] {
     if (first >= 0) {
       throw malformed(`${TOKENS}[${index}] names the same token as [${first}]`);
     }
+    // a name has a second token only while its holder rotates, and the token it replaces expires within ROTATION_DAYS
+    const lasting = (listed: Token) => listed.notAfter === null || listed.notAfter > now + ROTATION_DAYS * 86_400_000;
+    const open = lasting(token) ? tokens.findIndex(other => other.name === token.name && lasting(other)) : -1;
+    if (open >= 0) {
+      throw malformed(`${TOKENS}[${index}] and [${open}] are two tokens of ${token.name} that last more than ${ROTATION_DAYS} days: give the one being replaced a notAfter within ${ROTATION_DAYS} days`);
+    }
     tokens.push(token);
   }
   return tokens;
@@ -273,7 +283,7 @@ function listedTokens(value: unknown): Token[] {
  * so a misconfigured environment answers the same whatever a request sends.
  */
 async function authenticateAdmin(request: Request, settings: AdminSettings, now: number = Date.now()): Promise<Credential> {
-  const tokens = listedTokens(settings.COMET_REGISTRY_ADMIN_TOKENS);
+  const tokens = listedTokens(settings.COMET_REGISTRY_ADMIN_TOKENS, now);
   if (tokens.length === 0) {
     throw new ApiError('FORBIDDEN', `the administrative API is not configured in this environment`);
   }

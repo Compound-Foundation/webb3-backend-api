@@ -82,10 +82,6 @@ routes = [ { pattern = "off.example.com", custom_domain = false } ]
 name = "fixture-pathed"
 routes = [ { pattern = "pathed.example.com/api", custom_domain = true } ]
 
-[env.wildcard]
-name = "fixture-wildcard"
-routes = [ { pattern = "*.example.com", custom_domain = true } ]
-
 [env.enabled]
 name = "fixture-enabled"
 routes = [ { pattern = "enabled.example.com", custom_domain = true, enabled = true } ]
@@ -121,6 +117,43 @@ routes = []
 [env.own]
 name = "fixture-own"
 routes = [ { pattern = "own.example.com", custom_domain = true } ]
+`);
+
+// a wildcard, which would take the host of every other environment here
+const WILDCARD = configured('wildcard', `
+[env.wildcard]
+name = "fixture-wildcard"
+routes = [ { pattern = "*.example.com", custom_domain = true } ]
+`);
+
+// one Worker for two environments: whatever one puts into it, the other's requests take too
+const WORKER = configured('worker', `
+[env.left]
+name = "fixture-shared-worker"
+routes = [ { pattern = "left.example.com", custom_domain = true } ]
+
+[env.right]
+name = "fixture-shared-worker"
+routes = [ { pattern = "right.example.com", custom_domain = true } ]
+`);
+
+// a route of the zone that another environment lists on the host, which would run before the custom domain
+const ROUTED = configured('routed', `
+[env.routed]
+name = "fixture-routed"
+routes = [ { pattern = "routed.example.com", custom_domain = true } ]
+
+[env.taker]
+name = "fixture-taker"
+routes = [ "routed.example.com/registry/*" ]
+
+[env.under]
+name = "fixture-under"
+routes = [ { pattern = "api.under.example.com", custom_domain = true } ]
+
+[env.over]
+name = "fixture-over"
+routes = [ "*.under.example.com/*" ]
 `);
 
 // one custom domain listed by two Workers: it belongs to whichever was deployed to it last
@@ -200,13 +233,16 @@ t.test('an environment not deployed to one custom domain is refused, and nothing
     [ 'one with a zone beside its domain',   'mixed',      ROUTES,    other ],
     [ 'one marked as no custom domain',      'off',        ROUTES,    other ],
     [ 'one whose domain has a path',         'pathed',     ROUTES,    other ],
-    [ 'one whose domain is a wildcard',      'wildcard',   ROUTES,    other ],
+    [ 'one whose domain is a wildcard',      'wildcard',   WILDCARD,  other ],
     [ 'one whose domain serves previews',    'previews',   ROUTES,    other ],
     [ 'one whose domain is an IP address',   'address',    ROUTES,    other ],
     [ 'one whose domain starts with a hyphen', 'hyphen',   ROUTES,    other ],
     [ 'one that inherits the top level\'s',  'inherits',   INHERITED, /^the environment inherits shares its custom domain top\.example\.com with the top level/ ],
     [ 'one that another lists too',          'first',      SHARED,    /^the environment first shares its custom domain shared\.example\.com with the environment second/ ],
     [ 'one that another lists for previews', 'serving',    SHARED,    /^the environment serving shares its custom domain previewed\.example\.com with the environment previewing/ ],
+    [ 'one whose Worker another deploys to', 'left',       WORKER,    /^the environment left deploys to the Worker fixture-shared-worker, as the environment right does/ ],
+    [ 'one with another\'s route on its host', 'routed',   ROUTED,    /^the environment routed shares its custom domain routed\.example\.com with the environment taker: "routed\.example\.com\/registry\/\*"/ ],
+    [ 'one under another\'s wildcard route', 'under',      ROUTED,    /^the environment under shares its custom domain api\.under\.example\.com with the environment over: "\*\.under\.example\.com\/\*"/ ],
   ];
   for (const [ what, name, cwd, problem ] of refusals) {
     const { status, stdout, stderr } = address(name, cwd);
