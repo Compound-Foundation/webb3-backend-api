@@ -156,9 +156,11 @@ The secrets, and every other value an environment sets outside
 `wrangler.toml` — the registry's among them, such as
 `COMET_GITHUB_TOKEN` and `COMET_REGISTRY_WEBHOOK_URL` — are listed in
 [./.dev.vars.example](./.dev.vars.example). Copy it to
-`.dev.vars` for local runs; deployed environments set them with
-`npx wrangler secret put <NAME> --env <environment>`, never in
-`wrangler.toml`. The admin token list, `COMET_REGISTRY_ADMIN_TOKENS`, goes in
+`.dev.vars` for local runs. Deployed environments set them, never in
+`wrangler.toml`, from `c3-api`, with the account check of
+[Before you start](./REGISTRY_RUNBOOK.md#before-you-start) first:
+`npx wrangler kv key list --binding kv_mainnet --env <environment> --remote --prefix account-check > /dev/null && npx wrangler secret put <NAME> --env <environment>`.
+The admin token list, `COMET_REGISTRY_ADMIN_TOKENS`, goes in
 only as step 4 of [The admin tokens](./REGISTRY_RUNBOOK.md#the-admin-tokens)
 puts it, after its check. Every deployed environment sets
 `COMET_GITHUB_TOKEN`: without a

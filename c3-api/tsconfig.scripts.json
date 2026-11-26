@@ -4,13 +4,15 @@
    * the address of an environment, read by "Before you start" and by step 4 of
    * "The admin tokens", and the token list check of that step. A list can be
    * put, and a token dropped, whatever the type check of the tests says. The
-   * output is the main build's, in the same place.
+   * output is the main build's, in the same place, so the build is never
+   * incremental: it writes every script again from the sources checked out,
+   * whatever another build left there.
    */
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rootDir": ".",
     "outDir": "./dist",
-    "tsBuildInfoFile": "./dist/scripts.tsbuildinfo"
+    "incremental": false
   },
   "files": [ "scripts/admin-tokens.ts", "scripts/environment-address.ts" ]
 }
