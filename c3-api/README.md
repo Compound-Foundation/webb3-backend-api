@@ -61,7 +61,9 @@ the hashes of two admin tokens of your own into `.dev.vars`, as entries of
 approves the version and the other switches it on — before starting the
 worker ([The admin tokens](./REGISTRY_RUNBOOK.md#the-admin-tokens)), and follow
 [Bringing an environment up for the first time](./REGISTRY_RUNBOOK.md#bringing-an-environment-up-for-the-first-time)
-with `API=http://localhost:8787`.
+with `API=http://localhost:8787` and
+`NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1`, which
+keep the token off any proxy set for plain http.
 
 See [API.md](./API.md) for documentation of routes with examples.
 
