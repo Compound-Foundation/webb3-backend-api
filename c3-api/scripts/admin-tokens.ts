@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import { listedTokens } from '../src/http/bearer-auth.js';
+import { ROTATION_DAYS, listedTokens } from '../src/http/bearer-auth.js';
 import { ApiError } from '../src/http/errors.js';
 
 /*
@@ -9,7 +9,10 @@ import { ApiError } from '../src/http/errors.js';
  * A list the worker would refuse, and so close the administrative API to
  * every token, is refused here first, with the problem the worker would log,
  * and nothing is printed: step 4 of "The admin tokens" in REGISTRY_RUNBOOK.md
- * puts the list only once this has printed it.
+ * puts the list only once this has printed it. A rotation is held to the
+ * runbook's 30 days by this machine's clock, a day short of what the worker
+ * takes by its own, so a clock a little off on either side never has the
+ * worker refuse a list this let through.
  *
  *   npx tsc -p tsconfig.scripts.json && node dist/scripts/admin-tokens.js <file>
  *
@@ -43,7 +46,8 @@ if (text.trim().length === 0) {
 }
 
 try {
-  if (listedTokens(text).length === 0) {
+  // a rotation by the runbook's rule, a day stricter than the worker, for the clocks
+  if (listedTokens(text, Date.now(), ROTATION_DAYS).length === 0) {
     console.error(`${path} lists no token: once it is put, the administrative API refuses every request`);
   }
 } catch (error) {

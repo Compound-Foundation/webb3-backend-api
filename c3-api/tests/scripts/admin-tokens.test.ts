@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { sha256 } from '../../lib/hash.js';
+import { listedTokens } from '../../src/http/bearer-auth.js';
 
 /*
  * The check step 4 of "The admin tokens" (REGISTRY_RUNBOOK.md) runs before it
@@ -90,4 +91,27 @@ t.test('the check takes one file', async t => {
     t.equal(stdout, '', 'and prints nothing');
     t.match(stderr, /^usage: node dist\/scripts\/admin-tokens\.js <file of the token list>/, 'but how to use it');
   }
+});
+
+/*
+ * A rotation is held to the runbook's 30 days here, by this machine's clock,
+ * a day short of the 31 the worker takes by its own: a list this lets
+ * through is one a worker whose clock is a little off still takes.
+ */
+t.test('a rotation is held to 30 days, a day short of what the worker takes', async t => {
+  const instant = (at: number) => new Date(at).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const rotation = (cutoff: number) => `[{ ${head}, "notAfter": "${instant(cutoff)}" }, { "name": "alice", "sha256": "${'c'.repeat(64)}", "role": "admin", "notAfter": null }]`;
+  const day = 86_400_000;
+
+  const within = rotation(Date.now() + 30 * day - 3_600_000);
+  const taken = check('rotation-within.json', within);
+  t.equal(taken.status, 0, 'a cutoff an hour within 30 days is put');
+  t.same(listedTokens(within, Date.now() - 10 * 60_000).map(token => token.name), [ 'alice', 'alice' ],
+    'and a worker whose clock is ten minutes behind takes it');
+
+  const beyond = check('rotation-beyond.json', rotation(Date.now() + 30 * day + 3_600_000));
+  t.equal(beyond.status, 1, 'one an hour past 30 days is refused');
+  t.equal(beyond.stdout, '', 'and nothing is printed');
+  t.match(beyond.stderr, /^COMET_REGISTRY_ADMIN_TOKENS\[1\] and \[0\] are two tokens of alice that last more than 30 days: give the one being replaced a notAfter within 30 days/,
+    'as a rotation past the runbook\'s 30 days');
 });
