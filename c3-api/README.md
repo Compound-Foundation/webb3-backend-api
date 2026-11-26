@@ -141,11 +141,14 @@ the alert `configuration-invalid`, as it does a `COMET_SOURCE_REPOSITORY` or
 
 The secrets, and every other value an environment sets outside
 `wrangler.toml` — the registry's among them, such as
-`COMET_REGISTRY_ADMIN_TOKENS` — are listed in
+`COMET_GITHUB_TOKEN` — are listed in
 [./.dev.vars.example](./.dev.vars.example). Copy it to
 `.dev.vars` for local runs; deployed environments set them with
 `npx wrangler secret put <NAME> --env <environment>`, never in
-`wrangler.toml`. Stage and production set `COMET_GITHUB_TOKEN`: without a
+`wrangler.toml`. The admin token list, `COMET_REGISTRY_ADMIN_TOKENS`, goes in
+only as step 4 of [The admin tokens](./REGISTRY_RUNBOOK.md#the-admin-tokens)
+puts it, after its check. Every deployed environment sets
+`COMET_GITHUB_TOKEN`: without a
 token GitHub allows 60 API requests an hour per address, and a Worker shares
 its address with every other Worker that leaves Cloudflare through it.
 

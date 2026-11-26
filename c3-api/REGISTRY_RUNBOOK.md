@@ -19,9 +19,17 @@ after it, one command switches back.
 
 ## Before you start
 
+Everything here works on one environment at a time. `ENVIRONMENT` names it
+as `wrangler.toml` does, and every command below that reaches an
+environment takes that name:
+
+```sh
+export ENVIRONMENT=production
+```
+
 - The environment's database has every migration applied, and this happened
   **before** the worker release that needs it:
-  `npm run d1:migrate:production`.
+  `npm run "d1:migrate:$ENVIRONMENT"`.
 - The worker is deployed, and it reaches the node provider proxy.
 - The environment has admin tokens, and you hold one of your own with the
   role `admin` — the token itself, not its hash. See
@@ -43,7 +51,7 @@ after it, one command switches back.
   deploying an older one again. Until then, an older release still switches
   versions on without an approval. Its migration, `0011`, is applied before
   it, as every migration is.
-- Production has `COMET_GITHUB_TOKEN` set. Without a token GitHub
+- The environment has `COMET_GITHUB_TOKEN` set. Without a token GitHub
   allows the import 60 API requests an hour per address, which the Worker
   shares with every other Worker leaving Cloudflare through it, and an import
   fails with `SOURCE_REQUEST_FAILED`, "its rate limit is used up". A
@@ -51,7 +59,7 @@ after it, one command switches back.
   no other permission, is enough; Wrangler prompts for it:
 
   ```sh
-  npx wrangler secret put COMET_GITHUB_TOKEN --env production
+  npx wrangler secret put COMET_GITHUB_TOKEN --env "${ENVIRONMENT:?export it first}"
   ```
 
 - [The preflight](#the-preflight) has passed on the commit being deployed.
@@ -66,6 +74,15 @@ installed, after:
 ```sh
 export API=https://v3-api.compound.xyz
 export TOKEN='<your admin token>'
+```
+
+`API` is the address of `$ENVIRONMENT`, the route `wrangler.toml` gives
+`[env.$ENVIRONMENT]`. The status names the environment that answers there,
+which must be `$ENVIRONMENT`; any other answer is one step 5 of
+[The admin tokens](#the-admin-tokens) explains:
+
+```sh
+curl -sS "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq -r '.environment // .error.code'
 ```
 
 Run every `npm run` and `npx wrangler` command in the checkout's `c3-api`,
@@ -203,11 +220,11 @@ account other than the one you meant. In each case nothing is put: correct
 it and run the command again. A list of no token, `[]`, is put, with a word
 that it closes the administrative API to every request.
 
-For a worker you run on your own machine, run the check alone, from
-`c3-api`:
+For a worker you run on your own machine, write its list as
+`~/tokens.local.json` and run the check alone, from `c3-api`:
 
 ```sh
-npx tsc -p tsconfig.scripts.json && node dist/scripts/admin-tokens.js <the file>
+npx tsc -p tsconfig.scripts.json && node dist/scripts/admin-tokens.js "$HOME/tokens.local.json"
 ```
 
 and put the line it prints into `.dev.vars`, which git ignores, in single
@@ -1334,7 +1351,7 @@ whose reasons are in the draft it names.
 
 | What you see | What it means | What to do |
 |---|---|---|
-| `INTERNAL` from the import, with a `requestId` | A fault rather than a service being down — most often the environment's database has no migrations applied. The worker's log has the error under `registry sync failed unexpectedly` | Apply the migrations (`npm run d1:migrate:<env>`), then import again; anything else is a bug to report with the log line |
+| `INTERNAL` from the import, with a `requestId` | A fault rather than a service being down — most often the environment's database has no migrations applied. The worker's log has the error under `registry sync failed unexpectedly` | Apply the migrations (`npm run "d1:migrate:$ENVIRONMENT"`, in `c3-api`), then import again; anything else is a bug to report with the log line |
 | `UPSTREAM_UNAVAILABLE: the import was interrupted by a service that did not answer` | The database did not answer, or was restarted under the request; the log line `registry sync failed` has its message | Import again; if it persists, check the database |
 | `503 UPSTREAM_UNAVAILABLE`, `details.code` `SOURCE_REQUEST_FAILED` | GitHub did not answer, or not within 20 seconds, or answered with an error status. "its rate limit is used up until …" is its hourly allowance spent, and "too many requests at once" its limit on bursts | Import again — after the time the message names, if it names one. Without `COMET_GITHUB_TOKEN` the allowance is 60 API requests an hour: set it ([Before you start](#before-you-start)) |
 | `422`, `details.code` `SOURCE_CONFIGURATION_INVALID`, from the import | A setting the import reads is not what it takes, and the message names it; `/admin/status` raises `configuration-invalid` | Correct the value in `wrangler.toml` and deploy |
