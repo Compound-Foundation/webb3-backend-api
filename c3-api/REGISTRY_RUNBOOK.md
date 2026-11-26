@@ -56,11 +56,13 @@ token goes there:
   the same, since Cloudflare lists exceptions to its route specificity among
   its known issues: no route of another Worker may cover the host. A login
   that may not read the zone or its routes stops the check at
-  `no active zone that this login reads …`, or at a `403` for the routes.
+  `no active zone that this login reads …`, or at a `403` for the routes;
+- while this machine's clock is more than an hour from Cloudflare's, which
+  its answers carry: step 4 counts a rotation's 30 days by it.
 
 For a worker you run on your own machine, such as the preflight's, `API` is
-`http://localhost:8787` instead, with no check: the token does not leave the
-machine.
+`http://localhost:8787` instead, which the check passes without reading
+anything: the token does not leave the machine.
 
 Wrangler puts or deletes a secret in the Worker `wrangler.toml` names for the
 environment, in the account it uses: the one `CLOUDFLARE_ACCOUNT_ID` names,
@@ -142,11 +144,19 @@ export TOKEN='<your admin token>'
 
 Once the environment lists your token, the status names the environment that
 answers at `API`, which must be `$ENVIRONMENT`; any other answer is one step 5
-of [The admin tokens](#the-admin-tokens) explains:
+of [The admin tokens](#the-admin-tokens) explains. Read it in `c3-api`, the
+routing checked again right before it, as every request that carries a
+token is: a route can change between one command and the next, and the
+check stops the request when it has:
 
 ```sh
-curl -sS "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq -r '.environment // .error.code'
+node dist/scripts/environment-routing.js && curl -sS "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq -r '.environment // .error.code'
 ```
+
+The bring-up's requests below carry your token too: check the routing so
+again before them, `node dist/scripts/environment-routing.js` in `c3-api`,
+whenever a route may have moved since, as after a deploy, a pause, or in a
+new shell.
 
 Run every `npm run`, `npx` and `node` command in the checkout's `c3-api`,
 which holds the Worker's configuration and the Wrangler it is built with:
@@ -250,9 +260,10 @@ Each entry has these four, and nothing else:
 - `name` — who holds the token: 1 to 64 lowercase letters, digits, `.`,
   `_`, `@` or `-`, the first a letter or a digit. Two entries share a name
   only while their holder rotates a token, and then the token it replaces has
-  a `notAfter` within 30 days: the worker refuses a list with two tokens of
-  one name that both last longer, which would leave the old one taken for
-  good.
+  a `notAfter` within 30 days: step 4 refuses a list with two tokens of one
+  name that both last longer, which would leave the old one taken for good,
+  and the worker one past 31 days, a day more by its own clock, so that a
+  clock a little off never has it refuse a list step 4 put.
 - `sha256` — the hash from step 2. A token is listed once.
 - `role` — `monitor`, `reader`, `operator` or `admin`.
 - `notAfter` — `null`, or the last instant the token is taken at, in UTC,
@@ -323,14 +334,20 @@ a validation of a version that does not exist, with a body the worker
 refuses, `[]` in place of an object: the role is checked before the body is
 read, so the answer says whether the token is taken, and with which role.
 The second reads the status, which names the environment that takes the
-token at `API`. Step 4 has just read `API`, its routing checked; in another
-shell, read it again as [Before you start](#before-you-start) does. For a
-worker on your own machine, `API` is `http://localhost:8787`, with no check:
+token at `API`. Both go out, from `c3-api`, only once the routing of `API`
+is checked again right before them, the check of
+[Before you start](#before-you-start), since a route can change after step
+4, a deploy among the things in between. In another shell, read `API` again
+first, as Before you start does. For a worker on your own machine, `API` is
+`http://localhost:8787`, which the check passes: the token never leaves the
+machine.
 
 ```sh
-curl -sS -X POST "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000000000/validate" \
-  -H "Authorization: Bearer $NEW_TOKEN" -H 'Content-Type: application/json' -d '[]' | jq -c .error
-curl -sS "$API/registry/v1/admin/status" -H "Authorization: Bearer $NEW_TOKEN" | jq -r '.environment // .error.code'
+node dist/scripts/environment-routing.js && {
+  curl -sS -X POST "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000000000/validate" \
+    -H "Authorization: Bearer $NEW_TOKEN" -H 'Content-Type: application/json' -d '[]' | jq -c .error
+  curl -sS "$API/registry/v1/admin/status" -H "Authorization: Bearer $NEW_TOKEN" | jq -r '.environment // .error.code'
+}
 ```
 
 - `"code":"BAD_REQUEST"`, "the request body must be a JSON object": the

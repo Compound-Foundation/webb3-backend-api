@@ -58,6 +58,8 @@ type Cloudflare = {
   refuse?:   string,
   nothing?:  string,
   redirect?: string,
+  // milliseconds Cloudflare's clock is ahead of this machine's
+  skew?:     number,
 };
 type Request = { url: string, method: string, headers: Record<string, unknown> };
 
@@ -78,7 +80,7 @@ const server = createServer((request, response) => {
   const url = new URL(request.url ?? '/', 'http://127.0.0.1');
   requests.push({ url: `${url.pathname}${url.search}`, method: request.method ?? '', headers: request.headers });
   const answer = (status: number, body: unknown) => {
-    response.writeHead(status, { 'Content-Type': 'application/json' });
+    response.writeHead(status, { 'Content-Type': 'application/json', 'Date': new Date(Date.now() + (state.skew ?? 0)).toUTCString() });
     response.end(JSON.stringify(body));
   };
   const path = url.pathname.replace(/^\/client\/v4/, '');
@@ -228,6 +230,10 @@ t.test('anything else is refused, and nothing is printed', async t => {
       /^Wrangler gives no login that this check can use/ ],
     [ 'no environment',                         cloudflare(), OAUTH, null,
       /^ENVIRONMENT is not set/ ],
+    [ 'a clock two hours ahead of Cloudflare\'s', cloudflare({ skew: -2 * 3_600_000 }), OAUTH, 'production',
+      /^this machine's clock is 120 minutes ahead of Cloudflare's: set it right, since step 4 counts a rotation's 30 days by it/ ],
+    [ 'a clock two hours behind',               cloudflare({ skew: 2 * 3_600_000 }), OAUTH, 'production',
+      /^this machine's clock is 120 minutes behind Cloudflare's/ ],
   ];
   for (const [ what, given, auth, environment, problem ] of refusals) {
     const refused = await check(given, auth, environment);
@@ -242,6 +248,14 @@ t.test('anything else is refused, and nothing is printed', async t => {
   t.match(elsewhere.stderr, /^API is https:\/\/api-elsewhere\.example\.com, and the environment production's address is https:\/\/api\.example\.com/,
     'as not the environment\'s');
   t.same(elsewhere.requests, [], 'before Cloudflare is asked');
+
+  const minutes = await check(cloudflare({ skew: 10 * 60_000 }));
+  t.equal(minutes.status, 0, 'a clock ten minutes off Cloudflare\'s passes');
+
+  const local = await check(cloudflare(), null, null, 'http://localhost:8787');
+  t.equal(local.status, 0, 'an API of a worker on this machine needs no check');
+  t.match(local.stdout, /^http:\/\/localhost:8787: a worker on this machine, which a token sent to it never leaves/, 'and it says why');
+  t.same([ local.requests, local.npx ], [ [], '' ], 'with neither Cloudflare nor Wrangler asked');
 
   const unnamed = await check(cloudflare(), OAUTH, null);
   t.same(unnamed.requests, [], 'with no environment, Cloudflare is not asked');
