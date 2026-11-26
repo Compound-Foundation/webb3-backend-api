@@ -954,7 +954,7 @@ $ curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
 ```
 ```json
 {
-  "environment": "stage",
+  "environment": "production",
   "checkedAt": "2026-09-23T09:12:41.004Z",
   "configuration": { "invalid": [] },
   "active": {
