@@ -26,11 +26,21 @@ import { environmentOf, refuse, takesHost } from './environment.js';
  *   a more specific route without a Worker would negate is refused all the
  *   same, since Cloudflare lists exceptions to its route specificity among its
  *   known issues.
- * An API already set must be the domain's address. It refuses, and prints
- * nothing, on anything else, a request that Cloudflare refuses among them,
- * and it never prints the login, nor lets Wrangler write it to its log.
+ * An API already set must be the domain's address, and this machine's clock
+ * must be within an hour of Cloudflare's, which its answers carry: step 4
+ * counts a rotation's 30 days by it. It refuses, and prints nothing, on
+ * anything else, a request that Cloudflare refuses among them, and it never
+ * prints the login, nor lets Wrangler write it to its log. An API of a worker
+ * on this machine needs no check: a token sent there never leaves it.
  */
 const BASE = (process.env['CLOUDFLARE_API_BASE_URL'] ?? 'https://api.cloudflare.com/client/v4').replace(/\/+$/, '');
+
+// a worker on this machine, over plain http to the loopback address, as the runbook's local path sets API
+const LOCAL = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\/?$/;
+if (LOCAL.test(process.env['API'] ?? '')) {
+  process.stdout.write(`${process.env['API']}: a worker on this machine, which a token sent to it never leaves\n`);
+  process.exit(0);
+}
 
 const environment = environmentOf(process.env['ENVIRONMENT']);
 const { name, worker, host } = environment;
@@ -87,6 +97,10 @@ const headers = credentials();
 
 type Answer = { success?: unknown, result?: unknown, errors?: Array<{ code?: unknown, message?: unknown }> };
 
+// how far this machine's clock may be from Cloudflare's: well within the day the worker takes over step 4's 30 days
+const CLOCK_SKEW_MS = 3_600_000;
+let clockChecked = false;
+
 // what Cloudflare answers to a GET of the path, or a refusal that says what it was for
 async function read(path: string, purpose: string): Promise<unknown> {
   // Node's own fetch, whose answer is not the worker's Response type
@@ -96,6 +110,17 @@ async function read(path: string, purpose: string): Promise<unknown> {
     response = await fetch(`${BASE}${path}`, { headers, redirect: 'error', signal: AbortSignal.timeout(30_000) });
   } catch (error) {
     refuse(`${purpose}: Cloudflare did not answer GET ${path}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!clockChecked) {
+    const told = Date.parse(response.headers.get('date') ?? '');
+    if (!Number.isFinite(told)) {
+      refuse(`${purpose}: Cloudflare answered GET ${path} with no date to check this machine's clock against`);
+    }
+    const skew = Date.now() - told;
+    if (Math.abs(skew) > CLOCK_SKEW_MS) {
+      refuse(`this machine's clock is ${Math.round(Math.abs(skew) / 60_000)} minutes ${skew > 0 ? 'ahead of' : 'behind'} Cloudflare's: set it right, since step 4 counts a rotation's 30 days by it`);
+    }
+    clockChecked = true;
   }
   let answer: Answer;
   try {

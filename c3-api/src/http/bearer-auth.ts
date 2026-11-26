@@ -220,8 +220,15 @@ function repeatedField(text: string): string | undefined {
   return undefined;
 }
 
-// a rotation keeps the token it replaces this long at most: its notAfter falls within it, counted from now
+/*
+ * A rotation keeps the token it replaces this long at most: its notAfter
+ * falls within it, counted from now. Step 4 of "The admin tokens" holds a
+ * list to it before the list is put, by the clock of the machine that puts
+ * it; the worker takes a day more, by its own, so the two clocks never
+ * disagree on a list the check let through.
+ */
 const ROTATION_DAYS = 30;
+const WORKER_ROTATION_DAYS = ROTATION_DAYS + 1;
 
 /*
  * The tokens of COMET_REGISTRY_ADMIN_TOKENS, a JSON list of
@@ -230,7 +237,7 @@ const ROTATION_DAYS = 30;
  * can give, is a list the worker cannot read. Whether a rotation's old token
  * expires soon enough is counted from now, so a list taken once stays taken.
  */
-function listedTokens(value: unknown, now: number = Date.now()): Token[] {
+function listedTokens(value: unknown, now: number = Date.now(), rotationDays: number = WORKER_ROTATION_DAYS): Token[] {
   if (value === undefined || value === null) {
     return [];
   }
@@ -264,11 +271,11 @@ function listedTokens(value: unknown, now: number = Date.now()): Token[] {
     if (first >= 0) {
       throw malformed(`${TOKENS}[${index}] names the same token as [${first}]`);
     }
-    // a name has a second token only while its holder rotates, and the token it replaces expires within ROTATION_DAYS
-    const lasting = (listed: Token) => listed.notAfter === null || listed.notAfter > now + ROTATION_DAYS * 86_400_000;
+    // a name has a second token only while its holder rotates, and the token it replaces expires within rotationDays
+    const lasting = (listed: Token) => listed.notAfter === null || listed.notAfter > now + rotationDays * 86_400_000;
     const open = lasting(token) ? tokens.findIndex(other => other.name === token.name && lasting(other)) : -1;
     if (open >= 0) {
-      throw malformed(`${TOKENS}[${index}] and [${open}] are two tokens of ${token.name} that last more than ${ROTATION_DAYS} days: give the one being replaced a notAfter within ${ROTATION_DAYS} days`);
+      throw malformed(`${TOKENS}[${index}] and [${open}] are two tokens of ${token.name} that last more than ${rotationDays} days: give the one being replaced a notAfter within ${ROTATION_DAYS} days`);
     }
     tokens.push(token);
   }
@@ -325,4 +332,4 @@ function refuseRole(credential: Credential, required: Role): ApiError {
 }
 
 export type { Credential, Role };
-export { ROLES, allows, authenticateAdmin, listedTokens, refuseRole, sha256Hex };
+export { ROLES, ROTATION_DAYS, allows, authenticateAdmin, listedTokens, refuseRole, sha256Hex };

@@ -656,11 +656,13 @@ no other token.
   take is still `405`, whatever the role.
 - An environment that lists no token — no list, a blank one, or `[]` — or
   whose list the worker cannot read, such as one with an entry that names a
-  field twice, or two tokens of one name that both last more than 30 days,
-  which a rotation would leave taken for good, answers `403 FORBIDDEN` to
-  every administrative request that reaches its token check, whatever it
-  carries, and asks for no token: a malformed list refuses every token, those
-  of its well-formed entries too.
+  field twice, or two tokens of one name that both last more than 31 days by
+  the worker's clock, which a rotation would leave taken for good, answers
+  `403 FORBIDDEN` to every administrative request that reaches its token
+  check, whatever it carries, and asks for no token: a malformed list refuses
+  every token, those of its well-formed entries too. Step 4 of the runbook's
+  "The admin tokens" holds a rotation to 30 days before it puts a list, a day
+  short of it, for the clocks.
   The address limit below comes first, so a request past it is `429` all the
   same, and a path no route takes is `404`. The message says which: the API
   is not configured, or
