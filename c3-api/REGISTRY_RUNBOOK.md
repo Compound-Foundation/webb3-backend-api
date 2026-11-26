@@ -32,10 +32,45 @@ environment's address, `API`, from `wrangler.toml`, in the checkout's
 unset API; npx tsc -p tsconfig.scripts.json && API="$(node dist/scripts/environment-address.js)" && export API && echo "API=$API"
 ```
 
-It prints the address the environment is deployed to, or stops, leaving `API`
-empty, while `ENVIRONMENT` names no environment with one address for every
-path of one host. For a worker you run on your own machine, such as the
-preflight's, `API` is `http://localhost:8787` instead.
+It prints the https address of the environment's custom domain, or stops,
+leaving `API` empty, while `ENVIRONMENT` names no environment deployed to one
+custom domain of its own. That is the one address `wrangler.toml` gives:
+Cloudflare creates the custom domain's DNS record, which points to the
+Worker, and its certificate. A route of a zone is no such address: it runs
+the Worker only for the requests the zone's DNS sends through Cloudflare,
+which `wrangler.toml` does not show, and a route written with `http://` only
+for plain http. Nor does `wrangler.toml` show a route of the zone on the
+custom domain's host, which would run first: the status below names the
+environment that answers. For a worker you run on your own machine, such as
+the preflight's, `API` is `http://localhost:8787` instead.
+
+Wrangler puts or deletes a secret in the Worker `wrangler.toml` names for the
+environment, in the account it uses: the one `CLOUDFLARE_ACCOUNT_ID` names,
+in the shell or in a `.env` file of `c3-api`, which Wrangler reads too
+(`wrangler.toml` sets no `account_id`, which would come first), else the one
+it remembers from an earlier run in this checkout, in
+`node_modules/.cache/wrangler`, else the only one you can reach. So every
+command below that puts or deletes a secret first checks the account: it
+lists the keys of the environment's `kv_mainnet` that start with
+`account-check`, of which there are none, by the namespace id `wrangler.toml`
+gives it, with
+`npx wrangler kv key list --binding kv_mainnet --env "$ENVIRONMENT" --remote --prefix account-check`.
+That id pins the account: only the environment's account holds the
+namespace, which its deployed Worker already reads, so in any other account
+the list fails, and the command stops before it writes. Check the account
+the same way before you create the environment's database or namespaces, as
+`wrangler.toml` asks. The migrations need no check of their own: they write
+to the environment's database by its id, which no other account holds.
+
+The check never asks, so it also stops while you can reach several accounts
+and none is chosen, and while you are not logged in: log in first with
+`npx wrangler login`, or set a `CLOUDFLARE_API_TOKEN` that may read Workers
+KV and edit Workers scripts. `Authentication error [code: 10000]` is a
+login or token that cannot read the environment's account. When it stops for another account, run
+`export CLOUDFLARE_ACCOUNT_ID=<its account ID>` with the account the
+environment runs in, one of those `npx wrangler whoami` lists, and run the
+whole command again: set for the check alone, it would not reach the
+commands after it.
 
 - The environment's database has every migration applied, and this happened
   **before** the worker release that needs it:
@@ -66,10 +101,12 @@ preflight's, `API` is `http://localhost:8787` instead.
   shares with every other Worker leaving Cloudflare through it, and an import
   fails with `SOURCE_REQUEST_FAILED`, "its rate limit is used up". A
   fine-grained GitHub token with read-only access to public repositories, and
-  no other permission, is enough; Wrangler prompts for it:
+  no other permission, is enough; Wrangler prompts for it once the account
+  is checked, run in `c3-api`:
 
   ```sh
-  npx wrangler secret put COMET_GITHUB_TOKEN --env "${ENVIRONMENT:?export it first}"
+  npx wrangler kv key list --binding kv_mainnet --env "${ENVIRONMENT:?export it first}" --remote --prefix account-check > /dev/null \
+    && npx wrangler secret put COMET_GITHUB_TOKEN --env "$ENVIRONMENT"
   ```
 
 - [The preflight](#the-preflight) has passed on the commit being deployed.
@@ -213,32 +250,37 @@ the token there. A list the worker cannot read closes the administrative API
 to every token, the owner's too, so it then reads the file exactly as the
 worker will read the secret, with the worker's own code
 (`scripts/admin-tokens.ts`), and puts nothing the worker would refuse. It
-then makes sure the environment's Worker exists in the account you are
-logged into: put into a Worker that is not there, Wrangler creates one by
-that name, without asking when it reads from a pipe. Wrangler reads the
-secret from the pipe, and it takes effect without a deploy:
+then checks the account Wrangler uses, as
+[Before you start](#before-you-start) says, and makes sure the environment's
+Worker exists in it: put into a Worker that is not there, Wrangler creates
+one by that name, without asking when it reads from a pipe. Wrangler reads
+the secret from the pipe, and it takes effect without a deploy:
 
 ```sh
 unset API; npx tsc -p tsconfig.scripts.json \
   && API="$(node dist/scripts/environment-address.js)" && export API && echo "API=$API" \
   && LIST="$(node dist/scripts/admin-tokens.js "$HOME/tokens.${ENVIRONMENT:?export it first}.json")" \
+  && npx wrangler kv key list --binding kv_mainnet --env "$ENVIRONMENT" --remote --prefix account-check > /dev/null \
   && npx wrangler secret list --env "$ENVIRONMENT" > /dev/null \
   && printf '%s\n' "$LIST" | npx wrangler secret put COMET_REGISTRY_ADMIN_TOKENS --env "$ENVIRONMENT"
 ```
 
-While `ENVIRONMENT` names no environment with one address, the command stops
-at the address read, as [Before you start](#before-you-start) does, and puts
-nothing, leaving `API` empty.
+While `ENVIRONMENT` names no environment deployed to one custom domain of
+its own, the command stops at the address read, as
+[Before you start](#before-you-start) does, and puts nothing, leaving `API`
+empty.
 
 When the worker would refuse the list, the check prints what the worker
 would log, such as `COMET_REGISTRY_ADMIN_TOKENS[1].sha256 must be 64 hex
 digits` for a hash not yet filled in, or `COMET_REGISTRY_ADMIN_TOKENS[0]
 names notAfter twice` for a field written twice, which JSON alone would read
 by its last value. `cannot read …` is a file that is not there, and
-`… is empty` an empty one. `Worker "…" not found` is an environment or an
-account other than the one you meant. In each case nothing is put: correct
-it and run the command again. A list of no token, `[]`, is put, with a word
-that it closes the administrative API to every request.
+`… is empty` an empty one. An error from `kv key list` is the account check
+stopping, for one of the reasons [Before you start](#before-you-start)
+gives, and `Worker "…" (env: …) not found` an environment whose Worker is
+not deployed yet. In each case nothing is put: correct it and run the
+command again. A list of no token, `[]`, is put, with a word that it closes
+the administrative API to every request.
 
 For a worker you run on your own machine, write its list as
 `~/tokens.local.json` and run the check alone, from `c3-api`:
@@ -1380,7 +1422,7 @@ whose reasons are in the draft it names.
 |---|---|---|
 | `INTERNAL` from the import, with a `requestId` | A fault rather than a service being down — most often the environment's database has no migrations applied. The worker's log has the error under `registry sync failed unexpectedly` | Apply the migrations (`npm run "d1:migrate:$ENVIRONMENT"`, in `c3-api`), then import again; anything else is a bug to report with the log line |
 | `UPSTREAM_UNAVAILABLE: the import was interrupted by a service that did not answer` | The database did not answer, or was restarted under the request; the log line `registry sync failed` has its message | Import again; if it persists, check the database |
-| `503 UPSTREAM_UNAVAILABLE`, `details.code` `SOURCE_REQUEST_FAILED` | GitHub did not answer, or not within 20 seconds, or answered with an error status. "its rate limit is used up until …" is its hourly allowance spent, and "too many requests at once" its limit on bursts | Import again — after the time the message names, if it names one. Without `COMET_GITHUB_TOKEN` the allowance is 60 API requests an hour: set it ([Before you start](#before-you-start)) |
+| `503 UPSTREAM_UNAVAILABLE`, `details.code` `SOURCE_REQUEST_FAILED` | GitHub did not answer, or not within 20 seconds, or answered with an error status. "its rate limit is used up until …" is its hourly allowance spent, and "too many requests at once" its limit on bursts | Import again — after the time the message names, if it names one. Without `COMET_GITHUB_TOKEN` the allowance is 60 API requests an hour: set it, in `c3-api` ([Before you start](#before-you-start)) |
 | `422`, `details.code` `SOURCE_CONFIGURATION_INVALID`, from the import | A setting the import reads is not what it takes, and the message names it; `/admin/status` raises `configuration-invalid` | Correct the value in `wrangler.toml` and deploy |
 | `422`, `details.code` `SOURCE_TREE_TRUNCATED`, `SOURCE_CONTENT_TOO_LARGE` or `SOURCE_RESPONSE_INVALID` | GitHub answered, but with something the import cannot use, and would answer the same way again | Report it to a developer with the message; importing again does not help |
 | `422`, "validation failed", from the import, with `details.syncRunId` and `details.registryVersionId` | The import finished and its draft failed a check: the draft is `invalid`, and can no longer change. `/admin/status` raises `last-sync-failed`, and `commit-rejected` as well when every root imported | Read the draft's checks: `GET /registry/v1/admin/versions/<registryVersionId>`, under `validation`. If `all-roots-imported` failed, `GET /registry/v1/admin/sync-runs/<syncRunId>` names the roots the run gave up, and why. Otherwise correct the decisions in a held attempt (step 1 of [Describing a new market](#describing-a-new-market)) and validate it, or wait for a new commit |
