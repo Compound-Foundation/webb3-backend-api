@@ -64,8 +64,8 @@ after it, one command switches back.
 Nothing runs on your machine but the requests: the Worker being deployed
 imports the source, and checks the decisions you send it against the source
 and the chain. Those decisions are the seed of the commit being deployed,
-[`c3-api/registry/seed/production.json`](./registry/seed/README.md), so run
-the terminal commands from the root of a checkout of that commit, with `jq`
+[`c3-api/registry/seed/production.json`](./registry/seed/README.md), so send
+the requests from the root of a checkout of that commit, with `jq`
 installed, after:
 
 ```sh
@@ -101,6 +101,10 @@ an `http://` address is dropped all the same, though nothing refused its
 request. Only a zone that redirects with a rule of its own can leave
 `/registry/v1/admin/` out of it, for the worker to refuse such a request;
 Always Use HTTPS redirects every request, on every host of the zone.
+
+Run every `npm run` and `npx wrangler` command in the checkout's `c3-api`,
+which holds the Worker's configuration and the Wrangler it is built with:
+from the root, npm finds no such script, and Wrangler no Worker.
 
 Every step shows the terminal command, and beside it the same request for
 Postman, written as the request itself: the method and URL on the first line,
@@ -144,8 +148,8 @@ be used as a token. Tokens go to their holders through the team's password
 manager, and their hashes — never the tokens — into the environment, as one
 secret: the list `COMET_REGISTRY_ADMIN_TOKENS`. Whoever can put that secret
 can make a token of any name and role, so leave it to the environment's
-owner. Each environment has its own list: a stage token is not a production
-one.
+owner. Each environment has tokens and a list of its own: a token is made
+for one environment and listed in no other.
 
 **1. Make a token** for its holder. 32 random bytes are plenty:
 
@@ -168,7 +172,8 @@ or ` *stdin` after it — and the list takes the 64 hex digits alone.
 printf '%s' "$NEW_TOKEN" | openssl dgst -sha256 -r | cut -d ' ' -f 1
 ```
 
-**3. Write the list**, `tokens.json`, with an entry for each token:
+**3. Write the list**, `~/tokens.json`, with an entry for each token. Keep it
+outside the checkout, where git does not ignore a `tokens.json`:
 
 ```json
 [
@@ -195,13 +200,21 @@ never shows a secret again either: keep `tokens.json`, which holds hashes
 and no token, where the next change will start from, such as the password
 manager.
 
-**4. Put the list into the environment.** Wrangler reads the secret from the
-pipe, on one line, and it takes effect without a deploy:
+**4. Put the list into the environment**, from `c3-api`. Wrangler reads the
+secret from the pipe, on one line, and it takes effect without a deploy. The
+command first checks the file as you wrote it, and puts the list only when
+the check prints `true`:
 
 ```sh
-jq -c . tokens.json | npx wrangler secret put COMET_REGISTRY_ADMIN_TOKENS --env stage
-jq -c . tokens.json | npx wrangler secret put COMET_REGISTRY_ADMIN_TOKENS --env production
+jq -n --stream -e '[inputs | select(length == 2) | .[0]] | length == (unique | length)' < ~/tokens.json \
+  && jq -c . ~/tokens.json | npx wrangler secret put COMET_REGISTRY_ADMIN_TOKENS --env production
 ```
+
+`false` is an entry that names a field twice, such as a second `notAfter` or
+`role`: JSON keeps the last of the two, and so does `jq -c`, so the worker
+would take the last value, and nothing would show it. An error is a file that
+is not there, or not JSON. Either way nothing is put: correct the file and run
+the command again.
 
 For a worker you run on your own machine, the same line goes into
 `.dev.vars`, which git ignores, in single quotes — with two `admin` tokens
@@ -211,37 +224,41 @@ of your own under two names, since a version is switched on by two:
 COMET_REGISTRY_ADMIN_TOKENS='[{"name":"local-admin","sha256":"<the hash from step 2>","role":"admin","notAfter":null},{"name":"local-approver","sha256":"<the hash of a second token>","role":"admin","notAfter":null}]'
 ```
 
-**5. Check each token** with a request its role may make: an unknown
-version id for any role but `monitor`, because reaching a `404` means the
-token was accepted, and the status for a `monitor`, which answers `200`:
+**5. Check each token** with one request that changes nothing, the
+validation of a version that does not exist. Its answer says whether the
+token is taken, and with which role:
 
 ```sh
-curl -s -o /dev/null -w '%{http_code}\n' \
-  "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000000000" \
-  -H "Authorization: Bearer $NEW_TOKEN"
-curl -s -o /dev/null -w '%{http_code}\n' "$API/registry/v1/admin/status" \
-  -H "Authorization: Bearer $NEW_TOKEN"
+curl -sS -X POST "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000000000/validate" \
+  -H "Authorization: Bearer $NEW_TOKEN" | jq -c .error
 ```
 
-For anything else, run the command again without `-o /dev/null` to see the
-message:
+- `"code":"NOT_FOUND"`: the token is an `admin`'s. No version has that id,
+  so nothing is validated.
+- `"code":"FORBIDDEN"` with `"details":{"role":"…","requiredRole":"admin"}`:
+  the token is taken, with the role `details.role` names, which must be the
+  role its entry lists.
 
-- `401`, "the bearer token is not valid": the list has no entry for this
-  token — a hash made with `echo`, another token's, or the token itself,
-  listed in place of its hash. Hash it again (step 2) and put the list again.
-- `401`, "the bearer token has expired": its `notAfter` has passed.
-- `403`, "the token … has the role …, and this route needs …": the token is
-  accepted, and its role does not reach the route — a `monitor`'s, on
-  anything but the status.
-- `403`, "… COMET_REGISTRY_ADMIN_TOKENS is malformed": the worker cannot read
-  the list, such as one with a hash copied with the `  -` or ` *stdin`
-  printed after it, and refuses every token until it can. The worker's log
-  line `registry route refused`, under the answer's `requestId`, names the
-  entry and what is wrong with it; correct the file and put it again
-  (step 4).
-- `403`, "… is not configured in this environment": the environment has no
-  list, or one with no entry, and an unconfigured admin API is a closed one.
-  Put the list (step 4).
+Send exactly this id: with a draft's id, the request validates that draft.
+If `jq` reports a parse error, the answer is not JSON; run the command again
+without `| jq -c .error` to see it. Any other answer names its `code` and
+`message`:
+
+- `UNAUTHORIZED` (`401`), "the bearer token is not valid": the list has no
+  entry for this token — a hash made with `echo`, another token's, or the
+  token itself, listed in place of its hash. Hash it again (step 2) and put
+  the list again.
+- `UNAUTHORIZED` (`401`), "the bearer token has expired": its `notAfter` has
+  passed.
+- `FORBIDDEN` (`403`), "… COMET_REGISTRY_ADMIN_TOKENS is malformed": the
+  worker cannot read the list, such as one with a hash copied with the `  -`
+  or ` *stdin` printed after it, and refuses every token until it can. The
+  worker's log line `registry route refused`, under the answer's
+  `requestId`, names the entry and what is wrong with it; correct the file
+  and put it again (step 4).
+- `FORBIDDEN` (`403`), "… is not configured in this environment": the
+  environment has no list, or one with no entry, and an unconfigured admin
+  API is a closed one. Put the list (step 4).
 - `403`, "the administrative API takes requests over https only": `API`
   names an `http://` address. The token crossed the network in clear text:
   drop it, as one that may have leaked (below), and check a new one at the
