@@ -1,7 +1,8 @@
 {
   /*
-   * The token list check that step 4 of "The admin tokens" in
-   * REGISTRY_RUNBOOK.md runs, with what it imports, built alone: a list can be
+   * The scripts REGISTRY_RUNBOOK.md runs, with what they import, built alone:
+   * the address of an environment, read by "Before you start" and by step 4 of
+   * "The admin tokens", and the token list check of that step. A list can be
    * put, and a token dropped, whatever the type check of the tests says. The
    * output is the main build's, in the same place.
    */
@@ -11,5 +12,5 @@
     "outDir": "./dist",
     "tsBuildInfoFile": "./dist/scripts.tsbuildinfo"
   },
-  "files": [ "scripts/admin-tokens.ts" ]
+  "files": [ "scripts/admin-tokens.ts", "scripts/environment-address.ts" ]
 }
