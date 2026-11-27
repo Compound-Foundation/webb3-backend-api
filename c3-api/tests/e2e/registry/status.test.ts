@@ -9,6 +9,7 @@ import type { Address } from '../../../lib/model/comet-registry.js';
 import { sha256Hex } from '../../../src/http/bearer-auth.js';
 import { activeSnapshot, cacheDepsOf } from '../../../src/registry/cache.js';
 import { CHECK_KEY, checkChain } from '../../../src/registry/drift.js';
+import { FAILURE_KEY } from '../../../src/registry/notifications.js';
 import { activateVersion, markInvalid, recordValidationResults } from '../../../src/registry/repository.js';
 
 import { applyMigrations } from '../../util/d1.js';
@@ -33,6 +34,11 @@ const server = createTestHarness({ workers: [ registryWorker(SECRETS) ] });
 // the worker again, with `vars` set over the ones wrangler.toml gives it, until the next freshDatabase
 async function withVars(vars: Record<string, string>): Promise<void> {
   await server.update({ workers: [ { ...registryWorker(SECRETS), vars } ] });
+}
+
+// the worker again, with secrets set beside its token list, until the next freshDatabase
+async function withSecrets(secrets: Record<string, string>): Promise<void> {
+  await server.update({ workers: [ registryWorker({ ...SECRETS, ...secrets }) ] });
 }
 
 t.before(async () => {
@@ -67,6 +73,7 @@ type Status = {
     drifts:     Array<Record<string, unknown>>,
     unreadable: Array<{ chainId: number, network: string, error: string }>,
   } | null,
+  notifications: { webhook: string, failure: Record<string, unknown> | null },
   alerts: string[],
 };
 
@@ -140,6 +147,7 @@ t.test('a healthy registry raises nothing', async t => {
   t.equal(healthy.sync.lastRun?.status, 'completed');
   t.same(healthy.alerts, [], 'so there is nothing to alert on');
   t.same(healthy.configuration, { invalid: [] }, 'every registry setting is one the registry takes');
+  t.same(healthy.notifications, { webhook: 'off', failure: null }, 'and no webhook is set, so nothing is announced');
   t.equal(healthy.environment, 'local');
 });
 
@@ -765,6 +773,50 @@ t.test('a setting the environment does not take is raised at once, by name', asy
   t.equal(read.status, 200, 'a setting only reads take does not fail them');
   t.equal(read.headers.get('cache-control'), 'public, max-age=300', 'they take its default');
   t.same((await status()).configuration.invalid, [ 'REGISTRY_SNAPSHOT_CACHE_TTL_S' ], 'and it is raised all the same');
+});
+
+/*
+ * The webhook a move or an approval is announced to is a secret, and a
+ * secret set to something no message can go to is raised as any setting is.
+ * A message given up is raised while the webhook is on, until a later one is
+ * sent: a channel that has stopped hearing of changes says nothing by itself.
+ */
+t.test('the webhook is raised when it is set wrong, and when a message to it was given up', async t => {
+  const db = await freshDatabase();
+  const { versionId } = await seedCandidate(db, snapshot);
+  await activateSeeded(db, versionId);
+  await db.prepare(`UPDATE registry_state SET last_upstream_checked_at = ?1 WHERE singleton_id = 1`)
+    .bind(new Date().toISOString()).run();
+  t.equal((await server.fetch('/registry/v1/active')).status, 200);
+
+  await withSecrets({ COMET_REGISTRY_WEBHOOK_URL: 'http://hooks.example.test/services/T0/B0/status-secret' });
+  const invalid = await status();
+  t.same(invalid.alerts, [ 'configuration-invalid' ], 'a webhook that is no https URL is a setting the registry does not take');
+  t.same(invalid.configuration.invalid, [ 'COMET_REGISTRY_WEBHOOK_URL' ], 'named by its secret');
+  t.same(invalid.notifications, { webhook: 'invalid', failure: null }, 'to which nothing is announced');
+  t.notOk(JSON.stringify(invalid).includes('status-secret'), 'and whose value the status never repeats');
+
+  await withSecrets({ COMET_REGISTRY_WEBHOOK_URL: 'https://hooks.example.test/services/T0/B0/status-secret' });
+  const { kv_registry } = await server.getWorker<Env>().getEnv();
+  const failure = {
+    at:           new Date().toISOString(),
+    activationId: randomUUID(),
+    kind:         'activate',
+    versionId,
+    status:       410,
+    reason:       'the webhook answered 410',
+  };
+  await kv_registry.put(FAILURE_KEY, JSON.stringify(failure));
+  const failing = await status();
+  t.same(failing.alerts, [ 'notification-failing' ], 'a message given up while a webhook is set is raised');
+  t.same(failing.notifications, { webhook: 'on', failure: { ...failure, approvalId: null } },
+    'naming the move, and what the webhook answered, and no approval');
+  t.notOk(JSON.stringify(failing).includes('status-secret'), 'never the webhook');
+
+  await withSecrets({});
+  const off = await status();
+  t.same(off.alerts, [], 'with no webhook set nothing is meant to be announced, and nothing is raised');
+  t.same(off.notifications, { webhook: 'off', failure: null }, 'nor is a record left from before reported');
 });
 
 t.test('the status is behind the admin token', async t => {

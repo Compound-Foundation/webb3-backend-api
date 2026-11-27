@@ -277,6 +277,33 @@ t.test('the addresses of one IPv6 /64 share one budget', async t => {
 });
 
 /*
+ * The harness reaches the worker over plain http at 127.0.0.1, which a worker
+ * on this machine takes. A request it sends to another host over plain http
+ * is refused for its scheme before its address spends anything
+ * (admin-transport.test.ts): however many of them an address sends, its
+ * budget is whole for the requests that are served.
+ */
+t.test('a request over plain http to another host spends nothing of its address\'s budget', async t => {
+  await freshDatabase();
+
+  const LIMIT   = 60;
+  const headers = { ...auth, 'CF-Connecting-IP': '198.51.100.40' };
+
+  const window   = await startOfWindow();
+  const answered = new Set<string>();
+  for (let attempt = 0; attempt <= LIMIT; attempt++) {
+    const response = await server.fetch('http://api.test.local/registry/v1/admin/status', { headers });
+    const { error } = await response.json() as { error?: { details?: { code?: string } } };
+    answered.add(`${response.status} ${error?.details?.code}`);
+  }
+  t.same([ ...answered ], [ '403 HTTPS_REQUIRED' ], 'each is refused for its scheme, the one past the budget too');
+
+  t.equal((await server.fetch('/registry/v1/admin/status', { headers })).status, 200,
+    'and the same request from the same address, to this machine, is served');
+  t.equal(windowOf(Date.now()), window, 'the requests were counted in one window of the limiter');
+});
+
+/*
  * Every administrative route, with a request a token allowed on it is
  * answered for on its own merits without changing anything: an unknown id, or
  * a body refused as malformed. `role` is the least role the route takes.

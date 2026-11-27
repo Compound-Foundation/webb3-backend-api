@@ -156,6 +156,10 @@ commands after it.
     && npx wrangler secret put COMET_GITHUB_TOKEN --env "$ENVIRONMENT"
   ```
 
+- The environment announces every approval, and every version switched on or
+  rolled back to, in the team's channel:
+  [Announcing changes](#announcing-changes) sets that up, once. Without it
+  nothing is announced.
 - [The preflight](#the-preflight) has passed on the commit being deployed.
 
 Nothing of the bring-up runs on your machine but the requests and the
@@ -169,6 +173,35 @@ installed, after setting your token:
 ```sh
 export TOKEN='<your admin token>'
 ```
+
+Keep the `https://`. The admin API refuses a request sent over plain `http`
+(`403`, `details.code` `HTTPS_REQUIRED`) without reading its token, but the
+token has crossed the network in clear text by then: drop it, as
+[The admin tokens](#the-admin-tokens) says of a token that may have leaked.
+Only a worker on your own machine is reached over `http`, as in
+[the preflight](#the-preflight).
+
+That refusal is the worker's. On a custom domain, such as stage's and
+production's, a request over plain `http` reaches the worker only if the
+domain's Cloudflare zone does not redirect `http` to `https` first, as its
+Always Use HTTPS setting or a redirect rule does
+([Workers with Page Rules](https://developers.cloudflare.com/workers/configuration/workers-with-page-rules/#always-use-https),
+last updated Apr 23, 2026, lists Always Use HTTPS as respected from a client
+to a Worker). A redirect answers before the worker runs: the token crosses
+the network in clear text all the same, and a client that follows the
+redirect and keeps its `Authorization` header goes on working. Check once on
+each custom domain, with no token, so that nothing is sent in clear text:
+
+```sh
+curl -s -o /dev/null -w '%{http_code}\n' "http://${API#https://}/registry/v1/admin/status"
+```
+
+`403` is the worker's refusal. A `301`, or another redirect, is the zone's,
+and it can stay: it keeps every other route on `https`, and a token sent to
+an `http://` address is dropped all the same, though nothing refused its
+request. Only a zone that redirects with a rule of its own can leave
+`/registry/v1/admin/` out of it, for the worker to refuse such a request;
+Always Use HTTPS redirects every request, on every host of the zone.
 
 Once the environment lists your token, the status names the environment that
 answers at `API`, which must be `$ENVIRONMENT`; any other answer is one step 5
@@ -478,6 +511,10 @@ request names its `code` and `message`, and the second prints that `code`:
   environment at `API` has no list, or one with no entry, and an unconfigured
   admin API is a closed one. Put the list (step 4), or, if you did, read
   `API` again, as [Before you start](#before-you-start) says.
+- `403`, "the administrative API takes requests over https only": `API`
+  names an `http://` address. The token crossed the network in clear text:
+  drop it, as one that may have leaked (below), and check a new one at the
+  `https://` address.
 
 **Rotating a token.** Make a new token for the same holder (steps 1 and 2),
 add its entry under the same name and role, give the old entry a `notAfter`
@@ -489,10 +526,102 @@ does. Step 3's check tells them apart: the old token's entry,
 `"new":false`, must show the cutoff you gave it. Both tokens are taken until
 then: the holder switches, and after it the old one is refused as expired.
 Drop its entry the next time you put the list. A token that may have leaked
-is not rotated: drop its entry and put the list, which refuses it. Step 5
-with that token then answers "the bearer token is not valid"; run that
+is not rotated: drop its entry and put the list, which refuses it from then
+on. One sent over plain `http` may have: the worker refused the request
+(`403`, `HTTPS_REQUIRED`), but the token crossed the network in clear text to
+get there.
+Step 5 with that token then answers "the bearer token is not valid"; run that
 check again after the next put, since a list made from an older copy would
 put the token back (step 3).
+
+### Announcing changes
+
+Every move that changes what the registry serves — switching a version on,
+or rolling back to one — is posted to the team's channel once it is made, so
+the people who answer for the markets hear of it, whoever made it. So is
+every approval, as it is given: the channel hears of a version about to go
+on while it can still be stopped. Nothing else is posted: not an import, a
+validation or a review, nor a move that changed nothing, nor a move or an
+approval that was refused. The channel reads:
+
+> [production] bob approved registry version c0d77dad-… (commit a34d9b5)
+> until 2026-11-05T11:00:00.000Z, against d9698ddd-…. Markets: 1 added,
+> 0 removed, 2 changed, 0 no longer served; networks: 1 added, 0 removed,
+> 0 changed. Reason: "read the changes"
+>
+> [production] alice activated registry version c0d77dad-… (commit a34d9b5),
+> replacing d9698ddd-…, approved by bob. Markets: 1 added, 0 removed,
+> 2 changed, 0 no longer served; networks: 1 added, 0 removed, 0 changed.
+> Reason: "switch on the new commit"
+
+The message carries the same facts for a program to read as well
+(`registryEvent`, [API.md](./API.md#registry-v1)).
+
+**1. Make a webhook** in Slack for the channel Compound names: an app with
+Incoming Webhooks switched on, added to that channel. Its URL,
+`https://hooks.slack.com/services/…`, is the credential: whoever holds it can
+post to the channel. Keep it in the team's password manager, never in a
+ticket, a chat or the repository. Stage and production may share a channel,
+since every message names its environment.
+
+**2. Test it** with a message of the shape the worker sends:
+
+```sh
+export WEBHOOK='<the webhook URL>'
+curl -s -X POST "$WEBHOOK" -H 'Content-Type: application/json' -d '{
+  "text": "[stage] a test of the registry webhook: nothing was switched on",
+  "unfurl_links": false,
+  "unfurl_media": false,
+  "registryEvent": {
+    "kind": "activate", "environment": "stage", "at": "2026-11-04T12:00:00.000Z",
+    "actor": "alice", "reason": "a test of the webhook",
+    "version": {
+      "id": "00000000-0000-4000-8000-000000000000", "sourceRepository": "compound-foundation/comet",
+      "sourceCommitSha": "0000000000000000000000000000000000000000",
+      "checksum": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "previousVersion": null, "activationId": "00000000-0000-4000-8000-000000000001", "approval": null, "changes": null
+  }
+}'
+```
+
+**You should see** `ok`, and the text in the channel. Anything else is what
+Slack says is wrong: `no_service` or `invalid_token` is a webhook removed or
+mistyped, `channel_not_found` or `channel_is_archived` its channel gone, and
+`invalid_payload` a body it did not take.
+
+**3. Put it into the environment.** Wrangler prompts for it, and it takes
+effect without a deploy:
+
+```sh
+npx wrangler secret put COMET_REGISTRY_WEBHOOK_URL --env stage
+npx wrangler secret put COMET_REGISTRY_WEBHOOK_URL --env production
+```
+
+`GET /admin/status` then answers `"notifications": {"webhook": "on", …}`.
+`"invalid"` there is a value that is not an `https` URL, which raises
+`configuration-invalid` as well and is never posted to: put it again.
+
+**It is best effort.** A message is sent once the move is made or the
+approval given, and given up when the webhook has not answered in 5 seconds;
+it never fails or delays the command. What was approved and switched on, by
+whom and why is recorded either way: `GET /admin/versions/<id>` lists every
+move of a version under `activations`, and every approval of it under
+`approvals`. A message given up is in the worker's log as
+`registry notification failed`, never with the webhook's URL, and the status
+raises `notification-failing` until a later message is sent
+([Keeping an eye on it](#keeping-an-eye-on-it)).
+
+**To replace the webhook**, make the new one, test it and put it (steps 1 to
+3), then remove the old one in Slack. **To stop announcing**, delete the
+secret:
+
+```sh
+npx wrangler secret delete COMET_REGISTRY_WEBHOOK_URL --env stage
+```
+
+A worker you run on your own machine announces too when `.dev.vars` sets the
+webhook: use a channel of your own there, never the team's.
 
 ### The preflight
 
@@ -511,6 +640,8 @@ step 5 approves the version with one, and step 6 switches it on with the
 other — a `COMET_GITHUB_TOKEN`, and the `NODE_PROXY_HOST` and
 `NODE_PROXY_KEY` of a deployed node provider proxy whose providers keep
 archive state: the creation blocks are read at past blocks.
+Leave `COMET_REGISTRY_WEBHOOK_URL` out, or name a channel of your own: steps 5 and
+6 approve a version and switch it on, which is announced.
 The local source is the one production imports,
 `Compound-Foundation/comet` at `main`. Then start the worker on an empty
 database, kept apart from your usual local one:
@@ -895,9 +1026,11 @@ and later the version that is on — `comparedWith` in the answer of
 **Why.** A version is switched on by two people: one who approves it, and
 another who switches it on. The approval covers exactly this version, which
 can no longer change, against what is on now, and lets one switch through.
-It cannot be taken back: one given by mistake, or with a token that may have
-leaked, stays usable by any other admin until it expires, is used, or another
-version goes on. Tell the other admins, so that nobody uses it.
+It is announced in the team's channel
+([Announcing changes](#announcing-changes)). It cannot be taken back: one
+given by mistake, or with a token that may have leaked, stays usable by any
+other admin until it expires, is used, or another version goes on. Say so in
+the channel, where it was announced.
 
 **You should see** `"usable": true`, and an `expiresAt` a day ahead
 (`COMET_REGISTRY_APPROVAL_TTL_S`): step 6 has until then. Once it has
@@ -939,7 +1072,9 @@ undoing theirs.
 
 **Why.** The registry moves to the new list in one step, and `/registry/v1`
 serves it from then on. It is recorded with your reason and the approval it
-used, and can be undone — see [Switching back](#switching-back).
+used, announced in the team's channel
+([Announcing changes](#announcing-changes)), and can be undone — see
+[Switching back](#switching-back).
 
 **You should see** `"changed": true` and an `approvalId`.
 
@@ -1406,16 +1541,18 @@ Content-Type: application/json
 The body names the version you are undoing as `expectedActiveVersionId`. If
 somebody has switched another version on since you looked, the rollback is
 refused with `409` naming it, rather than undoing their switch: read the
-status again and decide again.
+status again and decide again. A rollback is announced in the team's channel
+as one, with the version it went back to and the one it left.
 
 A rollback needs nobody's approval: undoing a bad version takes one person,
 with any `admin` token. It goes back one step: to the version the one on
 replaced when it was last activated, if that is older. To go further back,
-roll back again from the version you restored. Anything else is refused with
-`409` and `details.code` `ROLLBACK_TARGET_INVALID`, whose message names the
-version a rollback may restore now, or says that none may: a version two
-steps back, one never on, or one newer than the one on is switched on as
-steps 5 to 7 of the first bring-up do, with another admin's approval.
+roll back again from the version you restored; each step is announced on its
+own. Anything else is refused with `409` and `details.code`
+`ROLLBACK_TARGET_INVALID`, whose message names the version a rollback may
+restore now, or says that none may: a version two steps back, one never on,
+or one newer than the one on is switched on as steps 5 to 7 of the first
+bring-up do, with another admin's approval.
 
 Every import after this starts from the version you went back to, a new
 attempt of the commit you switched off included: what was reviewed for the
@@ -1498,14 +1635,15 @@ Authorization: Bearer {{TOKEN}}
 which version is on, who switched it on and who approved that, whether its
 data is cached, when
 the source was last checked, how the last import went, which drafts are
-still open, and when the chain was last read again, and for which version
-(`chainCheck`).
+still open, when the chain was last read again, and for which version
+(`chainCheck`), and whether moves and approvals are announced
+(`notifications`).
 
 When `alerts` is not empty, each name says what to do:
 
 | Alert | What it means | What to do |
 |---|---|---|
-| `configuration-invalid` | A registry setting of this environment is set to something it does not take; `configuration.invalid` names each. The import refuses to start while one of its own is invalid, and a read takes the default in its place — an approval given meanwhile lasts the default day | Correct the value in the environment's `[vars]` in `wrangler.toml` and deploy: the numbers are whole numbers, `COMET_REGISTRY_APPROVAL_TTL_S` one from 1 to 604800 (a week), `COMET_SOURCE_REPOSITORY` is `owner/repository` and `COMET_SOURCE_REF` a branch, a tag or a commit |
+| `configuration-invalid` | A registry setting of this environment is set to something it does not take; `configuration.invalid` names each. The import refuses to start while one of its own is invalid, a read takes the default in its place — an approval given meanwhile lasts the default day — and nothing is announced to a webhook that is not an `https` URL | Correct the value in the environment's `[vars]` in `wrangler.toml` and deploy: the numbers are whole numbers, `COMET_REGISTRY_APPROVAL_TTL_S` one from 1 to 604800 (a week), `COMET_SOURCE_REPOSITORY` is `owner/repository` and `COMET_SOURCE_REF` a branch, a tag or a commit. `COMET_REGISTRY_WEBHOOK_URL` is a secret instead: put it again, as the `https` URL of the webhook (step 3 of [Announcing changes](#announcing-changes)), or delete it |
 | `no-active-version` | Nothing is switched on, so the registry's public reads answer `503` | Bring a version up — [Bringing an environment up for the first time](#bringing-an-environment-up-for-the-first-time) |
 | `candidate-awaiting-review` | A draft is held for review and no import is running | Review it, then validate it (step 4 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)) |
 | `candidate-awaiting-activation` | A new commit was imported and validated, and is waiting to be switched on; `candidates.validated` names it | [When the source changes](#when-the-source-changes). The alert holds until a version at least that new is switched on: one you decide not to switch on keeps it raised until a newer commit's version is |
@@ -1519,6 +1657,7 @@ When `alerts` is not empty, each name says what to do:
 | `sync-overdue` | The source has not been checked for more than two days, or never: a fresh environment raises it beside `no-active-version` until its first import records a check | On a fresh environment, nothing: the first import clears it, whether the hourly job starts it or you do ([the first bring-up](#bringing-an-environment-up-for-the-first-time)). Otherwise the hourly trigger is not firing, or every invocation fails before it records a check: a failed one is a failed Cron in the dashboard's Cron events, and the worker's log line `registry sync failed` says why |
 | `snapshot-not-cached` | The active version is not in the cache | Harmless by itself — the next request refills it. If it persists, the KV namespace is misconfigured for this environment |
 | `cache-unreadable` | The KV namespace itself did not answer | Check the `kv_registry` binding of this environment: until it answers there is no cache, and no older version to fall back on if the database fails |
+| `notification-failing` | A move went live, or an approval was given, and the channel was not told: the webhook refused the message, or did not answer within 5 seconds. `notifications.failure` names it — the version it named (`versionId`), and the move (`activationId`) or the approval (`approvalId`) — with what the webhook answered (`status`, `null` when it did not answer) and why. A `kind` of `null` is a message that failed before the move or the approval was read — the database did not answer right after it, none had that id, or the worker met a fault — and `reason` says which | Tell the channel what happened: `GET /registry/v1/admin/versions/<versionId>` lists the move under `activations` and the approval under `approvals`, or `active` in the status names the version on. A `status` of `403`, `404` or `410` is a webhook Slack no longer takes — removed, or its channel archived: make a new one and put it ([Announcing changes](#announcing-changes)). No `status` is Slack, or the way to it, not answering: nothing to fix if it happened once. The alert clears once a later message is sent, an approval's or a move's; to clear it once the channel has been told, delete its record: `npx wrangler kv key delete notification-failure:v1 --binding kv_registry --env <environment> --remote` |
 
 A monitor sends this request alone, `GET $API/registry/v1/admin/status`,
 every few minutes, with a `monitor` token of its own, and alerts when
@@ -1579,9 +1718,10 @@ whose reasons are in the draft it names.
 | `401`, "the bearer token has expired" | Your token's `notAfter` has passed: it was rotated out | Use the token that replaced it, or ask the environment's owner for one |
 | `403`, "the token … has the role …, and this route needs …" | Your token's role does not reach the route; `details.requiredRole` names the role that does | Ask for a token with that role, or ask its holder to make the change |
 | `403`, "the administrative API is misconfigured in this environment: …", or "… is not configured …" | The environment has no token in its list, or a list the worker cannot read, so every token is refused | Step 5 of [The admin tokens](#the-admin-tokens) says what each message means and what to do |
+| `403`, `details.code` `HTTPS_REQUIRED`, "the administrative API takes requests over https only", or a `301` to the `https://` address | The request was sent to an `http://` address. The worker refused it without reading its token — or, on a custom domain whose zone redirects `http` itself, Cloudflare redirected it before the worker ran — but the token crossed the network in clear text to get there | Send it to the `https://` address ([Before you start](#before-you-start)), and drop the token as one that may have leaked ([The admin tokens](#the-admin-tokens)): its holder is given a new one. A redirect is the zone's, and may stay ([Before you start](#before-you-start)) |
 | `413` | The request body is larger than the route takes | Send less: a directory of overlays in several requests |
-| `429`, "too many administrative requests from this address" | More than 60 administrative requests in a minute from your address — over IPv6, from your /64 — whatever they were: every request under `/registry/v1/admin/` is counted by address before its token is checked, a wrong token or a path no route takes included, and the right token is refused too once the address has spent its budget | Wait the seconds its `Retry-After` names — a minute at most. A script in a loop, or a monitor sharing your address, is what spends it |
-| `429`, "too many … requests with this token" | More than 30 administrative requests in a minute with your token, counted per family of routes. Reads count too, and every read shares one budget, while each kind of command has its own; anyone using your token spends it with you | Wait the seconds its `Retry-After` names. A monitor polls with a `monitor` token of its own, which spends nothing of yours |
+| `429`, "too many administrative requests from this address" | More than 60 administrative requests in a minute from your address — over IPv6, from your /64 — whatever they were: every request under `/registry/v1/admin/` that comes over `https`, or over `http` to a worker on your own machine, is counted by address before its token is checked, a wrong token or a path no route takes included, and the right token is refused too once the address has spent its budget. The count is approximate ([API.md](./API.md#registry-v1)): a fast burst can get about twice the budget through before the first `429`, and until the counts settle a `401` can still follow a `429` | Wait the seconds its `Retry-After` names — a minute at most — from the first `429`, whatever is answered after it. A script in a loop, or a monitor sharing your address, is what spends it |
+| `429`, "too many … requests with this token" | More than 30 administrative requests in a minute with your token, counted per family of routes. Reads count too, and every read shares one budget, while each kind of command has its own; anyone using your token spends it with you. The count is approximate, as the address's is | Wait the seconds its `Retry-After` names. A monitor polls with a `monitor` token of its own, which spends nothing of yours |
 | `422`, `details.code` `OVERLAY_FEED_UNREADABLE`, writing an overlay | A feed the overlay names does not answer its decimals on that chain: it reverts, or nothing is deployed at that address there — most often a feed of another chain | Check the address against the chain's feed; a `503` instead is the node provider not answering, and worth trying again |
 | `409` writing overlays, "… registry version cannot be changed" or "is no longer importing" | The draft is no longer open: it was validated, switched on, or replaced by a newer attempt of its commit (`GET /registry/v1/admin/versions/<id>` says which) | Look for the newest open draft first (`GET /registry/v1/admin/versions?status=importing`) and continue there; start a new attempt (step 1 with `forceNewAttempt`) only if there is none |
 | `409` on validate, "the import … is still running" | The import has not finished | Send step 1 again until it completes |
@@ -1605,4 +1745,5 @@ whose reasons are in the draft it names.
 | Answers carry `X-Registry-Stale: <seconds>`, and the log has the error `registry database unreachable; answering from the version it last named` | The database could not be reached, so the API is answering from the version it last saw, and saying how old it is. Each isolate logs the error once a minute while this lasts | Check the database's health; the API recovers by itself once D1 answers, and starts returning `503` if the outage outlasts the configured window |
 | `503 UPSTREAM_UNAVAILABLE` from the registry routes, or from `/admin/status` | The database could not be reached, and there is no version within the window to answer from | Check the database's health; nothing in the registry needs changing |
 | `500 INTERNAL` from the registry routes | The database answered with a fault — most often a release deployed before its migrations — or a bug. The worker's log line `registry route failed` with the answer's `requestId` has the error. On an activation or a rollback, with "an activation requires an approval", "a rollback restores only the older version …" or "the active registry version moves only with its activation", it is a release from before approvals answering, after the environment's first approval: deployed again, or beside the release with approvals | Apply the migrations if they are missing; deploy the release with approvals, or a later one, to all traffic if an older one answers; otherwise report the log line |
+| The worker's log has the error `registry notification failed`, under the `requestId` of an approval, an activation or a rollback | The approval or the move was made, and its message to the channel was given up. `status` is what the webhook answered; without one, `reason` says why: `did not answer within 5 seconds`, `the request failed` with the error's name (`errorName`), `the move could not be read` or `the approval could not be read`, the database failing right after it, or `no move has that id` or `no approval has that id`, a fault to report. The line never has the webhook's URL. `registry notification without changes` is a message sent without its counts, which the database did not give, and `registry notification failed unexpectedly` a fault of the worker's, logged with its error | As `notification-failing` in [Keeping an eye on it](#keeping-an-eye-on-it) says; report a fault with its log line |
 | The worker's log has the warning `computation cache unreadable` or `computation cache unwritable`, with what KV answered | KV refused a call to the namespace computed values are cached in, `kv_mainnet` or `kv_testnet`: `429` is a value written twice in a second, `503` KV not answering. The request was answered without the cache — a value it could not read was computed again from the chain, and one it could not write was not kept — so it was slower, and asked the node provider more. Each isolate says each once a minute while it lasts | Nothing for a `429` now and then. A `503` that keeps coming back is KV not answering: every request reads the chain while it lasts, and transaction history fails, so check Cloudflare's status and the node provider proxy |
