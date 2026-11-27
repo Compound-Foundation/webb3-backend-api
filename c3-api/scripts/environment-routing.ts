@@ -7,7 +7,8 @@ import { environmentOf, refuse, takesHost } from './environment.js';
  * Cloudflare routes it, which the configuration cannot show.
  * REGISTRY_RUNBOOK.md runs it before it sets API, in "Before you start" and
  * in step 4 of "The admin tokens", so that API is set only to an address
- * this check took.
+ * this check took, and again in every command that sends a token, before
+ * the request, so that a route changed since stops it.
  *
  *   npx tsc -p tsconfig.scripts.json && node dist/scripts/environment-routing.js
  *
@@ -26,14 +27,19 @@ import { environmentOf, refuse, takesHost } from './environment.js';
  *   a more specific route without a Worker would negate is refused all the
  *   same, since Cloudflare lists exceptions to its route specificity among its
  *   known issues.
- * An API already set must be the domain's address, and this machine's clock
- * must be within an hour of Cloudflare's, which its answers carry: step 4
- * counts a rotation's 30 days by it. It refuses, and prints nothing, on
- * anything else, a request that Cloudflare refuses among them, and it never
- * prints the login, nor lets Wrangler write it to its log. An API of a worker
- * on this machine needs no check: a token sent there never leaves it.
+ * An API that is set, even to nothing, must be the domain's address, and
+ * this machine's clock must be within an hour of Cloudflare's, which its
+ * answers carry: step 4 counts a rotation's 30 days by it. It refuses, and
+ * prints nothing, on anything else, a request that Cloudflare refuses among
+ * them, and it never prints the login, nor lets Wrangler write it to its log.
+ * An API of a worker on this machine needs no check: a token sent there never
+ * leaves it. It reads Cloudflare's own API, whatever the shell says, and,
+ * through scripts/environment.ts, as the address read does, refuses while a
+ * variable that can send Wrangler to another API, or the login to another
+ * address, is set, in the shell or in a .env file Wrangler reads.
  */
-const BASE = (process.env['CLOUDFLARE_API_BASE_URL'] ?? 'https://api.cloudflare.com/client/v4').replace(/\/+$/, '');
+// Cloudflare's own API, whatever the shell says: the test sends its requests elsewhere with a module of its own
+const BASE = 'https://api.cloudflare.com/client/v4';
 
 // a worker on this machine, over plain http to the loopback address, as the runbook's local path sets API
 const LOCAL = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\/?$/;
@@ -42,11 +48,16 @@ if (LOCAL.test(process.env['API'] ?? '')) {
   process.exit(0);
 }
 
+// an API given empty is an address this shell has not read, as where step 4 stopped before reading it
+if (process.env['API'] === '') {
+  refuse(`API is empty: read it again, as REGISTRY_RUNBOOK.md's Before you start does`);
+}
+
 const environment = environmentOf(process.env['ENVIRONMENT']);
 const { name, worker, host } = environment;
 const address = `https://${host}`;
-const api = process.env['API'] ?? '';
-if (api.length > 0 && api.replace(/\/+$/, '') !== address) {
+const api = process.env['API'];
+if (api !== undefined && api.replace(/\/+$/, '') !== address) {
   refuse(`API is ${api}, and the environment ${name}'s address is ${address}: read API again, as REGISTRY_RUNBOOK.md's Before you start does`);
 }
 const bindings: Array<{ binding?: string, id?: string }> = environment.config.kv_namespaces ?? [];

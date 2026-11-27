@@ -620,7 +620,11 @@ so that one resource has one URL.
 Administrative routes require `Authorization: Bearer <token>` — a `401` names
 the scheme in `WWW-Authenticate` — and answer no CORS headers at all. The
 scheme is read in any case, and one space or more may follow it; a header
-with anything after the token is answered as one without a token.
+with anything after the token is answered as one without a token. The
+examples below show each request alone: send a token to a deployed
+environment as [REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#before-you-start)
+does, behind its check of how Cloudflare routes the address, in the same
+command.
 
 Each token has a name and a role. The name is who holds the token, and every
 change the token makes is recorded under it: the `actor` of an approval, an
@@ -974,7 +978,7 @@ can check that it is empty without knowing the registry's rules:
 | `cache-unreadable` | the KV namespace did not answer at all: there is no cache, and no fallback if the database fails next |
 
 ```sh
-$ curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
+$ curl --disable -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
 ```
 ```json
 {
@@ -1128,7 +1132,7 @@ closed this way: reviews do not carry across commits, so such a draft stays
 open until it is validated.
 
 ```sh
-$ curl -s "$API/registry/v1/admin/versions?status=importing" -H "Authorization: Bearer $TOKEN" | jq
+$ curl --disable -s "$API/registry/v1/admin/versions?status=importing" -H "Authorization: Bearer $TOKEN" | jq
 ```
 ```json
 {
