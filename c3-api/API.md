@@ -620,7 +620,11 @@ so that one resource has one URL.
 Administrative routes require `Authorization: Bearer <token>` — a `401` names
 the scheme in `WWW-Authenticate` — and answer no CORS headers at all. The
 scheme is read in any case, and one space or more may follow it; a header
-with anything after the token is answered as one without a token.
+with anything after the token is answered as one without a token. The
+examples below show each request alone: send a token to a deployed
+environment as [REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md#before-you-start)
+does, behind its check of how Cloudflare routes the address, in the same
+command.
 
 They take requests over `https` only. A request under `/registry/v1/admin`
 that comes over plain `http` — a preflight, or a path no route takes, among
@@ -1111,7 +1115,7 @@ can check that it is empty without knowing the registry's rules:
 | `notification-failing` | a move went live, or an approval was given, and its message was given up — the webhook refused it, most often because it was revoked, or did not answer within 5 seconds — so the channel was not told; `notifications.failure` names the move or the approval. It holds, while `notifications.webhook` is `on`, until a later message is sent |
 
 ```sh
-$ curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
+$ curl --disable -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
 ```
 ```json
 {
@@ -1266,7 +1270,7 @@ closed this way: reviews do not carry across commits, so such a draft stays
 open until it is validated.
 
 ```sh
-$ curl -s "$API/registry/v1/admin/versions?status=importing" -H "Authorization: Bearer $TOKEN" | jq
+$ curl --disable -s "$API/registry/v1/admin/versions?status=importing" -H "Authorization: Bearer $TOKEN" | jq
 ```
 ```json
 {
@@ -1407,9 +1411,10 @@ An approval is in force for `COMET_REGISTRY_APPROVAL_TTL_S` after it is given
 — a day unless the environment sets otherwise, and a week at most — an expiry
 stored with it, so changing the setting changes no approval already given.
 It lets one activation through. It no longer counts once it has expired,
-once an activation has used it, or once any move has switched its version on
-after it was given: switching a version on again after a rollback needs a
-new approval. It cannot be withdrawn: one given by mistake, or by a token
+once an activation has used it, or once a move recorded after it has
+switched its version on, in the order the database recorded them, whatever
+instants the moves carry: switching a version on again after a rollback
+needs a new approval. It cannot be withdrawn: one given by mistake, or by a token
 that turns out to have leaked, stays usable by any other admin until it
 expires, is used, or another version goes on.
 
@@ -1431,8 +1436,8 @@ and needs no approval.
 
 The activation uses the newest approval of the version that is in force, was
 given by another name than the activating token's, was given while the
-version now on was on, and has not been used, or overtaken by a move that
-switched the version on after it was given. Without one it is refused with
+version now on was on, and has not been used, or overtaken by a move
+recorded after it that switched the version on. Without one it is refused with
 `409` and `details.code` `APPROVAL_REQUIRED`, and nothing moves. The first
 activation of an environment needs an approval too, given while nothing was
 on.
@@ -1441,10 +1446,16 @@ on.
 against, or `null` when nothing is on yet. When it is no longer the version
 that is on, the move is refused with `409` naming the one that is, instead of
 silently undoing a move somebody else made in the meantime. A move whose
-target is already on changes nothing, whatever it expected. A move made by
-somebody else between the activation's reading of what is on and its write is
-refused the same way, `409` with `details.code` `CANDIDATE_STATE_CONFLICT`,
-and records nothing: read the status and decide again.
+target is already on changes nothing, whatever it expected. A move is
+written only while the version it was decided against is on: one made by
+somebody else between the activation's reading of what is on and its write,
+after which another version is on, refuses it the same way, `409` with
+`details.code` `CANDIDATE_STATE_CONFLICT`, and nothing is recorded; read the
+status and decide again. When moves meanwhile bring that same version back,
+the activation is written, but only while its approval still holds at the
+write, which the database checks again, and is refused with
+`APPROVAL_REQUIRED` otherwise. It is recorded with the instant it was
+decided at.
 
 ```json
 { "reason": "switch on the new commit", "expectedActiveVersionId": "d9698ddd-ab86-46bc-a412-c71df7d20414" }
@@ -1473,7 +1484,7 @@ does not wait for it. One that changed nothing is not.
 From an environment's first approval on, the database refuses an activation
 without an approval it may use, a rollback the rule below does not allow,
 and a move of the active version no activation records, whoever writes it
-(migration `0011`). Before that first approval only the worker holds the
+(migrations `0011` and `0012`). Before that first approval only the worker holds the
 rule, and the release before approvals keeps working: it is what is live
 while the migration is applied. Someone who can write to the database
 directly can still go around the rule, as around every other.
@@ -1500,6 +1511,11 @@ and any from a version an activation switched on in place of a newer one.
 Such a version is switched on with an activation, once another admin has
 approved it. A rollback to the version on changes nothing, as an activation
 of it does. Its answer's `approvalId` is `null`.
+
+When moves between its reading and its write bring the version on back, it
+is written only while its one step back still holds at the write, which the
+database checks again, and is refused with `ROLLBACK_TARGET_INVALID`
+otherwise.
 
 ## `PUT /registry/v1/admin/versions/{version_id}/networks/{chain_id}/overlay`
 ### description:

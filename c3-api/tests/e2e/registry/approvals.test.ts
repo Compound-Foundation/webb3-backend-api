@@ -8,6 +8,7 @@ import type { Env } from '../../../entrypoint.js';
 import type { ActivationResultV1, ApprovalV1 } from '../../../lib/model/comet-registry.js';
 import { sha256Hex } from '../../../src/http/bearer-auth.js';
 import { registryConfig } from '../../../src/registry/config.js';
+import { activateVersion, approveVersion, readVersionDecisions } from '../../../src/registry/repository.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
@@ -22,18 +23,20 @@ import { registryWorker } from '../../util/registry-worker.js';
  */
 const ALICE = 'registry-alice-token-for-tests';
 const BOB   = 'registry-bob-token-for-tests';
-// carol rotating her token: two tokens of one name, which are one person
+// carol rotating her token: two tokens of one name, which are one person,
+// the old one with the cutoff a rotation gives it, a week from now
 const CAROL_OLD = 'registry-carol-old-token-for-tests';
 const CAROL_NEW = 'registry-carol-new-token-for-tests';
 
 const admin = async (name: string, token: string) => ({ name, sha256: await sha256Hex(token), role: 'admin', notAfter: null });
+const WEEK_AHEAD = new Date(Date.now() + 7 * 86_400_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
 
 const server = createTestHarness({
   workers: [ registryWorker({
     COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([
       await admin('alice', ALICE),
       await admin('bob', BOB),
-      await admin('carol', CAROL_OLD),
+      { ...(await admin('carol', CAROL_OLD)), notAfter: WEEK_AHEAD },
       await admin('carol', CAROL_NEW),
     ]),
   }) ],
@@ -319,4 +322,80 @@ t.test('an approval takes a reason and the version it was decided against, and n
   t.equal((await approve(validated, BOB, null, { actor: 'somebody' })).status, 400, 'and one that names its approver');
   t.equal((await approve(validated, BOB, null, { expectedActiveVersionId: 42 })).status, 400, 'or expects something that is no version');
   t.equal(await db.prepare(`SELECT COUNT(*) AS n FROM registry_approvals`).first<number>('n'), 0, 'none of them is recorded');
+});
+
+/*
+ * A database on which an activation lands once, just before the statement
+ * that reads approvals runs, whether alone or in a batch: the moment two
+ * separate reads of one version's detail could fall on either side of.
+ */
+function landingBeforeApprovals(db: D1Database, land: () => Promise<void>): D1Database {
+  let landed = false;
+  let armed = false;
+  const landOnce = async () => {
+    if (!landed) {
+      landed = true;
+      await land();
+    }
+  };
+  const reading = (statement: D1PreparedStatement): D1PreparedStatement => {
+    for (const method of [ 'all', 'first', 'raw', 'run' ] as const) {
+      const original = statement[method].bind(statement) as (...args: unknown[]) => Promise<unknown>;
+      (statement as unknown as Record<string, unknown>)[method] = async (...args: unknown[]) => {
+        await landOnce();
+        return original(...args);
+      };
+    }
+    const bind = statement.bind.bind(statement);
+    statement.bind = (...values: unknown[]) => reading(bind(...values));
+    return statement;
+  };
+  return new Proxy(db, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (property === 'prepare') {
+        return (sql: string) => {
+          const statement = target.prepare(sql);
+          if (!/FROM registry_approvals AS approval/.test(sql)) {
+            return statement;
+          }
+          armed = true;
+          return reading(statement);
+        };
+      }
+      if (property === 'batch') {
+        return async (statements: D1PreparedStatement[]) => {
+          if (armed) {
+            await landOnce();
+          }
+          return target.batch(statements);
+        };
+      }
+      return typeof(value) === 'function' ? (value as () => unknown).bind(target) : value;
+    },
+  }) as D1Database;
+}
+
+/*
+ * A version's detail lists its moves and its approvals, and an approval
+ * names the activation that used it. Read at one moment, that activation is
+ * always among the moves listed with it, even when the activation lands just
+ * as the detail is read.
+ */
+t.test('a version\'s detail reads its moves and its approvals at one moment', async t => {
+  const db = await freshDatabase();
+  const version = versionsOf(db);
+  const first = await version();
+  const second = await version();
+  await approveVersion(db, { versionId: first, actor: 'bob', reason: 'first', ttlSeconds: 3600, expectedActiveVersionId: null });
+  await activateVersion(db, { versionId: first, action: 'activate', actor: 'alice', reason: 'first' });
+  const approval = await approveVersion(db, { versionId: second, actor: 'bob', reason: 'second', ttlSeconds: 3600, expectedActiveVersionId: first });
+
+  const landing = landingBeforeApprovals(db, async () => {
+    await activateVersion(db, { versionId: second, action: 'activate', actor: 'alice', reason: 'meanwhile' });
+  });
+  const { activations, approvals } = await readVersionDecisions(landing, second);
+  const used = approvals.find(listed => listed.id === approval.id)?.activationId ?? null;
+  t.not(used, null, 'the activation that landed is read with its approval');
+  t.ok(activations.some(activation => activation.id === used), 'and among the moves read with it');
 });

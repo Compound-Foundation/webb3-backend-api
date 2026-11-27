@@ -10,9 +10,12 @@ import { environmentOf } from './environment.js';
  *
  *   npx tsc -p tsconfig.scripts.json && node dist/scripts/environment-address.js
  *
- * It runs in c3-api, and reads nothing but the configuration: that Cloudflare
- * sends the address to the environment's Worker alone is
- * scripts/environment-routing.ts's to check.
+ * It runs in c3-api, and reads nothing but the configuration and the variables
+ * Wrangler reads, so it also runs before the environment is deployed: that
+ * Cloudflare sends the address to the environment's Worker alone is
+ * scripts/environment-routing.ts's to check. The runbook runs it before every
+ * command that writes a secret, ahead of the account check, which Wrangler
+ * would otherwise ask of whatever API those variables name.
  */
 const { host } = environmentOf(process.env['ENVIRONMENT']);
 process.stdout.write(`https://${host}\n`);

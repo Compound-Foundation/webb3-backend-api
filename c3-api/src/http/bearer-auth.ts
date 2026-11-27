@@ -221,10 +221,12 @@ function repeatedField(text: string): string | undefined {
 }
 
 /*
- * A rotation keeps the token it replaces this long at most: its notAfter
- * falls within it, counted from now. Step 4 of "The admin tokens" holds a
- * list to it before the list is put, by the clock of the machine that puts
- * it; the worker takes a day more, by its own, so the two clocks never
+ * How long a rotation may keep the token it replaces: of two tokens of one
+ * name, one must stop within this many days, counted from now. The list
+ * cannot say which of them is the old token, so step 3 of "The admin tokens"
+ * prints both of the holder's entries, the new one marked. Step 4 holds a
+ * list to this limit before the list is put, by the clock of the machine that
+ * puts it; the worker takes a day more, by its own, so the two clocks never
  * disagree on a list the check let through.
  */
 const ROTATION_DAYS = 30;
@@ -234,8 +236,9 @@ const WORKER_ROTATION_DAYS = ROTATION_DAYS + 1;
  * The tokens of COMET_REGISTRY_ADMIN_TOKENS, a JSON list of
  * `{ name, sha256, role, notAfter }`, or none while it is unset or blank. A
  * secret is a string; a list or a number, which only wrangler.toml [vars]
- * can give, is a list the worker cannot read. Whether a rotation's old token
- * expires soon enough is counted from now, so a list taken once stays taken.
+ * can give, is a list the worker cannot read. Whether one of a name's two
+ * tokens stops soon enough is counted from now, so a list taken once stays
+ * taken.
  */
 function listedTokens(value: unknown, now: number = Date.now(), rotationDays: number = WORKER_ROTATION_DAYS): Token[] {
   if (value === undefined || value === null) {
@@ -271,7 +274,7 @@ function listedTokens(value: unknown, now: number = Date.now(), rotationDays: nu
     if (first >= 0) {
       throw malformed(`${TOKENS}[${index}] names the same token as [${first}]`);
     }
-    // a name has a second token only while its holder rotates, and the token it replaces expires within rotationDays
+    // a name has a second token only while its holder rotates, and one of the two stops within rotationDays
     const lasting = (listed: Token) => listed.notAfter === null || listed.notAfter > now + rotationDays * 86_400_000;
     const open = lasting(token) ? tokens.findIndex(other => other.name === token.name && lasting(other)) : -1;
     if (open >= 0) {

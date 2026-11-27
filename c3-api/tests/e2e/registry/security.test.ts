@@ -376,6 +376,28 @@ t.test('a token reaches the routes of its role and of every role before it, and 
 });
 
 /*
+ * A refusal for the role comes before the token's budget is counted: a monitor
+ * that keeps asking for what its role does not reach, a version list, still
+ * polls the status within the same minute.
+ */
+t.test('a refusal for the role spends nothing of the token\'s budget', async t => {
+  await freshDatabase();
+
+  const LIMIT = 30;
+  const address = '198.51.100.40';
+  const headers = { 'Authorization': `Bearer ${ROLE_TOKENS.monitor}`, 'CF-Connecting-IP': address };
+  const window = await startOfWindow();
+  const refused = new Set<number>();
+  for (let attempt = 0; attempt < LIMIT; attempt++) {
+    refused.add((await server.fetch('/registry/v1/admin/versions', { headers })).status);
+  }
+  const status = await server.fetch('/registry/v1/admin/status', { headers });
+  t.equal(windowOf(Date.now()), window, 'the requests were counted in one window of the limiter');
+  t.same([ ...refused ], [ 403 ], `${LIMIT} reads the role does not reach are refused for the role`);
+  t.equal(status.status, 200, 'and the same token still reads the status within the minute');
+});
+
+/*
  * A refusal for the token is logged under the answer's request id, with whose
  * token it was — an expired one still in use may have leaked — and never the
  * token, its digest, or the fingerprint its budget is kept under.

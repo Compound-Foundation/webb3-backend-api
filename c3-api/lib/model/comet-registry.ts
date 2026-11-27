@@ -281,6 +281,8 @@ type RegistryApprovalRow = {
   reason:              string,
   created_at:          string,
   expires_at:          string,
+  // the rowid of the newest registry_activations row written before the approval, 0 for none
+  moves_seen:          number,
 };
 
 type SyncRunRow = {

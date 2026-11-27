@@ -1,20 +1,21 @@
 import t from 'tap';
 
 import { spawn } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /*
  * REGISTRY_RUNBOOK.md runs this before a token is sent to the environment's
  * address: it reads, with the login Wrangler uses, how Cloudflare routes the
  * custom domain, and refuses, printing nothing, unless the environment's
  * Worker alone takes it, in the account that holds the environment's
- * kv_mainnet. Cloudflare is played here by a server on 127.0.0.1, and Wrangler
- * by an npx that prints the login it is given.
+ * kv_mainnet. Cloudflare is played here by a server on 127.0.0.1, which a
+ * module loaded before the script with `node --import` sends its requests to,
+ * and Wrangler by an npx that prints the login it is given.
  */
 // the compiled script beside the compiled test, given to fileURLToPath as a string: the worker's URL type is not Node's
 const SCRIPT = fileURLToPath(new URL('../../scripts/environment-routing.js', import.meta.url).href);
@@ -49,6 +50,18 @@ fi
 exit 2
 `);
 chmodSync(join(bin, 'npx'), 0o755);
+
+// loaded before the script: it records the URL the script asks for and sends the request to FAKE_CLOUDFLARE instead
+const CLOUDFLARE = 'https://api.cloudflare.com/client/v4';
+const hook = join(root, 'cloudflare-at.mjs');
+writeFileSync(hook, `import { appendFileSync } from 'node:fs';
+const real = globalThis.fetch;
+globalThis.fetch = (input, init) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  appendFileSync(process.env.FAKE_ORIGINS, url + '\\n');
+  return real(url.startsWith('${CLOUDFLARE}') ? process.env.FAKE_CLOUDFLARE + url.slice(${CLOUDFLARE.length}) : input, init);
+};
+`);
 
 type Cloudflare = {
   zones:     Record<string, unknown[]>,
@@ -118,17 +131,24 @@ const BASE = `http://127.0.0.1:${(server.address() as AddressInfo).port}/client/
 
 const OAUTH = JSON.stringify({ type: 'oauth', token: 'the-login-token' });
 
-// null for no login, or no ENVIRONMENT
-async function check(given: Cloudflare, auth: string | null = OAUTH, environment: string | null = 'production', api: string | null = null)
-  : Promise<{ status: number | null, stdout: string, stderr: string, requests: Request[], npx: string }> {
+// null for no login, or no ENVIRONMENT; shell, the variables a shell would add
+async function check(given: Cloudflare, auth: string | null = OAUTH, environment: string | null = 'production', api: string | null = null, shell: Record<string, string> = {})
+  : Promise<{ status: number | null, stdout: string, stderr: string, requests: Request[], npx: string, origins: string[] }> {
   state = given;
   requests = [];
   const calls = join(root, `calls-${Math.floor(performance.now() * 1000)}`);
+  const origins = `${calls}-origins`;
   writeFileSync(calls, '');
-  const env: Record<string, string | undefined> = { ...process.env, PATH: `${bin}:${process.env['PATH'] ?? ''}`, CLOUDFLARE_API_BASE_URL: BASE, FAKE_CALLS: calls };
+  writeFileSync(origins, '');
+  const env: Record<string, string | undefined> = { ...process.env, PATH: `${bin}:${process.env['PATH'] ?? ''}`, FAKE_CLOUDFLARE: BASE, FAKE_ORIGINS: origins, FAKE_CALLS: calls };
   delete env['ENVIRONMENT'];
   delete env['FAKE_AUTH'];
   delete env['API'];
+  for (const variable of [ 'CLOUDFLARE_API_BASE_URL', 'CF_API_BASE_URL', 'WRANGLER_API_ENVIRONMENT', 'CLOUDFLARE_COMPLIANCE_REGION',
+  'WRANGLER_AUTH_DOMAIN', 'WRANGLER_AUTH_URL', 'WRANGLER_TOKEN_URL', 'WRANGLER_REVOKE_URL', 'DOTENV_KEY' ]) {
+    delete env[variable];
+  }
+  Object.assign(env, shell);
   if (api !== null) {
     env['API'] = api;
   }
@@ -138,13 +158,12 @@ async function check(given: Cloudflare, auth: string | null = OAUTH, environment
   if (auth !== null) {
     env['FAKE_AUTH'] = auth;
   }
-  const child = spawn(process.execPath, [ SCRIPT ], { cwd, env });
+  const child = spawn(process.execPath, [ '--import', pathToFileURL(hook).href, SCRIPT ], { cwd, env });
   let stdout = '', stderr = '';
   child.stdout.on('data', chunk => { stdout += String(chunk); });
   child.stderr.on('data', chunk => { stderr += String(chunk); });
   const status = await new Promise<number | null>(resolve => child.on('close', code => resolve(code)));
-  const { readFileSync } = await import('node:fs');
-  return { status, stdout, stderr, requests: [ ...requests ], npx: readFileSync(calls, 'utf8') };
+  return { status, stdout, stderr, requests: [ ...requests ], npx: readFileSync(calls, 'utf8'), origins: readFileSync(origins, 'utf8').split('\n').filter(line => line !== '') };
 }
 
 t.test('a custom domain that runs the environment\'s Worker alone is taken', async t => {
@@ -165,6 +184,8 @@ t.test('a custom domain that runs the environment\'s Worker alone is taken', asy
     `/client/v4/zones/${ZONE}/workers/routes`,
   ], 'from the zone of the host, its account, the domain and the routes');
   t.ok(taken.requests.every(request => request.method === 'GET'), 'which it only reads');
+  t.ok(taken.origins.length === taken.requests.length && taken.origins.every(origin => origin.startsWith(`${CLOUDFLARE}/`)),
+    'each of them asked of Cloudflare\'s own API');
   t.ok(taken.requests.every(request => request.headers['authorization'] === 'Bearer the-login-token'), 'with the login Wrangler gives');
   t.equal(taken.npx, 'wrangler auth token --json --env production | logs false log\n',
     'as `npx wrangler auth token --json --env production` gives it, with Wrangler writing no log file');
@@ -249,6 +270,13 @@ t.test('anything else is refused, and nothing is printed', async t => {
     'as not the environment\'s');
   t.same(elsewhere.requests, [], 'before Cloudflare is asked');
 
+  const empty = await check(cloudflare(), OAUTH, 'production', '');
+  t.equal(empty.status, 1, 'an API set to nothing is refused, unlike one not set');
+  t.match(empty.stderr, /^API is empty: read it again, as REGISTRY_RUNBOOK\.md's Before you start does/, 'as an address never read');
+  t.same(empty.requests, [], 'before Cloudflare is asked');
+  const bare = await check(cloudflare(), OAUTH, null, '');
+  t.match(bare.stderr, /^API is empty/, 'with no ENVIRONMENT either, as in a local bring-up');
+
   const minutes = await check(cloudflare({ skew: 10 * 60_000 }));
   t.equal(minutes.status, 0, 'a clock ten minutes off Cloudflare\'s passes');
 
@@ -262,4 +290,45 @@ t.test('anything else is refused, and nothing is printed', async t => {
   t.equal(unnamed.npx, '', 'nor is Wrangler');
   const loggedOut = await check(cloudflare(), null);
   t.same(loggedOut.requests, [], 'with no login, Cloudflare is not asked');
+});
+
+t.test('a Wrangler that would send its requests elsewhere than Cloudflare is refused', async t => {
+  // the API's base, Cloudflare's other APIs, and the addresses of the login, which `wrangler auth token` may refresh
+  for (const variable of [ 'CLOUDFLARE_API_BASE_URL', 'CF_API_BASE_URL', 'WRANGLER_API_ENVIRONMENT', 'CLOUDFLARE_COMPLIANCE_REGION',
+    'WRANGLER_AUTH_DOMAIN', 'WRANGLER_AUTH_URL', 'WRANGLER_TOKEN_URL', 'WRANGLER_REVOKE_URL' ]) {
+    const shell = await check(cloudflare(), OAUTH, 'production', null, { [variable]: 'http://127.0.0.1:9/client/v4' });
+    t.equal(shell.status, 1, `${variable} set in the shell is refused`);
+    t.match(shell.stderr, new RegExp(`^${variable} is set in this shell, to "http://127\\.0\\.0\\.1:9/client/v4": Wrangler can send its requests, or your login, elsewhere than Cloudflare's own API`), 'as where they can go');
+    t.same([ shell.requests, shell.origins, shell.npx ], [ [], [], '' ], 'before the login is read or Cloudflare asked');
+  }
+  // Wrangler on Windows reads a .env file's names in any case, so the check does everywhere
+  for (const [ file, line ] of [ [ '.env', 'CLOUDFLARE_API_BASE_URL=http://127.0.0.1:9/client/v4' ], [ '.env.local', 'WRANGLER_TOKEN_URL = "http://127.0.0.1:9/oauth2/token"' ],
+    [ '.env.production', 'export CF_API_BASE_URL=http://127.0.0.1:9' ], [ '.env.production.local', 'WRANGLER_AUTH_DOMAIN: 127.0.0.1:9' ],
+    [ '.env.production', 'Cloudflare_Api_Base_Url=http://127.0.0.1:9' ] ] as const) {
+    writeFileSync(join(cwd, file), `# a file Wrangler reads\nOTHER=1\n${line}\n`);
+    const filed = await check(cloudflare());
+    rmSync(join(cwd, file));
+    t.equal(filed.status, 1, `set in ${file} is refused`);
+    t.match(filed.stderr, new RegExp(`^[A-Za-z_]+ is set in ${file.replace(/\./g, '\\.')}, which Wrangler reads: it can send its requests, or your login, elsewhere than Cloudflare's own API`), 'naming the file');
+    t.notMatch(filed.stderr, /127\.0\.0\.1/, 'and not the value it holds');
+    t.same([ filed.requests, filed.npx ], [ [], '' ], 'before the login is read or Cloudflare asked');
+  }
+  const keyed = await check(cloudflare(), OAUTH, 'production', null, { DOTENV_KEY: 'dotenv://:key_0123456789abcdef@dotenv.org/vault/.env.vault?environment=production' });
+  t.equal(keyed.status, 1, 'DOTENV_KEY set in the shell is refused, as Wrangler would read the encrypted .env.vault with it');
+  t.match(keyed.stderr, /^DOTENV_KEY is set in this shell: Wrangler would read each \.env file from the encrypted \.vault beside it/, 'saying so');
+  t.notMatch(keyed.stdout + keyed.stderr, /key_0123456789abcdef/, 'and never printing the key');
+  t.same([ keyed.requests, keyed.npx ], [ [], '' ], 'before the login is read or Cloudflare asked');
+  writeFileSync(join(cwd, '.env'), 'DOTENV_KEY=dotenv://:key_0123456789abcdef@dotenv.org/vault/.env.vault?environment=production\n');
+  const filedKey = await check(cloudflare());
+  rmSync(join(cwd, '.env'));
+  t.equal(filedKey.status, 1, 'DOTENV_KEY set in a .env file is refused too');
+  t.match(filedKey.stderr, /^DOTENV_KEY is set in \.env, which Wrangler reads: with it, Wrangler would read each \.env file from the encrypted \.vault/, 'for what it does');
+  t.notMatch(filedKey.stdout + filedKey.stderr, /key_0123456789abcdef/, 'without printing the key');
+  writeFileSync(join(cwd, '.env.preview'), 'CLOUDFLARE_API_BASE_URL=http://127.0.0.1:9\n');
+  // a comment, another name, and a line inside a quoted value, which dotenv reads as part of that value
+  writeFileSync(join(cwd, '.env'), '# CLOUDFLARE_API_BASE_URL=http://127.0.0.1:9\nMY_CLOUDFLARE_API_BASE_URL=x\nNOTES="an example:\nCLOUDFLARE_API_BASE_URL=http://127.0.0.1:9\nend"\n');
+  const others = await check(cloudflare());
+  rmSync(join(cwd, '.env.preview'));
+  rmSync(join(cwd, '.env'));
+  t.equal(others.status, 0, 'a file of another environment, a comment, another variable and a line inside a quoted value change nothing');
 });

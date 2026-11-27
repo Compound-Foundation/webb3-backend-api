@@ -962,12 +962,14 @@ function pointerAt(active: string | null | undefined): Condition | undefined {
  * Whether an approval may still let its version be switched on, as SQL over
  * the approval's alias: it is in force at `at`, it was made while `active`
  * was on — the version an activation would replace — and no move has used
- * it, or switched its version on since it was made. Going back to a version
- * and forward again is a new decision, which needs a new approval. Every
- * reader of approvals asks this one question: an activation before it is
- * written, the status of a version waiting to be switched on, and the
- * history of a version; migration 0011's trigger asks it of every
- * activation, with the activator's name besides.
+ * it, or switched its version on since it was written. "Since" is the order
+ * the database wrote them in, not the Workers' instants: an approval keeps
+ * the newest move written before it, moves_seen, and a move written after
+ * that one overtakes it. Going back to a version and forward again is a new
+ * decision, which needs a new approval. Every reader of approvals asks this
+ * one question: an activation before it is written, the status of a version
+ * waiting to be switched on, and the history of a version; migration 0012's
+ * trigger asks it of every activation, with the activator's name besides.
  */
 function approvalUsable(approval: string, active: string, at: string): string {
   return `${approval}.expires_at > ${at}
@@ -975,7 +977,7 @@ function approvalUsable(approval: string, active: string, at: string): string {
     AND NOT EXISTS (SELECT 1 FROM registry_activations AS spent WHERE spent.approval_id = ${approval}.id)
     AND NOT EXISTS (
       SELECT 1 FROM registry_activations AS later
-      WHERE later.registry_version_id = ${approval}.registry_version_id AND later.created_at >= ${approval}.created_at
+      WHERE later.registry_version_id = ${approval}.registry_version_id AND later.rowid > ${approval}.moves_seen
     )`;
 }
 
@@ -1028,10 +1030,11 @@ async function approveVersion(
   const [ inserted, written ] = await db.batch([
     conditioned(
       db,
+      // moves_seen: the newest move written before this approval, which no later move can be counted before
       `INSERT INTO registry_approvals (
-         id, registry_version_id, snapshot_checksum, active_version_id, actor, reason, created_at, expires_at
+         id, registry_version_id, snapshot_checksum, active_version_id, actor, reason, created_at, expires_at, moves_seen
        )
-       SELECT ?1, ?2, ?3, active_version_id, ?4, ?5, ?6, ?7
+       SELECT ?1, ?2, ?3, active_version_id, ?4, ?5, ?6, ?7, (SELECT coalesce(max(rowid), 0) FROM registry_activations)
        FROM registry_state
        WHERE singleton_id = 1 AND active_version_id IS NOT ?2`,
       [
@@ -1319,20 +1322,40 @@ async function readValidationSummary(db: D1Database, versionId: string): Promise
   };
 }
 
-async function readActivationHistory(
+/*
+ * A version's moves and approvals, newest first, read in one batch, so the
+ * one answer is of one moment: an approval's activation is always among the
+ * moves read with it. The moves are those that switched the version on or
+ * off; an approval says who gave it, against which version, until when, the
+ * activation that used it, and whether an activation could use it at `at`,
+ * against the version on then.
+ */
+async function readVersionDecisions(
   db: D1Database,
   versionId: string,
-): Promise<ActivationRecordV1[]> {
-  const { results } = await db.prepare(
-    `SELECT id, action, previous_version_id, registry_version_id, actor, reason, created_at, approval_id
-     FROM registry_activations
-     WHERE registry_version_id = ?1 OR previous_version_id = ?1
-     ORDER BY created_at DESC, rowid DESC`
-  ).bind(versionId).all<{
+  at: string = new Date().toISOString(),
+): Promise<{ activations: ActivationRecordV1[], approvals: ApprovalV1[] }> {
+  const [ moves, given ] = await db.batch([
+    db.prepare(
+      `SELECT id, action, previous_version_id, registry_version_id, actor, reason, created_at, approval_id
+       FROM registry_activations
+       WHERE registry_version_id = ?1 OR previous_version_id = ?1
+       ORDER BY created_at DESC, rowid DESC`
+    ).bind(versionId),
+    db.prepare(
+      `SELECT approval.*, activation.id AS activation_id,
+              CASE WHEN ${approvalUsable('approval', 'state.active_version_id', '?2')} THEN 1 ELSE 0 END AS usable
+       FROM registry_approvals AS approval
+       JOIN registry_state AS state ON state.singleton_id = 1
+       LEFT JOIN registry_activations AS activation ON activation.approval_id = approval.id
+       WHERE approval.registry_version_id = ?1
+       ORDER BY approval.created_at DESC, approval.rowid DESC`
+    ).bind(versionId, at),
+  ]);
+  const activations = ((moves!.results ?? []) as Array<{
     id: string, action: ActivationAction, previous_version_id: string | null, registry_version_id: string,
     actor: string, reason: string, created_at: string, approval_id: string | null,
-  }>();
-  return (results ?? []).map(row => ({
+  }>).map(row => ({
     id:                row.id,
     action:            row.action,
     previousVersionId: row.previous_version_id,
@@ -1342,24 +1365,8 @@ async function readActivationHistory(
     createdAt:         row.created_at,
     approvalId:        row.approval_id,
   }));
-}
-
-/*
- * Every approval of a version, newest first: who gave it, against which
- * version, until when, the activation that used it, and whether an
- * activation could use it at `at`, against the version on then.
- */
-async function readApprovals(db: D1Database, versionId: string, at: string = new Date().toISOString()): Promise<ApprovalV1[]> {
-  const { results } = await db.prepare(
-    `SELECT approval.*, activation.id AS activation_id,
-            CASE WHEN ${approvalUsable('approval', 'state.active_version_id', '?2')} THEN 1 ELSE 0 END AS usable
-     FROM registry_approvals AS approval
-     JOIN registry_state AS state ON state.singleton_id = 1
-     LEFT JOIN registry_activations AS activation ON activation.approval_id = approval.id
-     WHERE approval.registry_version_id = ?1
-     ORDER BY approval.created_at DESC, approval.rowid DESC`
-  ).bind(versionId, at).all<RegistryApprovalRow & { activation_id: string | null, usable: number }>();
-  return (results ?? []).map(approvalOf);
+  const approvals = ((given!.results ?? []) as Array<RegistryApprovalRow & { activation_id: string | null, usable: number }>).map(approvalOf);
+  return { activations, approvals };
 }
 
 /*
@@ -1863,11 +1870,10 @@ export {
   readSnapshot,
   readUnreviewed,
   latestValidationAttempt,
-  readActivationHistory,
   readActiveOverlays,
   readActivePointer,
   readActiveVersionId,
-  readApprovals,
+  readVersionDecisions,
   readImportOverlays,
   readMarket,
   readNetworkOverlay,

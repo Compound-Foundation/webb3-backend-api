@@ -374,6 +374,8 @@ t.test('migration 0001 creates strict tables and an empty active pointer', async
      )`
   ).all<{ name: string }>();
   t.equal((approvals.results ?? []).length, 4, 'migration 0011 adds approvals, and what an activation needs');
+  const ordered = await db.prepare(`SELECT name FROM pragma_table_info('registry_approvals') WHERE name = 'moves_seen'`).all<{ name: string }>();
+  t.equal((ordered.results ?? []).length, 1, 'and 0012 the order of approvals and moves');
 
   const state = await db.prepare('SELECT singleton_id, active_version_id FROM registry_state').all();
   t.same(
@@ -946,10 +948,14 @@ const minute = (n: number) => `2026-09-17T00:${String(n).padStart(2, '0')}:00.00
 
 /*
  * An approval as a row: of a validated version by its checksum, by bob,
- * given at minute 0 while nothing was on, and in force for the hour.
+ * given at minute 0 while nothing was on, and in force for the hour. Once
+ * migration 0012 is there it keeps the newest move written before it, as
+ * approveVersion has the database fill it in.
  */
 async function approve(db: D1Database, versionId: string, overrides: Row = {}): Promise<string> {
   const id = randomUUID();
+  const ordered = await db.prepare(`SELECT 1 FROM pragma_table_info('registry_approvals') WHERE name = 'moves_seen'`).first() !== null;
+  const seen = ordered ? { moves_seen: await db.prepare(`SELECT coalesce(max(rowid), 0) AS seen FROM registry_activations`).first<number>('seen') } : {};
   await insertRow(db, 'registry_approvals', {
     id,
     registry_version_id: versionId,
@@ -959,6 +965,7 @@ async function approve(db: D1Database, versionId: string, overrides: Row = {}): 
     reason:              'reviewed',
     created_at:          minute(0),
     expires_at:          minute(59),
+    ...seen,
     ...overrides,
   });
   return id;
@@ -1059,6 +1066,29 @@ t.test('once an environment has an approval, an activation needs one it may use'
     'and no approval is recorded with two moves, whatever the second one is');
   t.same((await db.prepare(`SELECT approval_id FROM registry_activations ORDER BY rowid`).all()).results,
     [ { approval_id: null }, { approval_id: good }, { approval_id: null }, { approval_id: fresh } ], 'each move names what it used');
+  t.same(await foreignKeyViolations(db), [], 'no foreign key violations');
+});
+
+/*
+ * "Overtaken" is the order the database wrote the approval and the move in,
+ * not the instants their Workers gave them: an activation takes its instant
+ * before it picks its approval and writes, and an approval given between the
+ * two carries a later one than the move written after it.
+ */
+t.test('an approval is overtaken by a move of its version written after it, whatever their instants', async t => {
+  const { APP_DB: db } = await freshEnv();
+  const [ first, second ] = await threeVersions(db);
+  t.same(await activate(db, first, 'activate', { at: minute(1) }), [ 1, 1 ], 'the first version is on, from before approvals');
+
+  const used   = await approve(db, second, { active_version_id: first, created_at: minute(2) });
+  // carol's approval is written before the activation below, though at a later instant than the one it takes
+  const between = await approve(db, second, { active_version_id: first, created_at: minute(5), actor: 'carol' });
+  t.same(await activate(db, second, 'activate', { at: minute(4), approvalId: used }), [ 1, 1 ], 'the second is switched on');
+  t.same(await activate(db, first, 'rollback', { at: minute(6) }), [ 1, 1 ], 'and rolled back from');
+  await t.rejects(() => activate(db, second, 'activate', { at: minute(7), approvalId: between }), APPROVAL_REQUIRED,
+    'the approval written before that activation does not switch its version on again');
+  const fresh = await approve(db, second, { active_version_id: first, created_at: minute(7), actor: 'carol' });
+  t.same(await activate(db, second, 'activate', { at: minute(8), approvalId: fresh }), [ 1, 1 ], 'a new one does');
   t.same(await foreignKeyViolations(db), [], 'no foreign key violations');
 });
 
@@ -1243,4 +1273,43 @@ t.test('migration 0011 keeps the moves of the release before it, until the first
     'and its rollback is held to the rule: not to a version the one on did not replace');
   t.same(await moved(released(first, 'rollback', minute(8))), [ 1, 1 ],
     'while one step back, to the version the one on replaced, still goes through');
+});
+
+/*
+ * Migration 0012 applies over the approvals and moves made before it, while
+ * the release before it is live, which writes approvals with no moves_seen.
+ * Each of those keeps 0: any move ever made onto its version overtakes it,
+ * which refuses on the safe side, and one of a version never on is still
+ * taken.
+ */
+t.test('migration 0012 orders the approvals made before it on the safe side', async t => {
+  await server.reset();
+  const { APP_DB: db } = await server.getWorker<Env>().getEnv();
+  await applyMigrations(db, undefined, { through: '0011' });
+
+  const [ first, second, third ] = await threeVersions(db);
+  t.same(await activate(db, first, 'activate', { at: minute(1) }), [ 1, 1 ], 'the first version is on');
+  const toSecond = await approve(db, second, { active_version_id: first, created_at: minute(2) });
+  t.same(await activate(db, second, 'activate', { at: minute(3), approvalId: toSecond }), [ 1, 1 ], 'the second is switched on');
+  t.same(await activate(db, first, 'rollback', { at: minute(4) }), [ 1, 1 ], 'and rolled back from');
+  const again = await approve(db, second, { active_version_id: first, created_at: minute(5) });
+  const never = await approve(db, third, { active_version_id: first, created_at: minute(5) });
+
+  await applyMigration(db, '0012_registry_approval_order.sql');
+  t.same((await db.prepare(`SELECT moves_seen FROM registry_approvals ORDER BY rowid`).all()).results,
+    [ { moves_seen: 0 }, { moves_seen: 0 }, { moves_seen: 0 } ], 'the approvals made before it keep 0');
+  await t.rejects(() => activate(db, second, 'activate', { at: minute(6), approvalId: again }), APPROVAL_REQUIRED,
+    'one of a version switched on before is overtaken, on the safe side');
+
+  // the release before writes approvals with no moves_seen, which the default gives 0
+  const released = randomUUID();
+  await run(db,
+    `INSERT INTO registry_approvals (id, registry_version_id, snapshot_checksum, active_version_id, actor, reason, created_at, expires_at)
+     VALUES (?1, ?2, ?3, ?4, 'bob', 'reviewed', ?5, ?6)`,
+    released, second, sha256Hex(`snapshot:${second}`), first, minute(6), minute(59));
+  await t.rejects(() => activate(db, second, 'activate', { at: minute(7), approvalId: released }), APPROVAL_REQUIRED,
+    'and so is one the release before writes after it');
+  t.same(await activate(db, third, 'activate', { at: minute(8), approvalId: never }), [ 1, 1 ],
+    'while one of a version never on is taken');
+  t.same(await foreignKeyViolations(db), [], 'no foreign key violations');
 });
