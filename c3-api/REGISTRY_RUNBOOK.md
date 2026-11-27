@@ -160,12 +160,31 @@ then the headers, then the body. To use them:
 - Create a Postman environment with the variables `API` (the address the
   first command of [Before you start](#before-you-start) prints, or
   `http://localhost:8787` for a worker on your own machine), `TOKEN` (your
-  admin token) and `V` (the draft's id, filled in step 1). For a worker on
-  your own machine, add `localhost`, `127.0.0.1` and `::1` to the proxy
-  bypass of **Settings → Proxy**, or turn the proxy off, so the token in
-  plain http goes to no proxy. Postman runs no routing check: run the check
-  of [Before you start](#before-you-start) in a terminal right before
-  sending a token to a deployed environment from it.
+  admin token, as its current value alone, its initial value left empty:
+  Postman shares an initial value with your team along with the environment,
+  and never syncs a current value to its servers) and `V` (the draft's id,
+  filled in step 1). Send from the Postman desktop app, or on the web through
+  the Desktop Agent, never the Cloud Agent: it sends each request, its token
+  too, from Postman's servers. For a worker on your own machine, add
+  `localhost`, `127.0.0.1` and `::1` to the proxy bypass of
+  **Settings → Proxy**, or turn the proxy off, so the token in plain http
+  goes to no proxy. Postman runs no routing check, so right before you send a
+  token to a deployed environment from it, run the check in a terminal, in
+  `c3-api`, on the address Postman will send to, the current value of `API`
+  in the Postman environment you send with, and with `ENVIRONMENT` naming the
+  environment whose token it holds:
+  `API='<that value>' node dist/scripts/environment-routing.js`. Once that
+  address is the custom domain of that environment, routed to its Worker
+  alone, it prints the address followed by `: its custom domain is …`; an
+  address on your own machine it passes at once, saying so. Otherwise it
+  stops, saying why, an empty value too. A stop does not stop Postman: send
+  only after the check has passed, and after a stop send nothing. When it
+  stops at `API is …, and the environment …'s address is …`, check first
+  that `ENVIRONMENT` names the environment whose token the Postman
+  environment holds; only then set the current value of its `API` to the
+  environment's address the message names, and run the check again, as this
+  stop comes before any routing is read. Keep a Postman environment for each
+  environment, holding that environment's address and token and no other's.
 - Send every administrative request with `Authorization: Bearer {{TOKEN}}` —
   or set **Authorization → Bearer Token → `{{TOKEN}}`** once on the collection
   and let the requests inherit it.
@@ -210,11 +229,11 @@ token.
 
 A worker you run on your own machine, such as the preflight's, takes its
 list from `.dev.vars` instead. Make its token and write its list as steps 1
-to 3 say, as `~/tokens.local.json`, each new token's entry checked with the
-command step 3 gives for it; put it into `.dev.vars` as the end of
-step 4 says, never with Wrangler, before the worker starts; and check it as
-step 5 says, after `export API=http://localhost:8787`, where the status
-names `local`.
+to 3 say, as `~/tokens.local.json`, the entries of each new token's holder
+checked with the command step 3 gives for it; put it into `.dev.vars` as the
+end of step 4 says, never with Wrangler, before the worker starts; and check
+it as step 5 says, after `export API=http://localhost:8787`, where the
+status names `local`.
 
 **1. Make a token** for its holder. 32 random bytes are plenty:
 
@@ -267,27 +286,35 @@ so drop the entries of expired tokens whenever you put the list again. It
 never shows a secret again either: keep the file, which holds hashes and no
 token, where the next change will start from, such as the password manager.
 
-Check the entry the file gives each new token before you put the list:
+Check the entry the file gives each new token, and in a rotation its
+holder's other entry, before you put the list:
 the worker records every change under that name, and allows what that role
 allows, so a hash in the entry of another holder of the same role would
 pass every check below, and the worker would record that holder's name.
-With the token in `NEW_TOKEN`, this prints the entries its hash is in:
+With the token in `NEW_TOKEN`, this prints every entry of its holder, its
+own marked `"new":true`:
 
 ```sh
-: "${NEW_TOKEN:?make it first, as step 1 does}" && jq -c --arg sha "$(printf '%s' "$NEW_TOKEN" | shasum -a 256 | cut -d ' ' -f 1)" '[.[] | select((.sha256 | strings | ascii_downcase) == $sha) | {name, role, notAfter}]' "$HOME/tokens.${ENVIRONMENT:?export it first}.json"
+: "${NEW_TOKEN:?make it first, as step 1 does}" && jq -c --arg sha "$(printf '%s' "$NEW_TOKEN" | shasum -a 256 | cut -d ' ' -f 1)" '[.[] | select((.sha256 | strings | ascii_downcase) == $sha) | .name] as $holders | [.[] | select(.name as $n | any($holders[]; . == $n)) | {name, role, notAfter, new: (((.sha256 | strings | ascii_downcase) == $sha) // false)}]' "$HOME/tokens.${ENVIRONMENT:?export it first}.json"
 ```
 
-On Linux `sha256sum` takes the place of `shasum -a 256`, as in step 2. It
-must print one entry, with its holder's name and role, and the `notAfter`
-you meant: `null`, or the instant the token is to stop being taken, and in a
-rotation never the cutoff you gave the token it replaces. `[]` is a token
-the file does not list, or one hashed with `echo`; two entries, or another
-name, role or `notAfter`, a hash in the wrong entry. Correct the file and
-check again. For a worker you run on your own machine, check its list,
-`~/tokens.local.json`:
+On Linux `sha256sum` takes the place of `shasum -a 256`, as in step 2.
+There must be one entry marked `"new":true`, with its holder's name and
+role, and the `notAfter` you meant: `null`, or the instant the token is to
+stop being taken. For a new holder it is the only entry: one marked
+`"new":false` is someone else's, whose name the new entry took. In a
+rotation there is one more, `"new":false`, the token being replaced, which
+must have the cutoff you gave it, a few days ahead, never `null`; a rotation
+that prints no such entry has lost the old entry, or has the new one under
+another name than the old one's. Any further `"new":false` entry is an older
+token of the holder's, which must have a cutoff too, and goes once that has
+passed. `[]` is a token the file does not list, or one hashed with `echo`;
+two entries marked `"new":true`, or another name, role or `notAfter`, a hash
+in the wrong entry. Correct the file and check again. For a worker you run
+on your own machine, check its list, `~/tokens.local.json`:
 
 ```sh
-: "${NEW_TOKEN:?make it first, as step 1 does}" && jq -c --arg sha "$(printf '%s' "$NEW_TOKEN" | shasum -a 256 | cut -d ' ' -f 1)" '[.[] | select((.sha256 | strings | ascii_downcase) == $sha) | {name, role, notAfter}]' "$HOME/tokens.local.json"
+: "${NEW_TOKEN:?make it first, as step 1 does}" && jq -c --arg sha "$(printf '%s' "$NEW_TOKEN" | shasum -a 256 | cut -d ' ' -f 1)" '[.[] | select((.sha256 | strings | ascii_downcase) == $sha) | .name] as $holders | [.[] | select(.name as $n | any($holders[]; . == $n)) | {name, role, notAfter, new: (((.sha256 | strings | ascii_downcase) == $sha) // false)}]' "$HOME/tokens.local.json"
 ```
 
 **4. Put the list into the environment**, from `c3-api`. The command builds
@@ -321,7 +348,7 @@ would log, such as `COMET_REGISTRY_ADMIN_TOKENS[1].sha256 must be 64 hex
 digits` for a hash not yet filled in, or `COMET_REGISTRY_ADMIN_TOKENS[0]
 names notAfter twice` for a field written twice, which JSON alone would read
 by its last value, or `… are two tokens of … that last more than 30 days`
-for a rotation whose old token has no cutoff within 30 days.
+for a rotation in which neither token stops within 30 days.
 `cannot read …` is a file that is not there, and `… is empty` an empty one.
 An error from `kv key list` is the account check stopping, for one of the
 reasons [Before you start](#before-you-start) gives, and
@@ -375,14 +402,16 @@ API="$API" node dist/scripts/environment-routing.js && curl -sS --noproxy localh
   own environment alone, so another environment never names itself here: it
   refuses the token, as below.
 
-A `curl: (N) …` line means the request did not reach the API — `API` empty,
-as it is where step 4 stopped before reading it, or the host down or out of
-reach — and nothing was checked. Read `API` again, as
-[Before you start](#before-you-start) says, or wait for the host, and run
-the block again. If `jq` reports a parse error, that answer is not JSON: run
-its line again, its check with it, without its `| jq …` to see it. Any
-other answer to the first request names its `code` and `message`, and the
-second prints that `code`:
+`API is empty`, from the check, is an `API` this shell has not read. Where
+step 4 stopped before reading it, it also put nothing: run step 4 again once
+what stopped it is fixed. Otherwise read `API` again, as
+[Before you start](#before-you-start) says, or, for a worker on your own
+machine, run `export API=http://localhost:8787`. A `curl: (N) …` line is a
+request that did not reach the API, the host down or out of reach: wait for
+the host. Either way nothing was checked: run the block again. If `jq`
+reports a parse error, that answer is not JSON: run its line again, its
+check with it, without its `| jq …` to see it. Any other answer to the first
+request names its `code` and `message`, and the second prints that `code`:
 
 - `UNAUTHORIZED` (`401`), "a bearer token is required": `NEW_TOKEN` is empty
   in this shell.
@@ -410,11 +439,12 @@ second prints that `code`:
 
 **Rotating a token.** Make a new token for the same holder (steps 1 and 2),
 add its entry under the same name and role, give the old entry a `notAfter`
-a few days ahead, check the new token's entry as the end of step 3 does, and
+a few days ahead, check the holder's entries as the end of step 3 does, and
 put the list (step 4). Step 4 refuses the list while both entries last more
-than 30 days, but it cannot tell which is the old one: put the `notAfter` on
-the old entry, and step 3's check, which prints the new token's own
-`notAfter`, shows that you did. Both tokens are taken until
+than 30 days, but it cannot tell which is the old one, and it takes a list
+whose new token is meant to stop within 30 days while the old one never
+does. Step 3's check tells them apart: the old token's entry,
+`"new":false`, must show the cutoff you gave it. Both tokens are taken until
 then: the holder switches, and after it the old one is refused as expired.
 Drop its entry the next time you put the list. A token that may have leaked
 is not rotated: drop its entry and put the list, which refuses it from then
@@ -674,10 +704,11 @@ the Comet of one line of the file.
 - `jq: error … Cannot iterate over null` means the request was refused, and
   nothing was compared: `jq .error changes.json` says why
   ([When something goes wrong](#when-something-goes-wrong)).
-- A `curl: (N) …` line means the request did not reach the API — `API`
-  unset, or the host down or out of reach — and nothing was compared. Read
-  `API` again, as [Before you start](#before-you-start) says, or wait for the
-  host, and run the block again.
+- `API is empty`, from the check, is an `API` this shell has not read, and a
+  `curl: (N) …` line a request that did not reach the API, the host down or
+  out of reach; either way nothing was compared. Read `API` again, as
+  [Before you start](#before-you-start) says, or wait for the host, and run
+  the block again.
 
 ### 3. Send the seed
 

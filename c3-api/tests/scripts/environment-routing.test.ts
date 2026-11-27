@@ -249,6 +249,13 @@ t.test('anything else is refused, and nothing is printed', async t => {
     'as not the environment\'s');
   t.same(elsewhere.requests, [], 'before Cloudflare is asked');
 
+  const empty = await check(cloudflare(), OAUTH, 'production', '');
+  t.equal(empty.status, 1, 'an API set to nothing is refused, unlike one not set');
+  t.match(empty.stderr, /^API is empty: read it again, as REGISTRY_RUNBOOK\.md's Before you start does/, 'as an address never read');
+  t.same(empty.requests, [], 'before Cloudflare is asked');
+  const bare = await check(cloudflare(), OAUTH, null, '');
+  t.match(bare.stderr, /^API is empty/, 'with no ENVIRONMENT either, as in a local bring-up');
+
   const minutes = await check(cloudflare({ skew: 10 * 60_000 }));
   t.equal(minutes.status, 0, 'a clock ten minutes off Cloudflare\'s passes');
 
