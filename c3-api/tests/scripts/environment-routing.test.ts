@@ -145,7 +145,7 @@ async function check(given: Cloudflare, auth: string | null = OAUTH, environment
   delete env['FAKE_AUTH'];
   delete env['API'];
   for (const variable of [ 'CLOUDFLARE_API_BASE_URL', 'CF_API_BASE_URL', 'WRANGLER_API_ENVIRONMENT', 'CLOUDFLARE_COMPLIANCE_REGION',
-  'WRANGLER_AUTH_DOMAIN', 'WRANGLER_AUTH_URL', 'WRANGLER_TOKEN_URL', 'WRANGLER_REVOKE_URL' ]) {
+  'WRANGLER_AUTH_DOMAIN', 'WRANGLER_AUTH_URL', 'WRANGLER_TOKEN_URL', 'WRANGLER_REVOKE_URL', 'DOTENV_KEY' ]) {
     delete env[variable];
   }
   Object.assign(env, shell);
@@ -310,6 +310,17 @@ t.test('a Wrangler that would send its requests elsewhere than Cloudflare is ref
     t.match(filed.stderr, new RegExp(`^[A-Z_]+ is set in ${file.replace(/\./g, '\\.')}, which Wrangler reads: it can send its requests, or your login, elsewhere than Cloudflare's own API`), 'naming the file');
     t.same([ filed.requests, filed.npx ], [ [], '' ], 'before the login is read or Cloudflare asked');
   }
+  const keyed = await check(cloudflare(), OAUTH, 'production', null, { DOTENV_KEY: 'dotenv://:key_0123456789abcdef@dotenv.org/vault/.env.vault?environment=production' });
+  t.equal(keyed.status, 1, 'DOTENV_KEY set in the shell is refused, as Wrangler would read the encrypted .env.vault with it');
+  t.match(keyed.stderr, /^DOTENV_KEY is set in this shell: Wrangler would read each \.env file from the encrypted \.vault beside it/, 'saying so');
+  t.notMatch(keyed.stdout + keyed.stderr, /key_0123456789abcdef/, 'and never printing the key');
+  t.same([ keyed.requests, keyed.npx ], [ [], '' ], 'before the login is read or Cloudflare asked');
+  writeFileSync(join(cwd, '.env'), 'DOTENV_KEY=dotenv://:key_0123456789abcdef@dotenv.org/vault/.env.vault?environment=production\n');
+  const filedKey = await check(cloudflare());
+  rmSync(join(cwd, '.env'));
+  t.equal(filedKey.status, 1, 'DOTENV_KEY set in a .env file is refused too');
+  t.match(filedKey.stderr, /^DOTENV_KEY is set in \.env, which Wrangler reads: with it, Wrangler would read each \.env file from the encrypted \.vault/, 'for what it does');
+  t.notMatch(filedKey.stdout + filedKey.stderr, /key_0123456789abcdef/, 'without printing the key');
   writeFileSync(join(cwd, '.env.preview'), 'CLOUDFLARE_API_BASE_URL=http://127.0.0.1:9\n');
   writeFileSync(join(cwd, '.env'), '# CLOUDFLARE_API_BASE_URL=http://127.0.0.1:9\nMY_CLOUDFLARE_API_BASE_URL=x\n');
   const others = await check(cloudflare());

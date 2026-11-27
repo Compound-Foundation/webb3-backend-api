@@ -960,7 +960,7 @@ can check that it is empty without knowing the registry's rules:
 | `cache-unreadable` | the KV namespace did not answer at all: there is no cache, and no fallback if the database fails next |
 
 ```sh
-$ curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
+$ curl --disable -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
 ```
 ```json
 {
@@ -1113,7 +1113,7 @@ closed this way: reviews do not carry across commits, so such a draft stays
 open until it is validated.
 
 ```sh
-$ curl -s "$API/registry/v1/admin/versions?status=importing" -H "Authorization: Bearer $TOKEN" | jq
+$ curl --disable -s "$API/registry/v1/admin/versions?status=importing" -H "Authorization: Bearer $TOKEN" | jq
 ```
 ```json
 {

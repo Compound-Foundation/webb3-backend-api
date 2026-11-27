@@ -310,23 +310,23 @@ behind a check of the routing, each in the same command:
 ```sh
 # 1. import the whole source in one request. The run ends "heldForReview";
 #    note the registryVersionId it answers
-curl -X POST .../registry/v1/admin/sync -H "Authorization: Bearer $TOKEN" \
+curl --disable -X POST .../registry/v1/admin/sync -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{}'
 
 # 2. check that the candidate holds every market of the seed, under the Comet
 #    production.comets.json names for it
-curl .../registry/v1/admin/versions/$VERSION/changes -H "Authorization: Bearer $TOKEN" \
+curl --disable .../registry/v1/admin/versions/$VERSION/changes -H "Authorization: Bearer $TOKEN" \
   | jq -r '.markets.added[] | "\(.scope) \(.market.contracts.comet)"'
 
 # 3. send the seed: every decision, one transaction
-curl -X PUT .../registry/v1/admin/versions/$VERSION/overlays \
+curl --disable -X PUT .../registry/v1/admin/versions/$VERSION/overlays \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   --data-binary @registry/seed/production.json
 
 # 4. validate, then activate. The first activation expects nothing to be on;
 #    a later one names the version that is
-curl -X POST .../registry/v1/admin/versions/$VERSION/validate ...
-curl -X POST .../registry/v1/admin/versions/$VERSION/activate ... \
+curl --disable -X POST .../registry/v1/admin/versions/$VERSION/validate ...
+curl --disable -X POST .../registry/v1/admin/versions/$VERSION/activate ... \
   -d '{"reason": "first registry version", "expectedActiveVersionId": null}'
 ```
 
@@ -378,12 +378,12 @@ the new market — and the new network with it, since validation refuses a
 network nobody reviewed that serves a market — and validate:
 
 ```sh
-curl -X POST .../registry/v1/admin/sync ... \
+curl --disable -X POST .../registry/v1/admin/sync ... \
   -d '{"forceNewAttempt": true, "holdForReview": true, "reason": "review the new market"}'
 # a market of a chain no version described yet needs its network reviewed too
-curl -X PUT  .../registry/v1/admin/versions/$VERSION/networks/<chain>/overlay ...
-curl -X PUT  .../registry/v1/admin/versions/$VERSION/markets/<chain>/<key>/overlay ...
-curl -X POST .../registry/v1/admin/versions/$VERSION/validate ...
+curl --disable -X PUT  .../registry/v1/admin/versions/$VERSION/networks/<chain>/overlay ...
+curl --disable -X PUT  .../registry/v1/admin/versions/$VERSION/markets/<chain>/<key>/overlay ...
+curl --disable -X POST .../registry/v1/admin/versions/$VERSION/validate ...
 ```
 
 A new attempt at the same commit inherits what was reviewed for the attempts

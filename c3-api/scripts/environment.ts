@@ -99,15 +99,21 @@ export function takesHost(route: unknown, host: string): boolean {
  * address that takes the login, when `wrangler login` gives it, when Wrangler
  * refreshes it, as `wrangler auth token` may, or when it is revoked. Any value
  * is refused, Wrangler's own defaults too. It reads the files Wrangler reads,
- * from the directory it runs in.
+ * from the directory it runs in, and refuses DOTENV_KEY, with which Wrangler
+ * would read each of them from the encrypted .vault beside it instead.
  */
 const OVERRIDES = [
   'CLOUDFLARE_API_BASE_URL', 'CF_API_BASE_URL', 'WRANGLER_API_ENVIRONMENT', 'CLOUDFLARE_COMPLIANCE_REGION',
   'WRANGLER_AUTH_DOMAIN', 'WRANGLER_AUTH_URL', 'WRANGLER_TOKEN_URL', 'WRANGLER_REVOKE_URL',
 ];
-const SETS = new RegExp(`^\\s*(?:export\\s+)?(${OVERRIDES.join('|')})\\s*[=:]`, 'm');
+// with DOTENV_KEY set, Wrangler's dotenv reads each .env file from the encrypted .vault beside it, such as .env.vault, which this check cannot read
+const SETS = new RegExp(`^\\s*(?:export\\s+)?(${[ ...OVERRIDES, 'DOTENV_KEY' ].join('|')})\\s*[=:]`, 'm');
 
 function wranglerAtCloudflare(name: string): void {
+  if (process.env['DOTENV_KEY'] !== undefined) {
+    // a key, never printed
+    refuse('DOTENV_KEY is set in this shell: Wrangler would read each .env file from the encrypted .vault beside it, which this check cannot read: unset it');
+  }
   for (const variable of OVERRIDES) {
     if (process.env[variable] !== undefined) {
       refuse(`${variable} is set in this shell, to ${JSON.stringify(process.env[variable])}: Wrangler can send its requests, or your login, elsewhere than Cloudflare's own API: unset it`);
@@ -121,6 +127,9 @@ function wranglerAtCloudflare(name: string): void {
       continue;
     }
     const set = SETS.exec(text);
+    if (set !== null && set[1] === 'DOTENV_KEY') {
+      refuse(`DOTENV_KEY is set in ${file}, which Wrangler reads: with it, Wrangler would read each .env file from the encrypted .vault beside it, which this check cannot read: remove it`);
+    }
     if (set !== null) {
       refuse(`${String(set[1])} is set in ${file}, which Wrangler reads: it can send its requests, or your login, elsewhere than Cloudflare's own API: remove it`);
     }

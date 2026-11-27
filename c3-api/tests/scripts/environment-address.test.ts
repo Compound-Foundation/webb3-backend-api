@@ -182,7 +182,7 @@ routes = [ { pattern = "top.example.com", custom_domain = true } ]
 
 // the variables that would send Wrangler to another API, which a developer's own shell may set
 const ELSEWHERE = [ 'CLOUDFLARE_API_BASE_URL', 'CF_API_BASE_URL', 'WRANGLER_API_ENVIRONMENT', 'CLOUDFLARE_COMPLIANCE_REGION',
-  'WRANGLER_AUTH_DOMAIN', 'WRANGLER_AUTH_URL', 'WRANGLER_TOKEN_URL', 'WRANGLER_REVOKE_URL' ];
+  'WRANGLER_AUTH_DOMAIN', 'WRANGLER_AUTH_URL', 'WRANGLER_TOKEN_URL', 'WRANGLER_REVOKE_URL', 'DOTENV_KEY' ];
 
 function address(environment: string | undefined, cwd: string, extra: Record<string, string> = {}): { status: number | null, stdout: string, stderr: string } {
   const env: Record<string, string | undefined> = { ...process.env };
@@ -267,6 +267,10 @@ t.test('a Wrangler that would talk to another API than Cloudflare\'s is refused,
     t.equal(shell.stdout, '', 'and nothing is printed');
     t.match(shell.stderr, new RegExp(`^${variable} is set in this shell, to "http://127\\.0\\.0\\.1:9": Wrangler can send its requests, or your login, elsewhere than Cloudflare's own API`), 'with what it can do');
   }
+  const keyed = address('custom', ROUTES, { DOTENV_KEY: 'dotenv://:key_0123456789abcdef@dotenv.org/vault/.env.vault?environment=custom' });
+  t.equal(keyed.status, 1, 'DOTENV_KEY set in the shell is refused');
+  t.equal(keyed.stdout, '', 'and nothing is printed');
+  t.notMatch(keyed.stderr, /key_0123456789abcdef/, 'the key least of all');
   writeFileSync(join(ROUTES, '.env.custom'), 'CF_API_BASE_URL=http://127.0.0.1:9\n');
   const filed = address('custom', ROUTES);
   rmSync(join(ROUTES, '.env.custom'));
