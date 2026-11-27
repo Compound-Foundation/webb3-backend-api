@@ -127,7 +127,9 @@ commands after it.
   [The admin tokens](#the-admin-tokens) if the environment has none yet, or
   none for you.
 - A second person with an `admin` token of their own approves what you switch
-  on (step 5 of the bring-up): a version is switched on by two people, and
+  on (step 5 of the bring-up). Each of their requests runs the routing check
+  too, so they also need a checkout and a Cloudflare login, or an API token,
+  with which it passes, as above. A version is switched on by two people, and
   two tokens of one name are one person. So the environment's list names two
   admins at least before the release with approvals reaches it
   ([The admin tokens](#the-admin-tokens)); with one, nobody there can switch a
@@ -865,8 +867,10 @@ the seed as steps 2 and 3 say.
 This step is another admin's, not yours: someone with an `admin` token of
 their own, under another name, who reads what the version would change and
 approves it. They run it from the root of their own checkout, with their own
-token in `TOKEN` and `API` read as [Before you start](#before-you-start)
-says, each request behind its own routing check:
+token in `TOKEN`, the id of the version to approve in `V`
+(`export V=<the versionId you give them>`), and `API` read as
+[Before you start](#before-you-start) says, each request behind its own
+routing check:
 
 ```sh
 (cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" \
@@ -896,8 +900,11 @@ and later the version that is on — `comparedWith` in the answer of
 another who switches it on. The approval covers exactly this version, which
 can no longer change, against what is on now, and lets one switch through.
 It cannot be taken back: one given by mistake, or with a token that may have
-leaked, stays usable by any other admin until it expires, is used, or another
-version goes on. Tell the other admins, so that nobody uses it.
+leaked, stays usable by any other admin until it expires, is used, or a move
+switches its version on. Another version going on only suspends it: a move
+back to the version it was given against, a rollback among them, makes it
+usable again. Tell the other admins, so that nobody uses it before its
+`expiresAt`.
 
 **You should see** `"usable": true`, and an `expiresAt` a day ahead
 (`COMET_REGISTRY_APPROVAL_TTL_S`): step 6 has until then. Once it has
@@ -1441,19 +1448,21 @@ too, under the newest `activate` onto it:
 
 ```sh
 export ON=<the version that is on>
-(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$ON" -H "Authorization: Bearer $TOKEN" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$ON" -H "Authorization: Bearer $TOKEN" \
   | jq -r '.version.id as $on | first(.activations[] | select(.targetVersionId == $on and .action == "activate")) | .previousVersionId'
 ```
 
-If it prints `null`, or nothing with no refusal of the routing check before
-it, a rollback has nothing to go back to: stop there. Otherwise check that
-the version it printed is older than the version on, which prints `true`;
-an id that names no version stops the check with `not a version`, and a
-request the routing check stopped, with `a request did not go out`:
+If it prints `null`, or nothing, with neither a refusal of the routing check
+nor a `curl: (N) …` line before it, a rollback has nothing to go back to:
+stop there. A `curl: (N) …` line is a request that did not reach the API:
+run it again. Otherwise check that the version it printed is older than the
+version on, which prints `true`; an id that names no version stops the
+check with `not a version`, and a request the routing check stopped, or one
+that did not reach the API, with `a request did not go out`:
 
 ```sh
 export BACK=<the id it printed>
-for id in "$BACK" "$ON"; do (cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$id" -H "Authorization: Bearer $TOKEN"; done \
+for id in "$BACK" "$ON"; do (cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$id" -H "Authorization: Bearer $TOKEN"; done \
   | jq -s 'if length != 2 then error("a request did not go out: run it again") else map(.version // error("not a version") | [ .createdAt, .attempt, .id ]) | .[0] < .[1] end'
 ```
 
@@ -1465,7 +1474,8 @@ Authorization: Bearer {{TOKEN}}
 ```
 
 `activations` lists the moves that switched the version on or off, newest
-first. The first `activate` whose `targetVersionId` is the version that is on
+first, as the database recorded them. The first `activate` whose
+`targetVersionId` is the version that is on
 is the activation that last switched it on, and its `previousVersionId` is
 the version to go back to. Not a `rollback` onto it: that one names the
 newer version it was rolled back from. `null` there — nothing was on before
@@ -1588,9 +1598,9 @@ whose reasons are in the draft it names.
 | `409` on validate, "the candidate changed while it was being validated" | An overlay was written to the draft while it was being checked, so the checks no longer described it and none was kept | Validate it again |
 | `409` writing an overlay, "is no longer the one this was decided against" or "changed while this overlay was being written" | Somebody changed the draft between your read and your write | Read the overlay again — `GET …/markets/<chainId>/<deploymentKey>/overlay` or `GET …/networks/<chainId>/overlay`, whose answer has its `digest` — redo your change on it, and send it with that digest as `expectedDigest`, or under the document's key in `expectedDigests` of a `PUT …/overlays` |
 | `409` writing an overlay, "already has that slug", "is already the default" or "cannot carry a reward price feed" | The document conflicts with the rest of the draft: another market of the network keeps that slug, another market is the default, or the market's rewards contract names no reward token. The draft is open, and nothing was written | Change the document, not the draft. Choose another slug, or move it with both markets in one `PUT …/overlays`; move the default the same way, both markets in one request. Read both first, and send each one's `digest` under its key in `expectedDigests` (`{"1/usdc": "<digest>", "1/weth": "<digest>"}`), so a change made to either since is not undone. A market without a reward token takes `"rewardPriceFeed": null` and both rewards capabilities `false` |
-| `409` on activate, rollback or approve, "the active version is …" or "the active version changed to … while this … was decided" | Somebody switched another version on after you looked, or while your request was deciding. Nothing of yours was recorded | Read the status again and decide again |
-| `409` on activate, `details.code` `APPROVAL_REQUIRED` | No approval of the version you may switch it on with: none was given, or it was given by you or another token of your name, has expired, was used, or was given while another version was on — the message names the version an approval is needed against. "Was used up while it was decided" is an approval another switch used in the meantime | Have another admin approve it again, against the version on (step 5 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)), then switch it on |
-| `409` on rollback, `details.code` `ROLLBACK_TARGET_INVALID` | A rollback goes back one step only, to the version the one on replaced when it was last activated, if that is older. This one is another — two steps back or more, never on, or newer — or nothing is on, or the version on was switched on in place of a newer one. The message names the version a rollback may restore now, or says that none may; "was switched on again while this rollback was decided" is the version on activated again meanwhile, in place of another | Roll back to the version the message names, one step at a time, as [Switching back](#switching-back) says. To switch on any other version, approve it and activate it (steps 5 to 7 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)) |
+| `409` on activate, rollback or approve, "the active version is …", "the active version changed to … while this … was decided" or "other moves were written while this … was decided" | Somebody switched another version on after you looked, or while your request was deciding, or switched one on and back. Nothing of yours was recorded | Read the status again and decide again |
+| `409` on activate, `details.code` `APPROVAL_REQUIRED` | No approval of the version you may switch it on with: none was given, or it was given by you or another token of your name, has expired, was used, or was given while another version was on — the message names the version an approval is needed against. "Was no longer in force when it was written" is an approval that expired between the check of your request and its write | Have another admin approve it again, against the version on (step 5 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)), then switch it on |
+| `409` on rollback, `details.code` `ROLLBACK_TARGET_INVALID` | A rollback goes back one step only, to the version the one on replaced when it was last activated, if that is older. This one is another — two steps back or more, never on, or newer — or nothing is on, or the version on was switched on in place of a newer one. The message names the version a rollback may restore now, or says that none may | Roll back to the version the message names, one step at a time, as [Switching back](#switching-back) says. To switch on any other version, approve it and activate it (steps 5 to 7 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)) |
 | `400` on approve, "expectedActiveVersionId is required" | The approval does not say which version on its changes were read against | Read the changes, and send the version on as `expectedActiveVersionId` — `comparedWith` in their answer, or `null` when nothing is on (step 5 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)) |
 | `409` on approve, "is on already" | The version is the one on: there is no change to approve | Nothing |
 | A version is `invalid` with the failed check `served-network-reviewed` | It serves a market of a network nobody has described — a chain no version had before | An `invalid` version can no longer be changed. Hold a new attempt (step 1 of [Describing a new market](#describing-a-new-market)), which keeps what was reviewed in this one; describe the network there (step 5), then validate it and switch it on (steps 4 to 7 of the first bring-up) |

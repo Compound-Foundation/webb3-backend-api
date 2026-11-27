@@ -208,7 +208,8 @@ t.test('a change decided against an overlay that has since changed is refused', 
  * approval, which one, and which version a rollback restores. Another move
  * landing between that reading and the write would leave a decision about
  * one change written as another, so the write is made only while the version
- * read is still on, and the move is otherwise refused, recording nothing.
+ * read is still on and no other move has been written since, and the move is
+ * otherwise refused, recording nothing.
  *
  * Until an environment has an approval, only the code holds the rule, so the
  * race is run on a database without one as well: its moves are made as the
@@ -329,7 +330,12 @@ t.test('of two activations of one approved version at once, one uses the approva
   );
 });
 
-t.test('an approval used up between an activation\'s check and its write refuses the activation', async t => {
+/*
+ * Moves landing between an activation's check and its write refuse it even
+ * when they bring the pointer back to the version it read: what it decided,
+ * here the approval it picked, may no longer hold.
+ */
+t.test('moves that bring the pointer back between an activation\'s check and its write refuse the activation', async t => {
   const { db, versions: [ first, second ] } = await freshVersions();
   await switchTo(db, first!, true);
   await approveSeeded(db, second!, 'bob');
@@ -341,8 +347,11 @@ t.test('an approval used up between an activation\'s check and its write refuses
   });
   await t.rejects(
     activateVersion(racing, { versionId: second!, action: 'activate', actor: 'alice', reason: 'switch it on' }),
-    { code: 'APPROVAL_REQUIRED', message: /was used up while it was decided/ },
-    'the activation is refused for the approval it was to use',
+    {
+      code:    'CANDIDATE_STATE_CONFLICT',
+      message: `other moves were written while this activate was decided, and ${first} is on again; read the status and ask again`,
+    },
+    'the activation decided before them is refused',
   );
   t.equal(await activeOf(db), first, 'nothing moved');
   t.equal(await db.prepare(`SELECT COUNT(*) AS n FROM registry_activations WHERE actor = 'alice'`).first<number>('n'), 0,
@@ -354,8 +363,7 @@ t.test('an approval used up between an activation\'s check and its write refuses
  * activated. Moves landing between its check and its write can switch the
  * version on off and on again, in place of another: the pointer is back
  * where the rollback read it, but the version the rollback was to restore
- * is no longer one step back. The database refuses it then, and the refusal
- * says what a rollback restores now.
+ * is no longer one step back. The rollback is refused, to be decided again.
  */
 t.test('a version switched on again between a rollback\'s check and its write refuses the rollback to what it replaced before', async t => {
   const { db, versions: [ first, second, third ] } = await freshVersions();
@@ -372,15 +380,23 @@ t.test('a version switched on again between a rollback\'s check and its write re
   await t.rejects(
     activateVersion(racing, { versionId: second!, action: 'rollback', actor: 'alice', reason: 'go back' }),
     {
-      code:    'ROLLBACK_TARGET_INVALID',
-      message: `the version on was switched on again while this rollback was decided, and a rollback goes back one step, from ${third} to ${first}, `
-        + `the version it replaced when it was last activated; to switch ${second} on, activate it once an admin of another name has approved it`,
+      code:    'CANDIDATE_STATE_CONFLICT',
+      message: `other moves were written while this rollback was decided, and ${third} is on again; read the status and ask again`,
     },
     'the rollback decided against the third version\'s activation before is refused',
   );
   t.equal(await activeOf(db), third, 'the third stays on');
   t.equal(await db.prepare(`SELECT COUNT(*) AS n FROM registry_activations WHERE actor = 'alice'`).first<number>('n'), 0,
     'and nothing of the rollback is recorded');
+  await t.rejects(
+    activateVersion(db, { versionId: second!, action: 'rollback', actor: 'alice', reason: 'go back' }),
+    {
+      code:    'ROLLBACK_TARGET_INVALID',
+      message: `a rollback goes back one step, from ${third} to ${first}, the version it replaced when it was last activated; `
+        + `to switch ${second} on, activate it once an admin of another name has approved it`,
+    },
+    'asked again, it is decided against what is on now, and says what a rollback restores',
+  );
 });
 
 /*
@@ -423,12 +439,12 @@ t.test('an approval given while an activation of its version is decided is overt
 });
 
 /*
- * Moves landing between an activation's check and its write can bring the
- * pointer back to the version it read. The activation is written then, but
- * only while its approval still holds at the write, which the database
- * checks again: here it does, and the activation uses it.
+ * An activation refused for moves in between is decided again when it is
+ * asked again, against what is on then. An approval given against the
+ * version that is on again, and not overtaken by a move of its own version,
+ * holds again: another version going on only suspended it.
  */
-t.test('a pointer brought back between an activation\'s check and its write lets the activation through, with its approval', async t => {
+t.test('an activation refused for moves that brought the pointer back goes through when asked again, with its approval', async t => {
   const { db, versions: [ first, second, third ] } = await freshVersions();
   await switchTo(db, first!, true);
   const approval = await approveSeeded(db, second!, 'bob');
@@ -438,7 +454,82 @@ t.test('a pointer brought back between an activation\'s check and its write lets
     await switchTo(db, third!, true);
     await activateVersion(db, { versionId: first!, action: 'rollback', actor: 'carol', reason: 'and back' });
   });
-  const switched = await activateVersion(racing, { versionId: second!, action: 'activate', actor: 'alice', reason: 'switch it on' });
-  t.same([ switched.changed, switched.approvalId ], [ true, approval.id ], 'the activation is written, with the approval it picked');
+  await t.rejects(
+    activateVersion(racing, { versionId: second!, action: 'activate', actor: 'alice', reason: 'switch it on' }),
+    {
+      code:    'CANDIDATE_STATE_CONFLICT',
+      message: `other moves were written while this activate was decided, and ${first} is on again; read the status and ask again`,
+    },
+    'the activation decided before them is refused',
+  );
+  t.equal(await db.prepare(`SELECT COUNT(*) AS n FROM registry_activations WHERE actor = 'alice'`).first<number>('n'), 0,
+    'and nothing of it is recorded');
+
+  const again = await activateVersion(db, { versionId: second!, action: 'activate', actor: 'alice', reason: 'switch it on' });
+  t.same([ again.changed, again.approvalId ], [ true, approval.id ], 'asked again, it is written, with the approval given against the first');
   t.equal(await activeOf(db), second, 'and the second is on');
+});
+
+/*
+ * An activation picks an approval in force at the instant it took, and
+ * writes a moment later. An approval that expires in between is refused at
+ * the write, by the database's clock, and nothing of the activation is
+ * recorded.
+ */
+t.test('an approval that expires between an activation\'s check and its write refuses the activation', async t => {
+  const { db, versions: [ first, second ] } = await freshVersions();
+  await switchTo(db, first!, true);
+  await approveVersion(db, { versionId: second!, actor: 'bob', reason: 'read it', ttlSeconds: 2, expectedActiveVersionId: first! });
+
+  // the write waits until the approval has expired
+  const racing = interleaved(db, /INSERT INTO registry_activations/, async () => {
+    await new Promise(resolve => setTimeout(resolve, 3_000));
+  });
+  await t.rejects(
+    activateVersion(racing, { versionId: second!, action: 'activate', actor: 'alice', reason: 'switch it on' }),
+    {
+      code:    'APPROVAL_REQUIRED',
+      message: `the approval of registry version ${second} this activation was to use was no longer in force when it was written; read the version and ask again`,
+    },
+    'the activation is refused for the approval it was to use',
+  );
+  t.equal(await activeOf(db), first, 'nothing moved');
+  t.equal(await db.prepare(`SELECT COUNT(*) AS n FROM registry_activations WHERE actor = 'alice'`).first<number>('n'), 0,
+    'and nothing of it is recorded');
+});
+
+/*
+ * Moves are taken in the order the database wrote them, not by the instants
+ * Workers gave them, whose clocks need not agree. Here the second version is
+ * switched on in place of the third, a newer one, by a move written last but
+ * at an earlier instant than the one that first switched it on, in place of
+ * the first. That last move is the one a rollback goes back from, and the
+ * one the version's history lists first.
+ */
+t.test('a version\'s last move is the one written last, whatever instants the moves carry', async t => {
+  const { db, versions: [ first, second, third ] } = await freshVersions();
+  const ago = (seconds: number) => new Date(Date.now() - seconds * 1000).toISOString();
+  const written = async (versionId: string, at: string): Promise<string> => {
+    const approval = await approveSeeded(db, versionId, 'bob');
+    const activationId = randomUUID();
+    await db.batch(activationStatements(db, { activationId, versionId, action: 'activate', actor: 'alice', reason: 'test', at, approvalId: approval.id }));
+    return activationId;
+  };
+  await written(first!, ago(30));
+  const toSecond = await written(second!, ago(10));
+  const toThird  = await written(third!, ago(5));
+  const back     = await written(second!, ago(20));
+
+  await t.rejects(
+    activateVersion(db, { versionId: first!, action: 'rollback', actor: 'carol', reason: 'go back' }),
+    {
+      code:    'ROLLBACK_TARGET_INVALID',
+      message: `a rollback goes back one step, and ${second} replaced no older version when it was last activated, so nothing is restored alone; `
+        + `to switch ${first} on, activate it once an admin of another name has approved it`,
+    },
+    'from the second, switched on last in place of the newer third, no rollback goes back to the first',
+  );
+  t.equal(await activeOf(db), second, 'the second stays on');
+  t.same((await readVersionDecisions(db, second!)).activations.map(activation => activation.id), [ back, toThird, toSecond ],
+    'and its history lists its moves in the order they were written');
 });

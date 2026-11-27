@@ -911,9 +911,9 @@ fault, whose `lastError` is `an unexpected error interrupted the import`.
 ### description:
 
 Whether the registry is healthy, in one answer: the active version, who
-switched it on (`active.activatedBy`) and who approved that
-(`active.approvedBy`, `null` for a rollback, and for a move made before
-approvals existed), whether its bytes are cached (`cache.snapshotCached`) and the
+switched it on (`active.activatedBy`, by the move the database recorded last
+onto it) and who approved that (`active.approvedBy`, `null` for a rollback,
+and for a move made before approvals existed), whether its bytes are cached (`cache.snapshotCached`) and the
 cache could be read at all (`cache.readable`), when the source was last
 checked, the last import run, the candidates still open, and the registry
 settings the environment sets to something they do not take
@@ -1161,7 +1161,8 @@ $ curl --disable -s "$API/registry/v1/admin/versions?status=importing" -H "Autho
 A version with its validation summary, activation history and approvals.
 
 `activations` lists every move that switched the version on or off, newest
-first, and names both versions of each: `targetVersionId` is the one the move
+first in the order the database recorded them, which their `createdAt`
+instants need not follow, and names both versions of each: `targetVersionId` is the one the move
 switched on, and `previousVersionId` the one it switched off — `null` when
 nothing was on before. A record whose `previousVersionId` is this version is
 the move that switched it off. `approvalId` is the approval an activation
@@ -1276,9 +1277,12 @@ It lets one activation through. It no longer counts once it has expired,
 once an activation has used it, or once a move recorded after it has
 switched its version on, in the order the database recorded them, whatever
 instants the moves carry: switching a version on again after a rollback
-needs a new approval. It cannot be withdrawn: one given by mistake, or by a token
-that turns out to have leaked, stays usable by any other admin until it
-expires, is used, or another version goes on.
+needs a new approval. It is usable only while the version it was given
+against is on: another version going on suspends it, and a move back to
+that version, a rollback among them, makes it usable again. It cannot be
+withdrawn: one given by mistake, or by a token that turns out to have
+leaked, stays usable by any other admin until it expires, is used, or a move
+switches its version on.
 
 Every request records an approval of its own. A version that does not exist
 is `404`; a version that is not validated, the version that is on — which is
@@ -1298,25 +1302,27 @@ and needs no approval.
 The activation uses the newest approval of the version that is in force, was
 given by another name than the activating token's, was given while the
 version now on was on, and has not been used, or overtaken by a move
-recorded after it that switched the version on. Without one it is refused with
-`409` and `details.code` `APPROVAL_REQUIRED`, and nothing moves. The first
-activation of an environment needs an approval too, given while nothing was
-on.
+recorded after it that switched the version on. Without one it is refused
+with `409` and `details.code` `APPROVAL_REQUIRED`, and nothing moves. The
+database checks the approval again as it records the activation, its expiry
+by its own clock, so one that expires between the worker's check and the
+write refuses the activation the same way. The first activation of an
+environment needs an approval too, given while nothing was on.
 
 `expectedActiveVersionId` — [optional] — the version the move is decided
 against, or `null` when nothing is on yet. When it is no longer the version
 that is on, the move is refused with `409` naming the one that is, instead of
 silently undoing a move somebody else made in the meantime. A move whose
 target is already on changes nothing, whatever it expected. A move is
-written only while the version it was decided against is on: one made by
-somebody else between the activation's reading of what is on and its write,
-after which another version is on, refuses it the same way, `409` with
-`details.code` `CANDIDATE_STATE_CONFLICT`, and nothing is recorded; read the
-status and decide again. When moves meanwhile bring that same version back,
-the activation is written, but only while its approval still holds at the
-write, which the database checks again, and is refused with
-`APPROVAL_REQUIRED` otherwise. It is recorded with the instant it was
-decided at.
+decided against the version on and the moves recorded so far, and is
+written only while no other move has been recorded since: one made by
+somebody else between the activation's reading of what is on and its write
+refuses it the same way, `409` with `details.code`
+`CANDIDATE_STATE_CONFLICT`, and nothing is recorded, even when the moves in
+between bring the same version back; read the status and decide again. When
+they leave the activation's own target on, it changes nothing instead, as
+one sent a moment later would: `changed: false`. A move is recorded with the
+instant it was decided at.
 
 ```json
 { "reason": "switch on the new commit", "expectedActiveVersionId": "d9698ddd-ab86-46bc-a412-c71df7d20414" }
@@ -1341,10 +1347,10 @@ and `approvalId` null.
 From an environment's first approval on, the database refuses an activation
 without an approval it may use, a rollback the rule below does not allow,
 and a move of the active version no activation records, whoever writes it
-(migrations `0011` and `0012`). Before that first approval only the worker holds the
-rule, and the release before approvals keeps working: it is what is live
-while the migration is applied. Someone who can write to the database
-directly can still go around the rule, as around every other.
+(migrations `0011` and `0012`). Before that first approval only the worker
+holds the rule, and the release before approvals keeps working: it is what
+is live while the migrations are applied. Someone who can write to the
+database directly can still go around the rule, as around every other.
 
 ## `POST /registry/v1/admin/versions/{version_id}/rollback`
 ### description:
@@ -1367,10 +1373,9 @@ version on, any rollback while nothing is on, and any from a version an
 activation switched on in place of a newer one. Such a version is switched
 on with an activation, once another admin has approved it. A rollback to
 the version on changes nothing, as an activation of it does. Its answer's
-`approvalId` is `null`. When moves between its reading and its write bring
-the version on back, it is written only while its one step back still holds
-at the write, which the database checks again, and is refused with
-`ROLLBACK_TARGET_INVALID` otherwise.
+`approvalId` is `null`. Moves recorded between its reading and its write
+refuse it as they refuse an activation, even when they bring the version on
+back.
 
 ## `PUT /registry/v1/admin/versions/{version_id}/networks/{chain_id}/overlay`
 ### description:

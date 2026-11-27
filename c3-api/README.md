@@ -61,8 +61,9 @@ the hashes of two admin tokens of your own into `.dev.vars`, as entries of
 approves the version and the other switches it on — before starting the
 worker ([The admin tokens](./REGISTRY_RUNBOOK.md#the-admin-tokens)), and follow
 [Bringing an environment up for the first time](./REGISTRY_RUNBOOK.md#bringing-an-environment-up-for-the-first-time)
-from the root of the checkout, with your token in `TOKEN`, the scripts its
-requests check the routing with built,
+from the root of the checkout, with your first token in `TOKEN`, and your
+second in it for step 5, the scripts its requests check the routing with
+built,
 `(cd c3-api && npx tsc -p tsconfig.scripts.json)`, and
 `export API=http://localhost:8787 NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1`:
 `NO_PROXY` and `no_proxy` keep the token off any proxy set for plain http.
@@ -81,9 +82,10 @@ Migrations are numbered in the order they are applied, not by feature:
 `0001` is the Comet registry schema, `0002` marks the markets nobody has
 reviewed yet, `0003` adds how the frontend lists a market — its slug and
 whether it is institutional — `0004` drops the columns and indexes nothing
-uses, `0011` adds the approvals an activation needs, and `0012` orders them
-by the moves the database recorded before them. `0005` to `0010` are left to
-work merged later, which an environment applies after `0012`:
+uses, `0011` adds the approvals an activation needs, and `0012` takes
+approvals and moves in the order the database recorded them, and an
+approval's expiry by the database's clock as well. `0005` to `0010` are left
+to work merged later, which an environment applies after `0012`:
 `wrangler d1 migrations apply` applies every file not applied yet, by name.
 
 Apply migrations to the local Miniflare database under `.wrangler/state`:

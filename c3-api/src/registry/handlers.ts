@@ -371,9 +371,9 @@ async function getVersionDetail(context: RegistryContext, versionId: string): Pr
     throw new ApiError('NOT_FOUND', `no registry version with that id`);
   }
   /*
-   * reads that do not depend on each other, so one round trip of waiting
-   * rather than three; the moves and the approvals, which name each other,
-   * come from one batch, so an approval's activation is among the moves
+   * reads that do not depend on each other, waited for together rather than
+   * in turn; the moves and the approvals, which name each other, come from
+   * one batch, so an approval's activation is among the moves
    */
   const [ validation, { activations, approvals }, unreviewed ] = await Promise.all([
     readValidationSummary(context.db, versionId),

@@ -49,8 +49,9 @@ import { sha256Hex } from '../../lib/hash.js';
  * gets wrong, so these functions stay thin and never re-implement those rules.
  * The rules of who may switch a version on are the exception: an
  * environment's database holds them only from its first approval on
- * (migrations/0011_registry_approvals.sql), so activateVersion checks them
- * itself before it writes.
+ * (migrations/0011_registry_approvals.sql, whose activation and rollback
+ * rules migrations/0012_registry_approval_order.sql replaces), so
+ * activateVersion checks them itself before it writes.
  */
 type SqlValue = string | number | null;
 
@@ -776,6 +777,19 @@ async function readActiveVersionId(db: D1Database): Promise<string | null> {
 }
 
 /*
+ * The version on and the newest move written so far, the rowid of the newest
+ * row of registry_activations or 0 for none, in one statement: what a move is
+ * decided against, and written only while nothing has changed (unmovedSince).
+ */
+async function readPointer(db: D1Database): Promise<{ active: string | null, moves: number }> {
+  const row = await db.prepare(
+    `SELECT active_version_id, (SELECT coalesce(max(rowid), 0) FROM registry_activations) AS moves
+     FROM registry_state WHERE singleton_id = 1`
+  ).first<{ active_version_id: string | null, moves: number }>();
+  return { active: row?.active_version_id ?? null, moves: row?.moves ?? 0 };
+}
+
+/*
  * The active version and the checksum of its snapshot, in one statement.
  *
  * This is what a request pays to find out whether what it already holds is
@@ -959,6 +973,20 @@ function pointerAt(active: string | null | undefined): Condition | undefined {
 }
 
 /*
+ * That no move but `activationId` has been written since the newest one a
+ * move was decided after, `moves`, its rowid (readPointer). Rows of
+ * registry_activations are only ever added, each after the last, so this
+ * holds for both statements of a move written alone, and for neither once
+ * another move came in between, even one that brought the pointer back.
+ */
+function unmovedSince(moves: number, activationId: string): Condition {
+  return {
+    sql:    first => `NOT EXISTS (SELECT 1 FROM registry_activations WHERE rowid > ?${first} AND id <> ?${first + 1})`,
+    values: [ moves, activationId ],
+  };
+}
+
+/*
  * Whether an approval may still let its version be switched on, as SQL over
  * the approval's alias: it is in force at `at`, it was made while `active`
  * was on — the version an activation would replace — and no move has used
@@ -969,7 +997,8 @@ function pointerAt(active: string | null | undefined): Condition | undefined {
  * decision, which needs a new approval. Every reader of approvals asks this
  * one question: an activation before it is written, the status of a version
  * waiting to be switched on, and the history of a version; migration 0012's
- * trigger asks it of every activation, with the activator's name besides.
+ * trigger asks it of every activation, with the activator's name besides, and
+ * "in force" by the database's clock as well as at the activation's instant.
  */
 function approvalUsable(approval: string, active: string, at: string): string {
   return `${approval}.expires_at > ${at}
@@ -1087,7 +1116,9 @@ async function usableApprovalOf(
  * replaced nothing then, or a newer version, which only another approved
  * activation brings back. A rollback goes back that one step and no further:
  * the step before it is another rollback, from the version this one
- * restores. Migration 0011's trigger holds the same rule.
+ * restores. "Last" is the order the database wrote the moves in, not their
+ * instants, which Workers' clocks give. Migration 0012's trigger holds the
+ * same rule.
  */
 async function restorableFrom(db: D1Database, active: string): Promise<string | null> {
   const id = await db.prepare(
@@ -1098,7 +1129,7 @@ async function restorableFrom(db: D1Database, active: string): Promise<string | 
      WHERE latest.id = (
          SELECT id FROM registry_activations
          WHERE action = 'activate' AND registry_version_id = ?1
-         ORDER BY created_at DESC, rowid DESC
+         ORDER BY rowid DESC
          LIMIT 1
        )
        AND (replaced.created_at, replaced.attempt, replaced.id) < (active.created_at, active.attempt, active.id)`
@@ -1130,13 +1161,14 @@ async function assertRestorable(db: D1Database, versionId: string, active: strin
 }
 
 /*
- * The batch of a move, whose rule was checked a moment before against the
- * version on. Moves made in between can break it while the pointer comes
- * back to that version: an approval used up by another activation that
- * switched the version on and a move that went back again, or the version
- * on switched off and on again in place of another, which a rollback from it
- * then no longer restores. Migration 0011 refuses the move then, and the
- * refusal is the conflict the check would have answered, not a fault.
+ * The batch of a move, whose rule was checked a moment before, against the
+ * version on and the moves written so far. It is written only while no other
+ * move has been written since (unmovedSince), so what the rule read still
+ * holds, but for the clock: an approval in force when the move was decided
+ * can expire before its write, and migration 0012's trigger refuses it then,
+ * by the database's clock. Migrations 0011 and 0012 refuse whatever else
+ * breaks the rules, whoever writes it. A refusal is then the conflict the
+ * check would have answered, not a fault.
  */
 async function writeMove(db: D1Database, statements: D1PreparedStatement[], versionId: string): Promise<D1Result[]> {
   try {
@@ -1146,7 +1178,7 @@ async function writeMove(db: D1Database, statements: D1PreparedStatement[], vers
     if (message.includes('an activation requires an approval') || message.includes('UNIQUE constraint failed: registry_activations.approval_id')) {
       throw new RegistryError(
         'APPROVAL_REQUIRED',
-        `the approval of registry version ${versionId} this activation was to use was used up while it was decided; read the version and ask again`,
+        `the approval of registry version ${versionId} this activation was to use was no longer in force when it was written; read the version and ask again`,
         versionId,
         { cause: error },
       );
@@ -1154,12 +1186,7 @@ async function writeMove(db: D1Database, statements: D1PreparedStatement[], vers
     if (message.includes('a rollback restores only')) {
       const active     = await readActiveVersionId(db);
       const restorable = active === null ? null : await restorableFrom(db, active);
-      throw new RegistryError(
-        'ROLLBACK_TARGET_INVALID',
-        `the version on was switched on again while this rollback was decided, and ${rollbackRefusal(versionId, active, restorable)}`,
-        versionId,
-        { cause: error },
-      );
+      throw new RegistryError('ROLLBACK_TARGET_INVALID', rollbackRefusal(versionId, active, restorable), versionId, { cause: error });
     }
     throw error;
   }
@@ -1175,15 +1202,18 @@ async function writeMove(db: D1Database, statements: D1PreparedStatement[], vers
  * another name (usableApprovalOf), which it records and uses up. A rollback
  * needs none, as break-glass, but goes back one step only, to the older
  * version the one on replaced when it was last activated (restorableFrom).
- * Every move is made here, so no caller can skip the rules, and migration
- * 0011 holds them in the database too once the environment has an approval.
+ * Every move is made here, so no caller can skip the rules, and migrations
+ * 0011 and 0012 hold them in the database too once the environment has an
+ * approval.
  *
  * A request may name the version it expects to replace, null for nothing on,
  * and is refused when that is not what is on: of two moves made against the
  * same version, the later one does not silently undo the other. The rules are
- * then decided against the pointer as it was read, so both statements are
- * written only while it still names that version: a move made in between
- * would leave a decision about one change written as another.
+ * then decided against the pointer and the moves as they were read, so both
+ * statements are written only while the pointer still names that version and
+ * no other move has been written since: a move made in between, even moves
+ * that bring the pointer back, would leave a decision about one state written
+ * over another.
  */
 async function activateVersion(
   db: D1Database,
@@ -1217,7 +1247,7 @@ async function activateVersion(
     registryVersion,
   };
 
-  const active = await readActiveVersionId(db);
+  const { active, moves } = await readPointer(db);
   if (active === input.versionId) {
     return unchanged;
   }
@@ -1254,7 +1284,7 @@ async function activateVersion(
     reason:    input.reason,
     at:        timestamp,
     approvalId,
-  }, pointerAt(active)), input.versionId);
+  }, both(pointerAt(active)!, unmovedSince(moves, activationId))), input.versionId);
 
   const audited = changedRows(auditResult!);
   const moved   = changedRows(pointerResult!);
@@ -1267,10 +1297,10 @@ async function activateVersion(
   }
 
   /*
-   * Nothing moved: the pointer no longer named what the rules were decided
-   * against. A move that switched the target on in between leaves this one
-   * where a request made a moment later would be, the idempotent no-op; any
-   * other is refused, to be decided again against what is on now.
+   * Nothing moved: another move was written after the rules were decided. One
+   * that switched the target on leaves this one where a request made a moment
+   * later would be, the idempotent no-op; any other is refused, to be decided
+   * again against what is on now, even when that is the version read before.
    */
   if (moved === 0) {
     const current = await readActiveVersionId(db);
@@ -1279,7 +1309,9 @@ async function activateVersion(
     }
     throw new RegistryError(
       'CANDIDATE_STATE_CONFLICT',
-      `the active version changed to ${current ?? 'none'} while this ${input.action} was decided; read the status and ask again`,
+      current === active
+        ? `other moves were written while this ${input.action} was decided, and ${current ?? 'no version'} is on again; read the status and ask again`
+        : `the active version changed to ${current ?? 'none'} while this ${input.action} was decided; read the status and ask again`,
       input.versionId,
     );
   }
@@ -1325,9 +1357,10 @@ async function readValidationSummary(db: D1Database, versionId: string): Promise
  * A version's moves and approvals, newest first, read in one batch, so the
  * one answer is of one moment: an approval's activation is always among the
  * moves read with it. The moves are those that switched the version on or
- * off; an approval says who gave it, against which version, until when, the
- * activation that used it, and whether an activation could use it at `at`,
- * against the version on then.
+ * off, in the order the database wrote them, which their instants, taken by
+ * Workers' clocks, need not follow; an approval says who gave it, against
+ * which version, until when, the activation that used it, and whether an
+ * activation could use it at `at`, against the version on then.
  */
 async function readVersionDecisions(
   db: D1Database,
@@ -1339,7 +1372,7 @@ async function readVersionDecisions(
       `SELECT id, action, previous_version_id, registry_version_id, actor, reason, created_at, approval_id
        FROM registry_activations
        WHERE registry_version_id = ?1 OR previous_version_id = ?1
-       ORDER BY created_at DESC, rowid DESC`
+       ORDER BY rowid DESC`
     ).bind(versionId),
     db.prepare(
       `SELECT approval.*, activation.id AS activation_id,

@@ -278,16 +278,16 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
     state, active, run, candidates, unreviewedMarkets, unreviewedNetworks, lastItem, invalid, validated, unserved, approvals, rejected,
   ] = await db.batch([
     db.prepare(`SELECT active_version_id, last_upstream_checked_at FROM registry_state WHERE singleton_id = 1`),
+    // the version on, and the move that switched it on: the last one written onto it, whatever instants Workers gave the moves
     db.prepare(
       `SELECT version.id AS id, version.snapshot_checksum AS checksum,
               activation.created_at AS activated_at, activation.actor AS actor, approval.actor AS approver
        FROM registry_state AS state
        JOIN registry_versions AS version ON version.id = state.active_version_id
        LEFT JOIN registry_activations AS activation
-         ON activation.registry_version_id = version.id
-        AND activation.created_at = (
-          SELECT MAX(created_at) FROM registry_activations WHERE registry_version_id = version.id
-        )
+         ON activation.rowid = (
+           SELECT max(rowid) FROM registry_activations WHERE registry_version_id = version.id
+         )
        LEFT JOIN registry_approvals AS approval ON approval.id = activation.approval_id
        WHERE state.singleton_id = 1`
     ),

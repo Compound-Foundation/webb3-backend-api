@@ -9,7 +9,7 @@ import type { Address } from '../../../lib/model/comet-registry.js';
 import { sha256Hex } from '../../../src/http/bearer-auth.js';
 import { activeSnapshot, cacheDepsOf } from '../../../src/registry/cache.js';
 import { CHECK_KEY, checkChain } from '../../../src/registry/drift.js';
-import { activateVersion, markInvalid, recordValidationResults } from '../../../src/registry/repository.js';
+import { activateVersion, activationStatements, markInvalid, recordValidationResults } from '../../../src/registry/repository.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { FakeChain, fakeChain } from '../../util/fake-chain.js';
@@ -46,7 +46,7 @@ const auth     = { 'Authorization': `Bearer ${ADMIN_TOKEN}` };
 type Status = {
   environment: string,
   configuration: { invalid: string[] },
-  active: { versionId: string, checksum: string, activatedBy: string | null, approvedBy: string | null } | null,
+  active: { versionId: string, checksum: string, activatedAt: string | null, activatedBy: string | null, approvedBy: string | null } | null,
   cache: { snapshotCached: boolean, pointerAgeSeconds: number | null },
   sync: {
     lastRun: { id: string, status: string, failedCount: number, lastError: string | null } | null,
@@ -315,6 +315,40 @@ t.test('a version waiting to be switched on is raised until somebody approves it
     'and the status names who approved the move');
   await activateVersion(db, { versionId: hotfix, action: 'rollback', actor: 'test-admin', reason: 'go back' });
   t.equal((await status()).active?.approvedBy, null, 'while a rollback, which nobody approves, names nobody');
+});
+
+/*
+ * The status names the move that switched the version on: the last one the
+ * database wrote onto it. Workers' clocks need not agree, so that move can
+ * carry an earlier instant than one written before it, as the second
+ * activation of the second version does here.
+ */
+t.test('the version on is named with the move written last onto it, whatever instants the moves carry', async t => {
+  const db = await freshDatabase();
+  const versions: string[] = [];
+  for (const attempt of [ 1, 2, 3 ]) {
+    const { versionId } = await seedCandidate(db, snapshot, { versionId: randomUUID(), attempt });
+    await validateSeeded(db, versionId);
+    versions.push(versionId);
+  }
+  const [ first, second, third ] = versions as [ string, string, string ];
+  const ago = (seconds: number) => new Date(Date.now() - seconds * 1000).toISOString();
+  const written = async (versionId: string, at: string, approver: string, actor: string) => {
+    const approval = await approveSeeded(db, versionId, approver);
+    await db.batch(activationStatements(db, { activationId: randomUUID(), versionId, action: 'activate', actor, reason: 'test', at, approvalId: approval.id }));
+  };
+  await written(first, ago(30), 'bob', 'alice');
+  await written(second, ago(10), 'bob', 'alice');
+  await written(third, ago(5), 'bob', 'alice');
+  const last = ago(20);
+  await written(second, last, 'carol', 'dave');
+
+  const { active } = await status();
+  t.same(
+    [ active?.versionId, active?.activatedAt, active?.activatedBy, active?.approvedBy ],
+    [ second, last, 'dave', 'carol' ],
+    'the move named is the one written last, with who made and approved it',
+  );
 });
 
 t.test('a version skipped for a newer one is not raised again when the version before both is switched on again', async t => {

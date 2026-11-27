@@ -937,8 +937,13 @@ t.test('sync runs keep one running job and consistent checkpoints', async t => {
   await t.resolves(() => insertRow(db, 'sync_runs', syncRun()), 'a new run may start after the previous one completes');
 });
 
-// a minute of the day the moves below are made in, so that what is later is later
-const minute = (n: number) => `2026-09-17T00:${String(n).padStart(2, '0')}:00.000Z`;
+/*
+ * A minute of the day the moves below are made in, so that what is later is
+ * later: two days ahead, so that an approval in force at these instants is
+ * in force by the database's clock too, which migration 0012 also asks.
+ */
+const DAY    = new Date(Date.now() + 2 * 86_400_000).toISOString().slice(0, 10);
+const minute = (n: number) => `${DAY}T00:${String(n).padStart(2, '0')}:00.000Z`;
 
 /*
  * An approval as a row: of a validated version by its checksum, by bob,
@@ -1084,6 +1089,55 @@ t.test('an approval is overtaken by a move of its version written after it, what
   const fresh = await approve(db, second, { active_version_id: first, created_at: minute(7), actor: 'carol' });
   t.same(await activate(db, second, 'activate', { at: minute(8), approvalId: fresh }), [ 1, 1 ], 'a new one does');
   t.same(await foreignKeyViolations(db), [], 'no foreign key violations');
+});
+
+/*
+ * An activation is recorded at the instant its Worker decided it, a moment
+ * before the write. Its approval has to be in force by the database's clock
+ * as well, at the write, whatever instant the activation names.
+ */
+t.test('an approval past its expiry by the database\'s clock lets nothing through', async t => {
+  const { APP_DB: db } = await freshEnv();
+  const [ first, second ] = await threeVersions(db);
+  t.same(await activate(db, first, 'activate', { at: minute(1) }), [ 1, 1 ], 'the first version is on, from before approvals');
+
+  // given an hour ago for half an hour, and an activation decided inside that half hour
+  const hourAgo = Date.now() - 3_600_000;
+  const instant = (ms: number) => new Date(hourAgo + ms).toISOString();
+  const lapsed  = await approve(db, second, { active_version_id: first, created_at: instant(0), expires_at: instant(1_800_000) });
+  await t.rejects(() => activate(db, second, 'activate', { at: instant(60_000), approvalId: lapsed }), APPROVAL_REQUIRED,
+    'an activation is refused once its approval has expired by the database\'s clock');
+  t.equal(await count(db, 'registry_activations'), 1, 'it is not recorded');
+  t.equal(await activeVersionId(db), first, 'and the pointer has not moved');
+
+  const inForce = await approve(db, second, { active_version_id: first, created_at: instant(0), expires_at: minute(59) });
+  t.same(await activate(db, second, 'activate', { at: instant(60_000), approvalId: inForce }), [ 1, 1 ],
+    'while one still in force is taken, with the same instant');
+});
+
+/*
+ * The last activation of the version on is the one the database wrote last,
+ * not the one with the latest instant: Workers' clocks need not agree, and a
+ * move can carry an earlier instant than one written before it.
+ */
+t.test('a rollback goes back from the activation written last, whatever the instants of the moves', async t => {
+  const { APP_DB: db } = await freshEnv();
+  const [ first, second, third ] = await threeVersions(db);
+  const switchOn = async (versionId: string, replacing: string | null, at: number) => {
+    const approvalId = await approve(db, versionId, { active_version_id: replacing });
+    t.same(await activate(db, versionId, 'activate', { at: minute(at), approvalId }), [ 1, 1 ], `${versionId} is switched on, at minute ${at}`);
+  };
+
+  await switchOn(first, null, 1);
+  await switchOn(second, first, 10);
+  await switchOn(third, second, 11);
+  // the second again, in place of the newer third, written last at an earlier instant than its activation before
+  await switchOn(second, third, 5);
+  await t.rejects(() => activate(db, first, 'rollback', { at: minute(12) }), RESTORES,
+    'what its activation before replaced is not restored');
+  await t.rejects(() => activate(db, third, 'rollback', { at: minute(12) }), RESTORES,
+    'nor what its last one replaced, a newer version');
+  t.equal(await activeVersionId(db), second, 'the second stays on');
 });
 
 /*
@@ -1270,11 +1324,10 @@ t.test('migration 0011 keeps the moves of the release before it, until the first
 });
 
 /*
- * Migration 0012 applies over the approvals and moves made before it, while
- * the release before it is live, which writes approvals with no moves_seen.
- * Each of those keeps 0: any move ever made onto its version overtakes it,
- * which refuses on the safe side, and one of a version never on is still
- * taken.
+ * Migration 0012 applies over the approvals and moves made before it. An
+ * approval written before it, or after it without moves_seen, keeps 0: any
+ * move ever made onto its version overtakes it, which refuses on the safe
+ * side, and one of a version never on is still taken.
  */
 t.test('migration 0012 orders the approvals made before it on the safe side', async t => {
   await server.reset();
@@ -1295,14 +1348,14 @@ t.test('migration 0012 orders the approvals made before it on the safe side', as
   await t.rejects(() => activate(db, second, 'activate', { at: minute(6), approvalId: again }), APPROVAL_REQUIRED,
     'one of a version switched on before is overtaken, on the safe side');
 
-  // the release before writes approvals with no moves_seen, which the default gives 0
+  // an approval written with no moves_seen, which the default gives 0
   const released = randomUUID();
   await run(db,
     `INSERT INTO registry_approvals (id, registry_version_id, snapshot_checksum, active_version_id, actor, reason, created_at, expires_at)
      VALUES (?1, ?2, ?3, ?4, 'bob', 'reviewed', ?5, ?6)`,
     released, second, sha256Hex(`snapshot:${second}`), first, minute(6), minute(59));
   await t.rejects(() => activate(db, second, 'activate', { at: minute(7), approvalId: released }), APPROVAL_REQUIRED,
-    'and so is one the release before writes after it');
+    'and so is one written after it with no moves_seen');
   t.same(await activate(db, third, 'activate', { at: minute(8), approvalId: never }), [ 1, 1 ],
     'while one of a version never on is taken');
   t.same(await foreignKeyViolations(db), [], 'no foreign key violations');
