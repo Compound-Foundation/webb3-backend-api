@@ -18,11 +18,12 @@ switch, users see no change at all, and after it, one command switches back.
 
 ## Before you start
 
-Everything here works on one environment at a time, which you choose once,
-before anything else: set `ENVIRONMENT` to the environment's name in
-`wrangler.toml`, as `export ENVIRONMENT=production` does for production.
-Nothing in this runbook sets it again: every command below that reaches an
-environment takes it, and stops while it is not set.
+The commands are for a POSIX shell, zsh or bash, on macOS or Linux; on
+Windows, run them in WSL. Everything here works on one environment at a
+time, which you choose once, before anything else: set `ENVIRONMENT` to the
+environment's name in `wrangler.toml`, as `export ENVIRONMENT=production`
+does for production. Nothing in this runbook sets it again: every command
+below that reaches an environment takes it, and stops while it is not set.
 
 Log in to Cloudflare in the checkout's `c3-api`, with its dependencies
 installed ([Getting Started](./README.md#getting-started)), after the
@@ -300,6 +301,10 @@ Cloudflare stores a secret of at most 5 KB, which is about thirty entries,
 so drop the entries of expired tokens whenever you put the list again. It
 never shows a secret again either: keep the file, which holds hashes and no
 token, where the next change will start from, such as the password manager.
+Each environment's list has one owner, and each change starts from that file
+as the last put left it, one change at a time: step 4 replaces the secret
+whole, so a list made from an older copy would put back a token dropped
+since.
 
 Check the entry the file gives each new token, and in a rotation its
 holder's other entry, before you put the list:
@@ -462,8 +467,10 @@ does. Step 3's check tells them apart: the old token's entry,
 `"new":false`, must show the cutoff you gave it. Both tokens are taken until
 then: the holder switches, and after it the old one is refused as expired.
 Drop its entry the next time you put the list. A token that may have leaked
-is not rotated: drop its entry and put the list, which refuses it from then
-on. Step 5 with that token then answers "the bearer token is not valid".
+is not rotated: drop its entry and put the list, which refuses it. Step 5
+with that token then answers "the bearer token is not valid"; run that
+check again after the next put, since a list made from an older copy would
+put the token back (step 3).
 
 ### The preflight
 

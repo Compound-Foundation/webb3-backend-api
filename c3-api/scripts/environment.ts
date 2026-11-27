@@ -108,7 +108,25 @@ const OVERRIDES = [
 ];
 // with DOTENV_KEY set, Wrangler's dotenv reads each .env file from the encrypted .vault beside it, such as .env.vault, which this check cannot read
 // in any case: on Windows Wrangler reads a .env file's names without it
-const SETS = new RegExp(`^\\s*(?:export\\s+)?(${[ ...OVERRIDES, 'DOTENV_KEY' ].join('|')})\\s*[=:]`, 'mi');
+const WATCHED = new Set([ ...OVERRIDES, 'DOTENV_KEY' ].map(name => name.toUpperCase()));
+
+/*
+ * The names a .env file sets, as the dotenv Wrangler bundles reads it, with
+ * that dotenv's own expression (16.3.1): a quoted value runs over the lines it
+ * spans, so a line inside one, an example among them, sets nothing.
+ */
+const LINE = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/mg;
+
+function namesIn(text: string): string[] {
+  const names: string[] = [];
+  const lines = text.replace(/\r\n?/mg, '\n');
+  LINE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = LINE.exec(lines)) !== null) {
+    names.push(String(match[1]));
+  }
+  return names;
+}
 
 function wranglerAtCloudflare(name: string): void {
   if (process.env['DOTENV_KEY'] !== undefined) {
@@ -127,12 +145,12 @@ function wranglerAtCloudflare(name: string): void {
     } catch {
       continue;
     }
-    const set = SETS.exec(text);
-    if (set !== null && String(set[1]).toUpperCase() === 'DOTENV_KEY') {
+    const set = namesIn(text).find(name => WATCHED.has(name.toUpperCase()));
+    if (set !== undefined && set.toUpperCase() === 'DOTENV_KEY') {
       refuse(`DOTENV_KEY is set in ${file}, which Wrangler reads: with it, Wrangler would read each .env file from the encrypted .vault beside it, which this check cannot read: remove it`);
     }
-    if (set !== null) {
-      refuse(`${String(set[1])} is set in ${file}, which Wrangler reads: it can send its requests, or your login, elsewhere than Cloudflare's own API: remove it`);
+    if (set !== undefined) {
+      refuse(`${set} is set in ${file}, which Wrangler reads: it can send its requests, or your login, elsewhere than Cloudflare's own API: remove it`);
     }
   }
 }

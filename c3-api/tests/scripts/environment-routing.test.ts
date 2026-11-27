@@ -325,9 +325,10 @@ t.test('a Wrangler that would send its requests elsewhere than Cloudflare is ref
   t.match(filedKey.stderr, /^DOTENV_KEY is set in \.env, which Wrangler reads: with it, Wrangler would read each \.env file from the encrypted \.vault/, 'for what it does');
   t.notMatch(filedKey.stdout + filedKey.stderr, /key_0123456789abcdef/, 'without printing the key');
   writeFileSync(join(cwd, '.env.preview'), 'CLOUDFLARE_API_BASE_URL=http://127.0.0.1:9\n');
-  writeFileSync(join(cwd, '.env'), '# CLOUDFLARE_API_BASE_URL=http://127.0.0.1:9\nMY_CLOUDFLARE_API_BASE_URL=x\n');
+  // a comment, another name, and a line inside a quoted value, which dotenv reads as part of that value
+  writeFileSync(join(cwd, '.env'), '# CLOUDFLARE_API_BASE_URL=http://127.0.0.1:9\nMY_CLOUDFLARE_API_BASE_URL=x\nNOTES="an example:\nCLOUDFLARE_API_BASE_URL=http://127.0.0.1:9\nend"\n');
   const others = await check(cloudflare());
   rmSync(join(cwd, '.env.preview'));
   rmSync(join(cwd, '.env'));
-  t.equal(others.status, 0, 'a file of another environment, a comment and another variable change nothing');
+  t.equal(others.status, 0, 'a file of another environment, a comment, another variable and a line inside a quoted value change nothing');
 });
