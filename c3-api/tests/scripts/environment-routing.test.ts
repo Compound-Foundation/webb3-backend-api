@@ -301,13 +301,16 @@ t.test('a Wrangler that would send its requests elsewhere than Cloudflare is ref
     t.match(shell.stderr, new RegExp(`^${variable} is set in this shell, to "http://127\\.0\\.0\\.1:9/client/v4": Wrangler can send its requests, or your login, elsewhere than Cloudflare's own API`), 'as where they can go');
     t.same([ shell.requests, shell.origins, shell.npx ], [ [], [], '' ], 'before the login is read or Cloudflare asked');
   }
+  // Wrangler on Windows reads a .env file's names in any case, so the check does everywhere
   for (const [ file, line ] of [ [ '.env', 'CLOUDFLARE_API_BASE_URL=http://127.0.0.1:9/client/v4' ], [ '.env.local', 'WRANGLER_TOKEN_URL = "http://127.0.0.1:9/oauth2/token"' ],
-    [ '.env.production', 'export CF_API_BASE_URL=http://127.0.0.1:9' ], [ '.env.production.local', 'WRANGLER_AUTH_DOMAIN: 127.0.0.1:9' ] ] as const) {
+    [ '.env.production', 'export CF_API_BASE_URL=http://127.0.0.1:9' ], [ '.env.production.local', 'WRANGLER_AUTH_DOMAIN: 127.0.0.1:9' ],
+    [ '.env.production', 'Cloudflare_Api_Base_Url=http://127.0.0.1:9' ] ] as const) {
     writeFileSync(join(cwd, file), `# a file Wrangler reads\nOTHER=1\n${line}\n`);
     const filed = await check(cloudflare());
     rmSync(join(cwd, file));
     t.equal(filed.status, 1, `set in ${file} is refused`);
-    t.match(filed.stderr, new RegExp(`^[A-Z_]+ is set in ${file.replace(/\./g, '\\.')}, which Wrangler reads: it can send its requests, or your login, elsewhere than Cloudflare's own API`), 'naming the file');
+    t.match(filed.stderr, new RegExp(`^[A-Za-z_]+ is set in ${file.replace(/\./g, '\\.')}, which Wrangler reads: it can send its requests, or your login, elsewhere than Cloudflare's own API`), 'naming the file');
+    t.notMatch(filed.stderr, /127\.0\.0\.1/, 'and not the value it holds');
     t.same([ filed.requests, filed.npx ], [ [], '' ], 'before the login is read or Cloudflare asked');
   }
   const keyed = await check(cloudflare(), OAUTH, 'production', null, { DOTENV_KEY: 'dotenv://:key_0123456789abcdef@dotenv.org/vault/.env.vault?environment=production' });

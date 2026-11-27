@@ -107,7 +107,8 @@ const OVERRIDES = [
   'WRANGLER_AUTH_DOMAIN', 'WRANGLER_AUTH_URL', 'WRANGLER_TOKEN_URL', 'WRANGLER_REVOKE_URL',
 ];
 // with DOTENV_KEY set, Wrangler's dotenv reads each .env file from the encrypted .vault beside it, such as .env.vault, which this check cannot read
-const SETS = new RegExp(`^\\s*(?:export\\s+)?(${[ ...OVERRIDES, 'DOTENV_KEY' ].join('|')})\\s*[=:]`, 'm');
+// in any case: on Windows Wrangler reads a .env file's names without it
+const SETS = new RegExp(`^\\s*(?:export\\s+)?(${[ ...OVERRIDES, 'DOTENV_KEY' ].join('|')})\\s*[=:]`, 'mi');
 
 function wranglerAtCloudflare(name: string): void {
   if (process.env['DOTENV_KEY'] !== undefined) {
@@ -127,7 +128,7 @@ function wranglerAtCloudflare(name: string): void {
       continue;
     }
     const set = SETS.exec(text);
-    if (set !== null && set[1] === 'DOTENV_KEY') {
+    if (set !== null && String(set[1]).toUpperCase() === 'DOTENV_KEY') {
       refuse(`DOTENV_KEY is set in ${file}, which Wrangler reads: with it, Wrangler would read each .env file from the encrypted .vault beside it, which this check cannot read: remove it`);
     }
     if (set !== null) {
