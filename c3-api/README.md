@@ -145,7 +145,7 @@ The secrets, and every other value an environment sets outside
 `.dev.vars` for local runs. Deployed environments set them, never in
 `wrangler.toml`, from `c3-api`, with the account check of
 [Before you start](./REGISTRY_RUNBOOK.md#before-you-start) first:
-`npx wrangler kv key list --binding kv_mainnet --env <environment> --remote --prefix account-check > /dev/null && npx wrangler secret put <NAME> --env <environment>`.
+`npx tsc -p tsconfig.scripts.json && ENVIRONMENT=<environment> node dist/scripts/environment-address.js > /dev/null && npx wrangler kv key list --binding kv_mainnet --env <environment> --remote --prefix account-check > /dev/null && npx wrangler secret put <NAME> --env <environment>`.
 The admin token list, `COMET_REGISTRY_ADMIN_TOKENS`, goes in
 only as step 4 of [The admin tokens](./REGISTRY_RUNBOOK.md#the-admin-tokens)
 puts it, after its check. Every deployed environment sets

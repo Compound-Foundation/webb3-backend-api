@@ -33,9 +33,13 @@ import { environmentOf, refuse, takesHost } from './environment.js';
  * prints nothing, on anything else, a request that Cloudflare refuses among
  * them, and it never prints the login, nor lets Wrangler write it to its log.
  * An API of a worker on this machine needs no check: a token sent there never
- * leaves it.
+ * leaves it. It reads Cloudflare's own API, whatever the shell says, and,
+ * through scripts/environment.ts, as the address read does, refuses while a
+ * variable that can send Wrangler to another API, or the login to another
+ * address, is set, in the shell or in a .env file Wrangler reads.
  */
-const BASE = (process.env['CLOUDFLARE_API_BASE_URL'] ?? 'https://api.cloudflare.com/client/v4').replace(/\/+$/, '');
+// Cloudflare's own API, whatever the shell says: the test sends its requests elsewhere with a module of its own
+const BASE = 'https://api.cloudflare.com/client/v4';
 
 // a worker on this machine, over plain http to the loopback address, as the runbook's local path sets API
 const LOCAL = /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\/?$/;

@@ -180,8 +180,16 @@ const UNDEFINED = configured('undefined', `
 routes = [ { pattern = "top.example.com", custom_domain = true } ]
 `);
 
+// the variables that would send Wrangler to another API, which a developer's own shell may set
+const ELSEWHERE = [ 'CLOUDFLARE_API_BASE_URL', 'CF_API_BASE_URL', 'WRANGLER_API_ENVIRONMENT', 'CLOUDFLARE_COMPLIANCE_REGION',
+  'WRANGLER_AUTH_DOMAIN', 'WRANGLER_AUTH_URL', 'WRANGLER_TOKEN_URL', 'WRANGLER_REVOKE_URL' ];
+
 function address(environment: string | undefined, cwd: string, extra: Record<string, string> = {}): { status: number | null, stdout: string, stderr: string } {
-  const env: Record<string, string | undefined> = { ...process.env, ...extra };
+  const env: Record<string, string | undefined> = { ...process.env };
+  for (const variable of ELSEWHERE) {
+    delete env[variable];
+  }
+  Object.assign(env, extra);
   delete env['ENVIRONMENT'];
   if (environment !== undefined) {
     env['ENVIRONMENT'] = environment;
@@ -250,4 +258,19 @@ t.test('an environment not deployed to one custom domain is refused, and nothing
     t.equal(stdout, '', 'and nothing is printed');
     t.match(stderr, problem, 'with what is wrong');
   }
+});
+
+t.test('a Wrangler that would talk to another API than Cloudflare\'s is refused, and nothing is printed', async t => {
+  for (const variable of [ 'CLOUDFLARE_API_BASE_URL', 'WRANGLER_TOKEN_URL' ]) {
+    const shell = address('custom', ROUTES, { [variable]: 'http://127.0.0.1:9' });
+    t.equal(shell.status, 1, `${variable} set in the shell is refused`);
+    t.equal(shell.stdout, '', 'and nothing is printed');
+    t.match(shell.stderr, new RegExp(`^${variable} is set in this shell, to "http://127\\.0\\.0\\.1:9": Wrangler can send its requests, or your login, elsewhere than Cloudflare's own API`), 'with what it can do');
+  }
+  writeFileSync(join(ROUTES, '.env.custom'), 'CF_API_BASE_URL=http://127.0.0.1:9\n');
+  const filed = address('custom', ROUTES);
+  rmSync(join(ROUTES, '.env.custom'));
+  t.equal(filed.status, 1, 'set in a .env file of the environment, which Wrangler reads, is refused');
+  t.equal(filed.stdout, '', 'and nothing is printed');
+  t.match(filed.stderr, /^CF_API_BASE_URL is set in \.env\.custom, which Wrangler reads/, 'naming the file');
 });

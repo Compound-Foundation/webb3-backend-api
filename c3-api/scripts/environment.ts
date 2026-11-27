@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { unstable_readConfig } from 'wrangler';
 
 /*
@@ -21,7 +23,9 @@ import { unstable_readConfig } from 'wrangler';
  * own when another Worker of the configuration, the top level among them,
  * lists it too or has a route of the zone on its host, which would run
  * first, or when another environment deploys to the same Worker, whose
- * secrets the two would then share.
+ * secrets the two would then share. It also refuses while Wrangler would talk
+ * to another API than Cloudflare's own, which the routing check reads, and
+ * which the account check before every secret written must reach.
  */
 export function refuse(problem: string): never {
   console.error(problem);
@@ -87,6 +91,42 @@ export function takesHost(route: unknown, host: string): boolean {
   return new RegExp(`^${matching}$`, 'i').test(host);
 }
 
+/*
+ * Wrangler can talk to another API than api.cloudflare.com, which the routing
+ * check reads, when the shell, or a .env file it reads for the environment,
+ * sets one of these: the base of every API request, the account check's and
+ * the secrets' among them, or another Cloudflare API in its place; or the
+ * address that takes the login, when `wrangler login` gives it, when Wrangler
+ * refreshes it, as `wrangler auth token` may, or when it is revoked. Any value
+ * is refused, Wrangler's own defaults too. It reads the files Wrangler reads,
+ * from the directory it runs in.
+ */
+const OVERRIDES = [
+  'CLOUDFLARE_API_BASE_URL', 'CF_API_BASE_URL', 'WRANGLER_API_ENVIRONMENT', 'CLOUDFLARE_COMPLIANCE_REGION',
+  'WRANGLER_AUTH_DOMAIN', 'WRANGLER_AUTH_URL', 'WRANGLER_TOKEN_URL', 'WRANGLER_REVOKE_URL',
+];
+const SETS = new RegExp(`^\\s*(?:export\\s+)?(${OVERRIDES.join('|')})\\s*[=:]`, 'm');
+
+function wranglerAtCloudflare(name: string): void {
+  for (const variable of OVERRIDES) {
+    if (process.env[variable] !== undefined) {
+      refuse(`${variable} is set in this shell, to ${JSON.stringify(process.env[variable])}: Wrangler can send its requests, or your login, elsewhere than Cloudflare's own API: unset it`);
+    }
+  }
+  for (const file of [ '.env', '.env.local', `.env.${name}`, `.env.${name}.local` ]) {
+    let text: string;
+    try {
+      text = readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    const set = SETS.exec(text);
+    if (set !== null) {
+      refuse(`${String(set[1])} is set in ${file}, which Wrangler reads: it can send its requests, or your login, elsewhere than Cloudflare's own API: remove it`);
+    }
+  }
+}
+
 export function environmentOf(variable: string | undefined): Environment {
   // the environment is ENVIRONMENT's alone: Wrangler's reader takes CLOUDFLARE_ENV for a read that names none
   delete process.env['CLOUDFLARE_ENV'];
@@ -95,6 +135,7 @@ export function environmentOf(variable: string | undefined): Environment {
   if (name.trim().length === 0) {
     refuse('ENVIRONMENT is not set: export it as wrangler.toml names the environment, such as ENVIRONMENT=production');
   }
+  wranglerAtCloudflare(name);
 
   const config = read(name);
   // with no environment defined at all, Wrangler only warns of a name it does not know, and reads the top level
