@@ -106,6 +106,8 @@ type SeedOptions = {
   attempt?:   number,
   // defaults to the fixture's own commit, so seeded candidates are attempts of one commit
   commitSha?: string,
+  // defaults to now
+  createdAt?: string,
 };
 
 type SeededCandidate = {
@@ -128,6 +130,7 @@ async function seedCandidate(
     sourceChecksum: sha256Hex(`source:${versionId}`),
     attempt:        options.attempt ?? 1,
     createdBy:      'test-seed',
+    ...(options.createdAt === undefined ? {} : { createdAt: options.createdAt }),
   });
 
   /*

@@ -883,15 +883,18 @@ First they read the changes, which the command keeps in a file in their home
 directory and prints in full:
 
 ```sh
-(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/${V:?export it first}/changes" -H "Authorization: Bearer $TOKEN" > "$HOME/changes.$V.json"; jq . "$HOME/changes.$V.json"
+rm -f "$HOME/changes.${V:?export it first}.json" && (cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" > "$HOME/changes.$V.json" && jq . "$HOME/changes.$V.json"
 ```
 
 They read all of it: the networks and markets it adds, removes and changes,
 against `comparedWith`, the version on — `null` here, since nothing is on
-yet. That is what the approval covers, by `snapshotChecksum`, the checksum of
-the version's snapshot, which a version has once it is validated. A refusal,
-a `curl: (N) …` line or a `snapshotChecksum` of `null` is no reading of the
-changes: they read them again before going on.
+yet. A network it adds is listed whole, with its price exceptions, which
+replace a market's price feed: check each against the decision that made
+it. That is what the approval covers, by `snapshotChecksum`, the checksum of
+the version's snapshot, which a version has once it is validated. A refusal
+or a `curl: (N) …` line is no reading of the changes: they read them again
+before going on. A `snapshotChecksum` of `null` is a version not validated
+yet, as its `status` says: step 4 first.
 
 Then they approve what they read, from that file:
 
@@ -899,7 +902,7 @@ Then they approve what they read, from that file:
 SUM="$(jq -r '.snapshotChecksum // empty' "$HOME/changes.$V.json")" && : "${SUM:?the changes were not read: read them again}" \
   && (cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -sS --noproxy localhost,127.0.0.1,::1 -X POST "$API/registry/v1/admin/versions/$V/approve" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d "$(jq -c '{reason: "read the first registry version", expectedActiveVersionId: .comparedWith, expectedSnapshotChecksum: .snapshotChecksum}' "$HOME/changes.$V.json")" | jq '.error // .approval'
+  -d "$(jq -c '{reason: "read the changes of \(.versionId) against \(.comparedWith // "no version on")", expectedActiveVersionId: .comparedWith, expectedSnapshotChecksum: .snapshotChecksum}' "$HOME/changes.$V.json")" | jq '.error // .approval'
 ```
 
 Postman, for a worker on your own machine, with the approver's token as
@@ -916,7 +919,7 @@ POST {{API}}/registry/v1/admin/versions/{{V}}/approve
 Authorization: Bearer {{TOKEN}}
 Content-Type: application/json
 
-{"reason": "read the first registry version", "expectedActiveVersionId": null, "expectedSnapshotChecksum": "<snapshotChecksum of the changes>"}
+{"reason": "read the changes of <V> against no version on", "expectedActiveVersionId": null, "expectedSnapshotChecksum": "<snapshotChecksum of the changes>"}
 ```
 
 Every approval names what its giver read: the version the changes were read
@@ -942,12 +945,20 @@ expired unused, step 5 is done again.
 
 **If not.**
 - "SUM: the changes were not read": the file holds no changes of a validated
-  version; read them again.
-- `400`, "expectedActiveVersionId is required" or "expectedSnapshotChecksum
-  is required": the body does not say what was read; send it as above.
+  version. Read them again; with a `snapshotChecksum` of `null`, step 4
+  first.
+- `jq: error: Could not open file …changes…`: the first command did not read
+  the changes for this `V`, in this shell or at all; run it.
+- `jq: parse error`: the answer was not the API's, such as an error page;
+  read the changes again.
+- `400`, "expectedActiveVersionId is required", "expectedSnapshotChecksum is
+  required" or "expectedSnapshotChecksum must be the 64 lowercase hex
+  characters …": the body does not say what was read, or not in that form;
+  send it as above.
 - `409`, "only a validated version can be approved": step 4 first.
-- `409`, "… has the snapshot …, not … as this approval expected": the changes
-  read were of another snapshot; read them again.
+- `409`, "… has the snapshot …, not … as this approval expected": the
+  checksum sent is not this version's, from another version's changes or
+  copied wrong; read this version's changes and approve from them.
 - `409`, "the active version is …, not … as this approval expected": a
   version is on that was not when you read the changes; read them again,
   against it, and approve from them.
@@ -1151,9 +1162,9 @@ lose, and every field that differs on the others.
 ### 3. Switch it on
 
 Steps 5, 6 and 7 above for the version — validated first, if it was a held
-draft — with `"expectedActiveVersionId"` in the bodies of steps 5 and 6
-naming the version that is on: `comparedWith` in the answer of step 2, which
-the approver reads before approving.
+draft. Step 5 takes the version that is on from the changes it reads, its
+`comparedWith`; step 6's body names it as `"expectedActiveVersionId"`:
+`comparedWith` in the answer of step 2.
 
 ## Describing a new market
 
@@ -1645,8 +1656,8 @@ whose reasons are in the draft it names.
 | `409` on activate, `details.code` `APPROVAL_REQUIRED` | No approval of the version you may switch it on with: none was given, or it was given by you or another token of your name, has expired, was used, or was given while another version was on — the message names the version an approval is needed against. "Was no longer in force when it was written" is an approval that expired between the check of your request and its write | Have another admin approve it again, against the version on (step 5 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)), then switch it on |
 | `409` on rollback, `details.code` `ROLLBACK_TARGET_INVALID` | A rollback goes back one step only, to the version the one on replaced when it was last activated, if that is older. This one is another — two steps back or more, never on, or newer — or nothing is on, or the version on was switched on in place of a newer one. The message names the version a rollback may restore now, or says that none may | Roll back to the version the message names, one step at a time, as [Switching back](#switching-back) says. To switch on any other version, approve it and activate it (steps 5 to 7 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)) |
 | `400` on approve, "expectedActiveVersionId is required" | The approval does not say which version on its changes were read against | Read the changes, and send the version on as `expectedActiveVersionId` — `comparedWith` in their answer, or `null` when nothing is on (step 5 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)) |
-| `400` on approve, "expectedSnapshotChecksum is required" | The approval does not name the snapshot whose changes were read | Read the changes, and approve from them as step 5 of [the first bring-up](#bringing-an-environment-up-for-the-first-time) does, which sends their `snapshotChecksum` as `expectedSnapshotChecksum` |
-| `409` on approve, "… has the snapshot …, not … as this approval expected" | The changes read were of another snapshot than the version has: they were read while it still imported, or of another version | Read its changes again, now that it is validated, and approve from them (step 5 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)) |
+| `400` on approve, "expectedSnapshotChecksum is required" or "must be the 64 lowercase hex characters" | The approval does not name the snapshot whose changes were read, or names it in another form | Read the changes, and approve from them as step 5 of [the first bring-up](#bringing-an-environment-up-for-the-first-time) does, which sends their `snapshotChecksum` as `expectedSnapshotChecksum` |
+| `409` on approve, "… has the snapshot …, not … as this approval expected" | The checksum sent is not this version's: it came from another version's changes, or was copied wrong | Read this version's changes and approve from them (step 5 of [the first bring-up](#bringing-an-environment-up-for-the-first-time)) |
 | `409` on approve, "is on already" | The version is the one on: there is no change to approve | Nothing |
 | A version is `invalid` with the failed check `served-network-reviewed` | It serves a market of a network nobody has described — a chain no version had before | An `invalid` version can no longer be changed. Hold a new attempt (step 1 of [Describing a new market](#describing-a-new-market)), which keeps what was reviewed in this one; describe the network there (step 5), then validate it and switch it on (steps 4 to 7 of the first bring-up) |
 | A root failed with `OVERLAY_INVALID`, "is the default market by the decisions it inherits, but … already is the default" | The draft holds another default than the one its import inherits: the draft's default was moved to a market it holds before the import reached the market that opened by default, or a version that names another default was switched on while the import was running | If the draft's default was moved, the draft is still importing, and the root has attempts left (`attempts` below five in `GET /registry/v1/admin/sync-runs/<id>`): move the default back, import the rest, then move the default with both markets in one `PUT …/overlays`, with their digests under `expectedDigests` as in the row on a slug above. Otherwise continue the import until it ends — each request spends one of the root's five attempts — and hold a new attempt (step 1 of [Describing a new market](#describing-a-new-market)): it inherits the default the draft moved, or the one switched on, and imports both markets |

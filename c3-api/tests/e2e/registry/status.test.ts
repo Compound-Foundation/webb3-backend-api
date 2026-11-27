@@ -357,6 +357,28 @@ t.test('the version on is named with the move written last onto it, whatever ins
   );
 });
 
+/*
+ * A version waits to be switched on when it is newer than every version ever
+ * switched on, in the order the version listing uses: by creation, then
+ * attempt, then id. A later attempt created at the same instant as the one
+ * on is newer, so it is listed and raised like any other.
+ */
+t.test('a later attempt created at the instant of the one on waits to be switched on', async t => {
+  const db = await freshDatabase();
+  const at = new Date().toISOString();
+  const { versionId: active } = await seedCandidate(db, snapshot, { versionId: randomUUID(), attempt: 1, createdAt: at });
+  await activateSeeded(db, active);
+  await db.prepare(`UPDATE registry_state SET last_upstream_checked_at = ?1 WHERE singleton_id = 1`)
+    .bind(new Date().toISOString()).run();
+  t.equal((await server.fetch('/registry/v1/active')).status, 200);
+
+  const { versionId: later } = await seedCandidate(db, snapshot, { versionId: randomUUID(), attempt: 2, createdAt: at });
+  await validateSeeded(db, later);
+  const waiting = await status();
+  t.same(waiting.candidates.validated.map(({ versionId }) => versionId), [ later ], 'it is listed');
+  t.same(waiting.alerts, [ 'candidate-awaiting-activation', 'candidate-awaiting-approval' ], 'and raised, nobody having approved it');
+});
+
 t.test('a version skipped for a newer one is not raised again when the version before both is switched on again', async t => {
   const db = await freshDatabase();
   const { versionId: first } = await seedCandidate(db, snapshot);

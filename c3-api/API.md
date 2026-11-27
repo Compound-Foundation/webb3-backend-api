@@ -1299,7 +1299,9 @@ is `404`; a version that is not validated, the version that is on — which is
 no change to approve — an `expectedSnapshotChecksum` that is not the
 version's and an `expectedActiveVersionId` that is no longer what is on are
 `409` with `details.code` `CANDIDATE_STATE_CONFLICT`; a body without a
-`reason`, `expectedActiveVersionId` or `expectedSnapshotChecksum`, or with
+`reason`, `expectedActiveVersionId` or `expectedSnapshotChecksum`, with an
+`expectedSnapshotChecksum` that is not 64 lowercase hex characters — `null`,
+which the changes of a version not yet validated carry, among them — or with
 another property, is `400`.
 
 ## `POST /registry/v1/admin/versions/{version_id}/activate`
@@ -1648,7 +1650,11 @@ It answers for a candidate that is still importing as well, because that is
 when a market the source has added is described: such a market is listed
 under `markets.added` whole, with everything its import read from the source
 and the chain, and `reviewed: false` until someone describes it. With no
-version on, `comparedWith` is `null` and everything is added.
+version on, `comparedWith` is `null` and everything is added. A network the
+version adds is listed under `networks.added` whole but for its markets,
+which `markets.added` lists, as `{ "chainId": …, "network": { … } }`: its
+name, presentation and price exceptions are as much what an approval covers
+as its markets are.
 `snapshotChecksum` is the checksum of the snapshot these changes are of,
 which a version has once it is validated and `null` before: what an approval
 of them names (`expectedSnapshotChecksum`).

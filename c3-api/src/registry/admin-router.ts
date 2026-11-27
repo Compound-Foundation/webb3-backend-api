@@ -206,11 +206,15 @@ const SNAPSHOT_CHECKSUM = /^[0-9a-f]{64}$/;
  */
 function requireExpectedSnapshotChecksum(body: Record<string, unknown>): string {
   const value = body.expectedSnapshotChecksum;
-  if (typeof(value) !== 'string' || !SNAPSHOT_CHECKSUM.test(value)) {
+  if (value === undefined || value === null) {
     throw new ApiError(
       'BAD_REQUEST',
-      `expectedSnapshotChecksum is required: the snapshotChecksum of the changes the approval was read from, 64 hex characters`,
+      `expectedSnapshotChecksum is required: the snapshotChecksum of the changes the approval was read from, `
+        + `which a version has once it is validated`,
     );
+  }
+  if (typeof(value) !== 'string' || !SNAPSHOT_CHECKSUM.test(value)) {
+    throw new ApiError('BAD_REQUEST', `expectedSnapshotChecksum must be the 64 lowercase hex characters of a snapshotChecksum`);
   }
   return value;
 }

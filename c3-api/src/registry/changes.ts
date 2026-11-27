@@ -26,7 +26,12 @@ type FieldChange = {
 
 type VersionChanges = {
   networks: {
-    added:   number[],
+    /*
+     * A network the version adds, whole but for its markets, which `markets`
+     * lists: its name, presentation and price exceptions are as much what an
+     * approval of the version covers as its markets are.
+     */
+    added:   Array<{ chainId: number, network: Omit<NetworkV1, 'markets'> }>,
     removed: number[],
     changed: FieldChange[],
   },
@@ -141,7 +146,10 @@ function compareVersions(
 
   return {
     networks: {
-      added:   [ ...afterNetworks.keys() ].filter(chainId => !beforeNetworks.has(chainId)).sort((a, b) => a - b),
+      added:   [ ...afterNetworks ]
+        .filter(([ chainId ]) => !beforeNetworks.has(chainId))
+        .sort(([ a ], [ b ]) => a - b)
+        .map(([ chainId, network ]) => ({ chainId, network: withoutMarkets(network) })),
       removed: [ ...beforeNetworks.keys() ].filter(chainId => !afterNetworks.has(chainId)).sort((a, b) => a - b),
       changed: networkChanges,
     },

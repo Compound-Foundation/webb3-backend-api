@@ -155,18 +155,21 @@ const MAX_CANDIDATES = 20;
  * itself, and the result waits for somebody to switch it on. Only what is
  * newer than every version ever switched on is news: a version rolled back
  * from, or one skipped for a newer one, is not raised again when a rollback
- * goes further back. These are the newest of them, as many as are listed.
+ * goes further back. "Newer" is the order the version listing uses, by
+ * creation, then attempt, then id, so a later attempt created at the same
+ * instant as the one on is newer too. These are the newest of them, as many
+ * as are listed.
  */
 const AWAITING_ACTIVATION = `
   SELECT version.id
   FROM registry_versions AS version
   WHERE version.status = 'validated'
-    AND version.created_at > COALESCE((
-      SELECT MAX(activated.created_at)
-      FROM registry_versions AS activated
+    AND NOT EXISTS (
+      SELECT 1 FROM registry_versions AS activated
       WHERE EXISTS (SELECT 1 FROM registry_activations WHERE registry_version_id = activated.id)
-    ), '')
-  ORDER BY version.created_at DESC LIMIT ?1`;
+        AND (activated.created_at, activated.attempt, activated.id) >= (version.created_at, version.attempt, version.id)
+    )
+  ORDER BY version.created_at DESC, version.attempt DESC, version.id DESC LIMIT ?1`;
 
 function countsBy(rows: CountRow[] | undefined, field: 'markets' | 'networks'): Map<string, number> {
   return new Map((rows ?? []).map(row => [ row.version_id, row[field] ?? 0 ]));
@@ -348,7 +351,7 @@ async function registryStatus(env: Env, deps: CacheDeps): Promise<RegistryStatus
       `SELECT version.id, version.attempt, version.created_at, version.validated_at
        FROM registry_versions AS version
        WHERE version.id IN (${AWAITING_ACTIVATION})
-       ORDER BY version.created_at DESC`
+       ORDER BY version.created_at DESC, version.attempt DESC, version.id DESC`
     ).bind(MAX_CANDIDATES),
     /*
      * What each of them would stop serving, switched on: every market the

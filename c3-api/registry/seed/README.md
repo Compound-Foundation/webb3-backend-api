@@ -60,7 +60,7 @@ in `expectedDigests` without its document is refused with `400`:
 ```sh
 (cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" > changes.json &&
 jq --slurpfile changes changes.json '
-  ([ $changes[0].networks.added[] | tostring ] + [ $changes[0].markets.added[].scope ]) as $held
+  ([ $changes[0].networks.added[].chainId | tostring ] + [ $changes[0].markets.added[].scope ]) as $held
   | (.networks, .markets, .expectedDigests) |= with_entries(select(.key | IN($held[])))
 ' c3-api/registry/seed/production.json > seed.json
 ```

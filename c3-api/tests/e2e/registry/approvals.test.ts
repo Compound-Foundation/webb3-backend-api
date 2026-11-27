@@ -333,9 +333,14 @@ t.test('an approval takes a reason, the version it was decided against and the s
     'saying what to send');
   const unchecked = await post(`/registry/v1/admin/versions/${validated}/approve`, { reason: 'read its changes', expectedActiveVersionId: null }, BOB);
   t.same([ unchecked.status, unchecked.body.error?.message ], [
-    400, 'expectedSnapshotChecksum is required: the snapshotChecksum of the changes the approval was read from, 64 hex characters',
+    400, 'expectedSnapshotChecksum is required: the snapshotChecksum of the changes the approval was read from, '
+      + 'which a version has once it is validated',
   ], 'and one that does not say which snapshot its changes were of');
-  t.equal((await approve(validated, BOB, null, { expectedSnapshotChecksum: null })).status, 400, 'or says none');
+  t.equal((await approve(validated, BOB, null, { expectedSnapshotChecksum: null })).status, 400, 'or says none, as the changes of a draft do');
+  const malformed = await approve(validated, BOB, null, { expectedSnapshotChecksum: 'A'.repeat(64) });
+  t.same([ malformed.status, malformed.body.error?.message ], [
+    400, 'expectedSnapshotChecksum must be the 64 lowercase hex characters of a snapshotChecksum',
+  ], 'and one that names something else than a checksum');
   t.equal((await approve(validated, BOB, null, { actor: 'somebody' })).status, 400, 'and one that names its approver');
   t.equal((await approve(validated, BOB, null, { expectedActiveVersionId: 42 })).status, 400, 'or expects something that is no version');
   t.equal(await db.prepare(`SELECT COUNT(*) AS n FROM registry_approvals`).first<number>('n'), 0, 'none of them is recorded');
