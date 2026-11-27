@@ -19,15 +19,14 @@ import type { VersionRef } from './version-headers.js';
 import {
   activateVersion,
   approveVersion,
-  readActivationHistory,
   readActiveVersionId,
-  readApprovals,
   readMarket,
   readNetworkOverlay,
   readSnapshot,
   readUnreviewed,
   readValidationSummary,
   readVersion,
+  readVersionDecisions,
   readVersions,
 } from './repository.js';
 import { compareVersions } from './changes.js';
@@ -371,11 +370,14 @@ async function getVersionDetail(context: RegistryContext, versionId: string): Pr
   if (version === null) {
     throw new ApiError('NOT_FOUND', `no registry version with that id`);
   }
-  // reads that do not depend on each other, so one round trip of waiting rather than four
-  const [ validation, activations, approvals, unreviewed ] = await Promise.all([
+  /*
+   * reads that do not depend on each other, so one round trip of waiting
+   * rather than three; the moves and the approvals, which name each other,
+   * come from one batch, so an approval's activation is among the moves
+   */
+  const [ validation, { activations, approvals }, unreviewed ] = await Promise.all([
     readValidationSummary(context.db, versionId),
-    readActivationHistory(context.db, versionId),
-    readApprovals(context.db, versionId),
+    readVersionDecisions(context.db, versionId),
     readUnreviewed(context.db, versionId),
   ]);
   return jsonResponse({

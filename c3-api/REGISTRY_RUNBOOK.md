@@ -140,8 +140,8 @@ commands after it.
   activations, and its rollbacks but the one step back, which then answer
   `500`: from then on a bad release is fixed by rolling forward, never by
   deploying an older one again. Until then, an older release still switches
-  versions on without an approval. Its migration, `0011`, is applied before
-  it, as every migration is.
+  versions on without an approval. Its migrations, `0011` and `0012`, are
+  applied before it, as every migration is.
 - The environment has `COMET_GITHUB_TOKEN` set. Without a token GitHub
   allows the import 60 API requests an hour per address, which the Worker
   shares with every other Worker leaving Cloudflare through it, and an import
@@ -864,17 +864,20 @@ the seed as steps 2 and 3 say.
 
 This step is another admin's, not yours: someone with an `admin` token of
 their own, under another name, who reads what the version would change and
-approves it. They run it with their own token in `TOKEN`:
+approves it. They run it from the root of their own checkout, with their own
+token in `TOKEN` and `API` read as [Before you start](#before-you-start)
+says, each request behind its own routing check:
 
 ```sh
-curl -s "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" \
   | jq '{comparedWith, added: [.markets.added[].scope], networks: .networks.added}'
-curl -s -X POST "$API/registry/v1/admin/versions/$V/approve" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 -X POST "$API/registry/v1/admin/versions/$V/approve" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"reason":"read the first registry version", "expectedActiveVersionId":null}' | jq '.error // .approval'
 ```
 
-Postman, with the approver's token as `TOKEN`:
+Postman, for a worker on your own machine, with the approver's token as
+`TOKEN`:
 
 ```http
 POST {{API}}/registry/v1/admin/versions/{{V}}/approve
@@ -1438,14 +1441,15 @@ too, under the newest `activate` onto it:
 
 ```sh
 export ON=<the version that is on>
-curl -s "$API/registry/v1/admin/versions/$ON" -H "Authorization: Bearer $TOKEN" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$ON" -H "Authorization: Bearer $TOKEN" \
   | jq -r '.version.id as $on | first(.activations[] | select(.targetVersionId == $on and .action == "activate")) | .previousVersionId'
 ```
 
-If it prints `null`, or nothing, a rollback has nothing to go back to: stop
-there. Otherwise check that the version it printed is older than the version
-on, which prints `true`; an id that names no version stops the check with
-`not a version`:
+If it prints `null`, or nothing with no refusal of the routing check before
+it, a rollback has nothing to go back to: stop there. Otherwise check that
+the version it printed is older than the version on, which prints `true`;
+an id that names no version stops the check with `not a version`, and a
+request the routing check stopped, with `a request did not go out`:
 
 ```sh
 export BACK=<the id it printed>

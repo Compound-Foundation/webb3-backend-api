@@ -81,8 +81,9 @@ Migrations are numbered in the order they are applied, not by feature:
 `0001` is the Comet registry schema, `0002` marks the markets nobody has
 reviewed yet, `0003` adds how the frontend lists a market — its slug and
 whether it is institutional — `0004` drops the columns and indexes nothing
-uses, and `0011` adds the approvals an activation needs. `0005` to `0010`
-are left to work merged later, which an environment applies after `0011`:
+uses, `0011` adds the approvals an activation needs, and `0012` orders them
+by the moves the database recorded before them. `0005` to `0010` are left to
+work merged later, which an environment applies after `0012`:
 `wrangler d1 migrations apply` applies every file not applied yet, by name.
 
 Apply migrations to the local Miniflare database under `.wrangler/state`:
@@ -292,9 +293,9 @@ that version to the approved one, and lets one activation through. A
 rollback needs nobody's approval, so that undoing a bad version takes one
 person, but it goes back one step only: to the version the one on replaced
 when it was last activated, if that is older. Going further back takes
-another rollback. The code holds these rules for every move, and migration
-`0011` holds them in the database too from an environment's first approval
-on.
+another rollback. The code holds these rules for every move, and migrations
+`0011` and `0012` hold them in the database too from an environment's first
+approval on.
 
 ## Bringing a registry up from nothing
 

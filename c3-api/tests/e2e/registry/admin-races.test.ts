@@ -8,7 +8,7 @@ import type { Env } from '../../../entrypoint.js';
 import type { Address, PriceFeedV1 } from '../../../lib/model/comet-registry.js';
 import { replaceMarketOverlay, validateStoredVersion } from '../../../src/registry/admin.js';
 import { overlayOfMarket } from '../../../src/registry/overlay.js';
-import { activateVersion, activationStatements, readSnapshot, snapshotChecksum } from '../../../src/registry/repository.js';
+import { activateVersion, activationStatements, approveVersion, readSnapshot, readVersionDecisions, snapshotChecksum } from '../../../src/registry/repository.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { interleaved } from '../../util/interleave.js';
@@ -381,4 +381,64 @@ t.test('a version switched on again between a rollback\'s check and its write re
   t.equal(await activeOf(db), third, 'the third stays on');
   t.equal(await db.prepare(`SELECT COUNT(*) AS n FROM registry_activations WHERE actor = 'alice'`).first<number>('n'), 0,
     'and nothing of the rollback is recorded');
+});
+
+/*
+ * An activation takes its instant before it picks its approval and writes.
+ * An approval of the same version given between the two carries a later
+ * instant than the activation written after it, and is overtaken by it all
+ * the same: "overtaken" is the order the database wrote them in. After a
+ * rollback, it does not switch the version on again.
+ */
+t.test('an approval given while an activation of its version is decided is overtaken by it', async t => {
+  const { db, versions: [ first, second ] } = await freshVersions();
+  await switchTo(db, first!, true);
+  await approveSeeded(db, second!, 'bob');
+
+  let between: string | undefined;
+  const racing = interleaved(db, /INSERT INTO registry_activations/, async () => {
+    // a moment later than the instant the activation took, so the approval's instant is the later one
+    await new Promise(resolve => setTimeout(resolve, 5));
+    between = (await approveVersion(db, {
+      versionId: second!, actor: 'carol', reason: 'meanwhile', ttlSeconds: 3600, expectedActiveVersionId: first!,
+    })).id;
+  });
+  const switched = await activateVersion(racing, { versionId: second!, action: 'activate', actor: 'alice', reason: 'switch it on' });
+  t.ok(switched.changed, 'the activation decided before it is written');
+  const [ written ] = (await db.prepare(
+    `SELECT activation.created_at < approval.created_at AS earlier
+     FROM registry_activations AS activation, registry_approvals AS approval
+     WHERE activation.id = ?1 AND approval.id = ?2`
+  ).bind(switched.activationId, between).all<{ earlier: number }>()).results ?? [];
+  t.equal(written?.earlier, 1, 'with an instant before the approval\'s');
+
+  await activateVersion(db, { versionId: first!, action: 'rollback', actor: 'carol', reason: 'back' });
+  await t.rejects(
+    activateVersion(db, { versionId: second!, action: 'activate', actor: 'alice', reason: 'again' }),
+    { code: 'APPROVAL_REQUIRED' },
+    'the approval given meanwhile does not switch the version on again after the rollback',
+  );
+  const { approvals } = await readVersionDecisions(db, second!);
+  t.same(approvals.find(approval => approval.id === between)?.usable, false, 'and the version\'s detail says it is not usable');
+});
+
+/*
+ * Moves landing between an activation's check and its write can bring the
+ * pointer back to the version it read. The activation is written then, but
+ * only while its approval still holds at the write, which the database
+ * checks again: here it does, and the activation uses it.
+ */
+t.test('a pointer brought back between an activation\'s check and its write lets the activation through, with its approval', async t => {
+  const { db, versions: [ first, second, third ] } = await freshVersions();
+  await switchTo(db, first!, true);
+  const approval = await approveSeeded(db, second!, 'bob');
+
+  // carol switches the third on and rolls back to the first, before alice's write
+  const racing = interleaved(db, /INSERT INTO registry_activations/, async () => {
+    await switchTo(db, third!, true);
+    await activateVersion(db, { versionId: first!, action: 'rollback', actor: 'carol', reason: 'and back' });
+  });
+  const switched = await activateVersion(racing, { versionId: second!, action: 'activate', actor: 'alice', reason: 'switch it on' });
+  t.same([ switched.changed, switched.approvalId ], [ true, approval.id ], 'the activation is written, with the approval it picked');
+  t.equal(await activeOf(db), second, 'and the second is on');
 });
