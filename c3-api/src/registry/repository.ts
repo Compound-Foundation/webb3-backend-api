@@ -988,20 +988,22 @@ function unmovedSince(moves: number, activationId: string): Condition {
 
 /*
  * Whether an approval may still let its version be switched on, as SQL over
- * the approval's alias: it is in force at `at`, it was made while `active`
- * was on — the version an activation would replace — and no move has used
- * it, or switched its version on since it was written. "Since" is the order
- * the database wrote them in, not the Workers' instants: an approval keeps
- * the newest move written before it, moves_seen, and a move written after
- * that one overtakes it. Going back to a version and forward again is a new
+ * the approval's alias: it is in force at `at` and by the database's clock as
+ * the statement runs, the later of the two, it was made while `active` was
+ * on — the version an activation would replace — and no move has used it, or
+ * switched its version on since it was written. The clock is the database's
+ * as well because `at` is taken by a Worker before its query reaches the
+ * database, and an approval can expire in between. "Since" is the order the
+ * database wrote them in, not the Workers' instants: an approval keeps the
+ * newest move written before it, moves_seen, and a move written after that
+ * one overtakes it. Going back to a version and forward again is a new
  * decision, which needs a new approval. Every reader of approvals asks this
  * one question: an activation before it is written, the status of a version
  * waiting to be switched on, and the history of a version; migration 0012's
- * trigger asks it of every activation, with the activator's name besides, and
- * "in force" by the database's clock as well as at the activation's instant.
+ * trigger asks it of every activation, with the activator's name besides.
  */
 function approvalUsable(approval: string, active: string, at: string): string {
-  return `${approval}.expires_at > ${at}
+  return `${approval}.expires_at > max(${at}, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     AND ${approval}.active_version_id IS ${active}
     AND NOT EXISTS (SELECT 1 FROM registry_activations AS spent WHERE spent.approval_id = ${approval}.id)
     AND NOT EXISTS (
@@ -1149,15 +1151,15 @@ function rollbackRefusal(versionId: string, active: string | null, restorable: s
 }
 
 /*
- * Refuses a rollback to anything but the version restorableFrom names. Going
- * back a step is break-glass, which one person may do; going anywhere else is
- * an activation, which needs two.
+ * The refusal of a rollback to anything but the version restorableFrom
+ * names, or null for none. Going back a step is break-glass, which one person
+ * may do; going anywhere else is an activation, which needs two.
  */
-async function assertRestorable(db: D1Database, versionId: string, active: string | null): Promise<void> {
+async function rollbackRefused(db: D1Database, versionId: string, active: string | null): Promise<RegistryError | null> {
   const restorable = active === null ? null : await restorableFrom(db, active);
-  if (restorable !== versionId) {
-    throw new RegistryError('ROLLBACK_TARGET_INVALID', rollbackRefusal(versionId, active, restorable), versionId);
-  }
+  return restorable === versionId
+    ? null
+    : new RegistryError('ROLLBACK_TARGET_INVALID', rollbackRefusal(versionId, active, restorable), versionId);
 }
 
 /*
@@ -1259,21 +1261,55 @@ async function activateVersion(
     );
   }
 
+  /*
+   * What this move meets when other moves were written after it read the
+   * pointer. One that switched the target on leaves it where a request made a
+   * moment later would be, the idempotent no-op; any other is refused, to be
+   * decided again against what is on now, even when that is the version read
+   * before.
+   */
+  const movedMeanwhile = (current: string | null): ActivationResultV1 => {
+    if (current === input.versionId) {
+      return unchanged;
+    }
+    throw new RegistryError(
+      'CANDIDATE_STATE_CONFLICT',
+      current === active
+        ? `other moves were written while this ${input.action} was decided, and ${current ?? 'no version'} is on again; read the status and ask again`
+        : `the active version changed to ${current ?? 'none'} while this ${input.action} was decided; read the status and ask again`,
+      input.versionId,
+    );
+  };
+
   const activationId = crypto.randomUUID();
   const timestamp    = new Date().toISOString();
   let approvalId: string | null = null;
+  let refusal: RegistryError | null;
   if (input.action === 'activate') {
     approvalId = await usableApprovalOf(db, { versionId: input.versionId, actor: input.actor, active, at: timestamp });
-    if (approvalId === null) {
-      throw new RegistryError(
-        'APPROVAL_REQUIRED',
-        `registry version ${input.versionId} has no approval ${input.actor} can activate it with: one by another name, `
-          + `in force, given while ${active ?? 'no version'} was on, and not used or overtaken by a move since`,
-        input.versionId,
-      );
-    }
+    refusal = approvalId !== null ? null : new RegistryError(
+      'APPROVAL_REQUIRED',
+      `registry version ${input.versionId} has no approval ${input.actor} can activate it with: one by another name, `
+        + `in force, given while ${active ?? 'no version'} was on, and not used or overtaken by a move since`,
+      input.versionId,
+    );
   } else {
-    await assertRestorable(db, input.versionId, active);
+    refusal = await rollbackRefused(db, input.versionId, active);
+  }
+
+  /*
+   * The rule refused this move against the tables as they are now, which a
+   * move written after the pointer was read can have changed: an approval
+   * used up by an activation of the same version, or a step back that another
+   * activation changed. That refusal is the race, which is answered as the
+   * guarded write below answers it.
+   */
+  if (refusal !== null) {
+    const now = await readPointer(db);
+    if (now.moves !== moves) {
+      return movedMeanwhile(now.active);
+    }
+    throw refusal;
   }
 
   const [ auditResult, pointerResult ] = await writeMove(db, activationStatements(db, {
@@ -1296,24 +1332,9 @@ async function activateVersion(
     );
   }
 
-  /*
-   * Nothing moved: another move was written after the rules were decided. One
-   * that switched the target on leaves this one where a request made a moment
-   * later would be, the idempotent no-op; any other is refused, to be decided
-   * again against what is on now, even when that is the version read before.
-   */
+  // nothing moved: another move was written after the rules were decided
   if (moved === 0) {
-    const current = await readActiveVersionId(db);
-    if (current === input.versionId) {
-      return unchanged;
-    }
-    throw new RegistryError(
-      'CANDIDATE_STATE_CONFLICT',
-      current === active
-        ? `other moves were written while this ${input.action} was decided, and ${current ?? 'no version'} is on again; read the status and ask again`
-        : `the active version changed to ${current ?? 'none'} while this ${input.action} was decided; read the status and ask again`,
-      input.versionId,
-    );
+    return movedMeanwhile(await readActiveVersionId(db));
   }
 
   // written only while `active` was on, the move replaced exactly that

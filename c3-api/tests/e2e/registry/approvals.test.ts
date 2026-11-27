@@ -220,6 +220,9 @@ t.test('an approval past its expiry lets nothing through', async t => {
 
   t.ok(refusedFor(await activate(first, ALICE), 'APPROVAL_REQUIRED'), 'an expired approval is no approval');
   t.same((await detailOf(first)).approvals.map(approval => approval.usable), [ false ], 'and the history says it can no longer be used');
+  // a reader that took its instant inside that hour, as one whose read reached the database after the expiry
+  const { approvals } = await readVersionDecisions(db, first, new Date(given + 1_800_000).toISOString());
+  t.same(approvals.map(approval => approval.usable), [ false ], 'and so it does to a reader whose instant was before the expiry');
 });
 
 /*

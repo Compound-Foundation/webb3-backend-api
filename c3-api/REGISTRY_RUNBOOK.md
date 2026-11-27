@@ -128,12 +128,18 @@ commands after it.
   none for you.
 - A second person with an `admin` token of their own approves what you switch
   on (step 5 of the bring-up). Each of their requests runs the routing check
-  too, so they also need a checkout and a Cloudflare login, or an API token,
-  with which it passes, as above. A version is switched on by two people, and
-  two tokens of one name are one person. So the environment's list names two
-  admins at least before the release with approvals reaches it
-  ([The admin tokens](#the-admin-tokens)); with one, nobody there can switch a
-  version on.
+  too, so they also need a checkout and a `CLOUDFLARE_API_TOKEN` with which
+  it passes. Give them one that may only read — Zone Read, Workers Routes
+  Read, Workers Scripts Read and Workers KV Storage Read: a login, or a token
+  that may edit Workers scripts, could put the environment's secrets, its
+  list of admin tokens among them, and so give one person two names. As
+  [The admin tokens](#the-admin-tokens) says, whoever can put that secret
+  can make a token of any name, so the rule holds only against those who
+  cannot put it. A version is switched on by two people, and two tokens of
+  one name are one person. So the environment's list names two admins at
+  least before the release with approvals reaches it
+  ([The admin tokens](#the-admin-tokens)); with one, nobody there can switch
+  a version on.
 - The release with approvals is deployed to all of the environment's traffic
   at once, never beside the release before it in a gradual deployment, and
   every Worker bound to the environment's database runs it before anyone
@@ -868,9 +874,10 @@ This step is another admin's, not yours: someone with an `admin` token of
 their own, under another name, who reads what the version would change and
 approves it. They run it from the root of their own checkout, with their own
 token in `TOKEN`, the id of the version to approve in `V`
-(`export V=<the versionId you give them>`), and `API` read as
-[Before you start](#before-you-start) says, each request behind its own
-routing check:
+(`export V=<the versionId you give them>`), a `CLOUDFLARE_API_TOKEN` that
+may only read in place of a Cloudflare login, as the bullet on the second
+person in [Before you start](#before-you-start) says, and `API` read as that
+section says, each request behind its own routing check:
 
 ```sh
 (cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" \
@@ -1448,22 +1455,28 @@ too, under the newest `activate` onto it:
 
 ```sh
 export ON=<the version that is on>
-(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$ON" -H "Authorization: Bearer $TOKEN" \
-  | jq -r '.version.id as $on | first(.activations[] | select(.targetVersionId == $on and .action == "activate")) | .previousVersionId'
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/${ON:?export it first}" -H "Authorization: Bearer $TOKEN" \
+  | jq -r 'if .error then error(if .error.code == "NOT_FOUND" then "not a version" else "refused: \(.error.code), \(.error.message)" end) else .version.id as $on | first(.activations[] | select(.targetVersionId == $on and .action == "activate")) | .previousVersionId end'
 ```
 
 If it prints `null`, or nothing, with neither a refusal of the routing check
-nor a `curl: (N) …` line before it, a rollback has nothing to go back to:
-stop there. A `curl: (N) …` line is a request that did not reach the API:
-run it again. Otherwise check that the version it printed is older than the
-version on, which prints `true`; an id that names no version stops the
-check with `not a version`, and a request the routing check stopped, or one
-that did not reach the API, with `a request did not go out`:
+nor an error line before it, a rollback has nothing to go back to: stop
+there. `not a version` is an `ON` that names no version. A `curl: (N) …`
+line is a request that did not reach the API, and a `jq: parse error` an
+answer that is not the API's, such as an error page: run it again. A
+`refused: <code>, <message>` line is a request the API refused, as it
+refuses an expired token or a spent budget: look it up by its code and its
+message in [When something goes wrong](#when-something-goes-wrong).
+Otherwise check that the version it printed is older than the version on,
+which prints `true`; an id that names no version stops the check with
+`not a version`, a refused request with `refused: …`, and a request the
+routing check stopped, or one that did not reach the API, with
+`a request did not go out`:
 
 ```sh
 export BACK=<the id it printed>
 for id in "$BACK" "$ON"; do (cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$id" -H "Authorization: Bearer $TOKEN"; done \
-  | jq -s 'if length != 2 then error("a request did not go out: run it again") else map(.version // error("not a version") | [ .createdAt, .attempt, .id ]) | .[0] < .[1] end'
+  | jq -s 'if length != 2 then error("a request did not go out: run it again") else map(.version // error(if .error.code == "NOT_FOUND" or .error == null then "not a version" else "refused: \(.error.code), \(.error.message)" end) | [ .createdAt, .attempt, .id ]) | .[0] < .[1] end'
 ```
 
 Postman, for a worker on your own machine:

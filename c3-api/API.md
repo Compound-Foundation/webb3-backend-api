@@ -1273,13 +1273,15 @@ it under `approvals`:
 An approval is in force for `COMET_REGISTRY_APPROVAL_TTL_S` after it is given
 — a day unless the environment sets otherwise, and a week at most — an expiry
 stored with it, so changing the setting changes no approval already given.
-It lets one activation through. It no longer counts once it has expired,
-once an activation has used it, or once a move recorded after it has
-switched its version on, in the order the database recorded them, whatever
-instants the moves carry: switching a version on again after a rollback
-needs a new approval. It is usable only while the version it was given
-against is on: another version going on suspends it, and a move back to
-that version, a rollback among them, makes it usable again. It cannot be
+Whether it is still in force is judged by the database's clock as well,
+wherever it is read: by an activation, by the status and by a version's
+detail (`usable`). It lets one activation through. It no longer counts once
+it has expired, once an activation has used it, or once a move recorded
+after it has switched its version on, in the order the database recorded
+them, whatever instants the moves carry: switching a version on again after
+a rollback needs a new approval. It is usable only while the version it was
+given against is on: another version going on suspends it, and a move back
+to that version, a rollback among them, makes it usable again. It cannot be
 withdrawn: one given by mistake, or by a token that turns out to have
 leaked, stays usable by any other admin until it expires, is used, or a move
 switches its version on.

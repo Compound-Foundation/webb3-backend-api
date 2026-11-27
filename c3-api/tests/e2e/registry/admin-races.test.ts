@@ -11,7 +11,7 @@ import { overlayOfMarket } from '../../../src/registry/overlay.js';
 import { activateVersion, activationStatements, approveVersion, readSnapshot, readVersionDecisions, snapshotChecksum } from '../../../src/registry/repository.js';
 
 import { applyMigrations } from '../../util/d1.js';
-import { interleaved } from '../../util/interleave.js';
+import { answered, interleaved } from '../../util/interleave.js';
 import { approveSeeded, loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
 import { registryWorker } from '../../util/registry-worker.js';
 
@@ -310,8 +310,8 @@ t.test('a rollback landing between an activation\'s check and its write refuses 
  * Two admins switching one approved version on at once: the one written
  * first uses the approval. The other finds the version on, which is where a
  * request made a moment later would find it: the idempotent no-op. Had the
- * version gone off again in between, the approval would be used up, and the
- * later activation is refused for it, by the database.
+ * version gone off again in between, the moves written since the later one
+ * read the pointer would refuse it, as the next test shows.
  */
 t.test('of two activations of one approved version at once, one uses the approval, and the other changes nothing', async t => {
   const { db, versions: [ first, second ] } = await freshVersions();
@@ -436,6 +436,77 @@ t.test('an approval given while an activation of its version is decided is overt
   );
   const { approvals } = await readVersionDecisions(db, second!);
   t.same(approvals.find(approval => approval.id === between)?.usable, false, 'and the version\'s detail says it is not usable');
+});
+
+/*
+ * A move can land just after an activation read the pointer, before it picks
+ * its approval or a rollback checks its step back. What those checks then
+ * find, an approval used up or a step back changed, is that move's doing, and
+ * the request is answered as any move in between answers it.
+ */
+const POINTER_READ = /AS moves\s+FROM registry_state/;
+
+t.test('an activation whose approval a move uses up just after it read the pointer changes nothing, its target being on', async t => {
+  const { db, versions: [ first, second ] } = await freshVersions();
+  await switchTo(db, first!, true);
+  const approval = await approveSeeded(db, second!, 'bob');
+
+  const racing = answered(db, POINTER_READ, async () => {
+    await activateVersion(db, { versionId: second!, action: 'activate', actor: 'carol', reason: 'meanwhile' });
+  });
+  const later = await activateVersion(racing, { versionId: second!, action: 'activate', actor: 'alice', reason: 'switch it on' });
+  t.same([ later.changed, later.activationId, later.approvalId ], [ false, null, null ], 'it is the idempotent no-op, not a request for an approval');
+  t.same(
+    (await db.prepare(`SELECT actor, approval_id FROM registry_activations WHERE registry_version_id = ?1`).bind(second).all()).results,
+    [ { actor: 'carol', approval_id: approval.id } ],
+    'and only the move that landed is recorded, with the approval',
+  );
+});
+
+t.test('moves that bring the pointer back just after an activation read it refuse the activation as moves in between do', async t => {
+  const { db, versions: [ first, second ] } = await freshVersions();
+  await switchTo(db, first!, true);
+  await approveSeeded(db, second!, 'bob');
+
+  // carol uses the approval and goes back, before alice's activation picks one
+  const racing = answered(db, POINTER_READ, async () => {
+    await activateVersion(db, { versionId: second!, action: 'activate', actor: 'carol', reason: 'meanwhile' });
+    await activateVersion(db, { versionId: first!, action: 'rollback', actor: 'carol', reason: 'and back' });
+  });
+  await t.rejects(
+    activateVersion(racing, { versionId: second!, action: 'activate', actor: 'alice', reason: 'switch it on' }),
+    {
+      code:    'CANDIDATE_STATE_CONFLICT',
+      message: `other moves were written while this activate was decided, and ${first} is on again; read the status and ask again`,
+    },
+    'it is refused for the moves, not for the approval they used',
+  );
+  t.equal(await db.prepare(`SELECT COUNT(*) AS n FROM registry_activations WHERE actor = 'alice'`).first<number>('n'), 0,
+    'and nothing of it is recorded');
+});
+
+t.test('a rollback whose step back moves change just after it read the pointer is refused as moves in between refuse it', async t => {
+  const { db, versions: [ first, second, third ] } = await freshVersions();
+  await switchTo(db, first!, true);
+  await switchTo(db, second!, true);
+  await switchTo(db, third!, true);
+
+  // carol goes back to the second and the first, and the third is switched on again in place of the first
+  const racing = answered(db, POINTER_READ, async () => {
+    await activateVersion(db, { versionId: second!, action: 'rollback', actor: 'carol', reason: 'meanwhile' });
+    await activateVersion(db, { versionId: first!, action: 'rollback', actor: 'carol', reason: 'and again' });
+    await switchTo(db, third!, true);
+  });
+  await t.rejects(
+    activateVersion(racing, { versionId: second!, action: 'rollback', actor: 'alice', reason: 'go back' }),
+    {
+      code:    'CANDIDATE_STATE_CONFLICT',
+      message: `other moves were written while this rollback was decided, and ${third} is on again; read the status and ask again`,
+    },
+    'it is refused for the moves, not for the step back they changed',
+  );
+  t.equal(await db.prepare(`SELECT COUNT(*) AS n FROM registry_activations WHERE actor = 'alice'`).first<number>('n'), 0,
+    'and nothing of it is recorded');
 });
 
 /*

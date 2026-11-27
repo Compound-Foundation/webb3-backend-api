@@ -10,6 +10,7 @@ import { sha256Hex } from '../../../src/http/bearer-auth.js';
 import { activeSnapshot, cacheDepsOf } from '../../../src/registry/cache.js';
 import { CHECK_KEY, checkChain } from '../../../src/registry/drift.js';
 import { activateVersion, activationStatements, markInvalid, recordValidationResults } from '../../../src/registry/repository.js';
+import { registryStatus } from '../../../src/registry/status.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { FakeChain, fakeChain } from '../../util/fake-chain.js';
@@ -293,6 +294,11 @@ t.test('a version waiting to be switched on is raised until somebody approves it
      VALUES (?1, ?2, ?3, ?4, 'bob', 'read it', ?5, ?6)`
   ).bind(randomUUID(), newer, checksum, active, new Date(yesterday).toISOString(), new Date(yesterday + 3_600_000).toISOString()).run();
   t.same((await status()).alerts, [ 'candidate-awaiting-activation', 'candidate-awaiting-approval' ], 'an approval past its expiry is none');
+  // a status that took its instant inside that hour, as one whose reads reached the database after the expiry
+  const env  = await server.getWorker<Env>().getEnv();
+  const late = await registryStatus(env, { ...cacheDepsOf(env), now: () => new Date(yesterday + 1_800_000) });
+  t.same([ late.alerts.includes('candidate-awaiting-approval'), late.candidates.validated[0]?.approval ], [ true, null ],
+    'nor to a status whose instant was before the expiry: the database\'s clock judges it as well');
 
   const approval = await approveSeeded(db, newer, 'bob');
   const approved = await status();
