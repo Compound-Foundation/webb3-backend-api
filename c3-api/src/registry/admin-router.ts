@@ -8,6 +8,7 @@ import { ApiError, methodNotAllowed } from '../http/errors.js';
 import { MAX_BODY_BYTES, jsonResponse, readJsonObject } from '../http/json.js';
 
 import { cacheDepsOf } from './cache.js';
+import { registryConfig } from './config.js';
 import { readCreationBlocks, readFeeds } from './enrichment.js';
 import { registryStatus } from './status.js';
 import {
@@ -30,6 +31,7 @@ import {
   getVersionDetail,
   getVersions,
   postActivation,
+  postApproval,
   postValidate,
 } from './handlers.js';
 import { isExplicit } from './importer.js';
@@ -72,10 +74,11 @@ function creationReader(env: Env): CreationReader {
  * `role` is the least role a token needs for the route (bearer-auth.ts). The
  * status is a monitor's, every other read a reader's, and an import and an
  * overlay write an operator's. Activation and rollback decide what is served,
- * and are an admin's. So is validation, which ends the review of a draft a
- * sync held open. That role gates this route alone: a sync not held for
- * review validates its own draft once the import completes, and what goes
- * live is decided by an activation all the same.
+ * and are an admin's, and so is an approval, the second person an activation
+ * needs; approving has a budget of its own. So is validation, which ends the
+ * review of a draft a sync held open. That role gates this route alone: a
+ * sync not held for review validates its own draft once the import
+ * completes, and what goes live is decided by an activation all the same.
  */
 const ROUTES = [
   { pattern: /^\/registry\/v1\/admin\/sync$/,                                                  method: 'POST', handler: 'sync',               family: 'sync',     role: 'operator' },
@@ -86,6 +89,7 @@ const ROUTES = [
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)$/,                                     method: 'GET',  handler: 'version',            family: 'read',     role: 'reader' },
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/changes$/,                            method: 'GET',  handler: 'changes',            family: 'read',     role: 'reader' },
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/validate$/,                           method: 'POST', handler: 'validate',           family: 'validate', role: 'admin' },
+  { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/approve$/,                            method: 'POST', handler: 'approve',            family: 'approve',  role: 'admin' },
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/activate$/,                           method: 'POST', handler: 'activate',           family: 'activate', role: 'admin' },
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/rollback$/,                           method: 'POST', handler: 'rollback',           family: 'activate', role: 'admin' },
   { pattern: /^\/registry\/v1\/admin\/versions\/([^/]+)\/networks\/([^/]+)\/overlay$/,         method: 'PUT',  handler: 'networkOverlay',     family: 'overlay',  role: 'operator' },
@@ -166,13 +170,31 @@ function expectedDigestOf(body: Record<string, unknown>): { expectedDigest?: str
 }
 
 /*
- * `expectedActiveVersionId` names the version an activation or a rollback is
- * decided against, so a move made against a version someone else has since
- * replaced is refused instead of silently undoing theirs.
+ * `expectedActiveVersionId` names the version an activation, a rollback or
+ * an approval is decided against, so a move made against a version someone
+ * else has since replaced is refused instead of silently undoing theirs, and
+ * an approval is not given for another change than the one its giver read.
  */
 function expectedActiveVersionOf(body: Record<string, unknown>): { expectedActiveVersionId?: string | null } {
   const { value } = optionalExpectation(body, 'expectedActiveVersionId', /^[0-9A-Za-z-]{1,64}$/, 'a registry version id');
   return value === undefined ? {} : { expectedActiveVersionId: value };
+}
+
+/*
+ * An approval is of one change, from the version on to the one approved, so
+ * it always names the version its giver read the changes against: an
+ * approval recorded against whatever is on by then could cover a change
+ * nobody read.
+ */
+function requireExpectedActiveVersion(body: Record<string, unknown>): string | null {
+  const { expectedActiveVersionId } = expectedActiveVersionOf(body);
+  if (expectedActiveVersionId === undefined) {
+    throw new ApiError(
+      'BAD_REQUEST',
+      `expectedActiveVersionId is required: the id of the version on that the changes were read against, or null when nothing is on`,
+    );
+  }
+  return expectedActiveVersionId;
 }
 
 /*
@@ -515,11 +537,16 @@ async function routeAdmin(
       /*
        * Validation decides nothing: it checks the stored candidate and records
        * every check it ran, and not who asked for it, exactly as the scheduled
-       * import does unattended. The decision a person makes about a version,
-       * with its reason, is the activation.
+       * import does unattended. The decisions people make about a version,
+       * each with its reason, are the approval and the activation.
        */
       requireExactKeys(body, []);
       return await postValidate(context, versionId!);
+    case 'approve':
+      requireExactKeys(body, [ 'reason', 'expectedActiveVersionId' ]);
+      return await postApproval(
+        admin, versionId!, requireReason(body), registryConfig(env).approvalTtlSeconds, requireExpectedActiveVersion(body),
+      );
     case 'activate':
       requireExactKeys(body, [ 'reason', 'expectedActiveVersionId' ]);
       return await postActivation(admin, versionId!, 'activate', requireReason(body), expectedActiveVersionOf(body));

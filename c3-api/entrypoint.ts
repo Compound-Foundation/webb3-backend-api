@@ -76,6 +76,8 @@ interface Env extends Flags.Env, ServiceBindings {
   COMET_SYNC_LEASE_SECONDS: string,
   REGISTRY_SNAPSHOT_CACHE_TTL_S: string,
   REGISTRY_STALE_FALLBACK_MAX_S: string,
+  // how long an approval lets its version be switched on, in seconds (src/registry/config.ts)
+  COMET_REGISTRY_APPROVAL_TTL_S: string,
   /*
    * comet registry secrets, never set in wrangler.toml: the admin tokens, a
    * JSON list of { name, sha256, role, notAfter } (src/http/bearer-auth.ts)

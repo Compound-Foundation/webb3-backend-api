@@ -283,6 +283,9 @@ t.test('the addresses of one IPv6 /64 share one budget', async t => {
  */
 const UNKNOWN = '00000000-0000-4000-8000-000000000000';
 
+// unlike a move, an approval always names the version on it was read against
+const APPROVAL = { reason: 'not this one', expectedActiveVersionId: null };
+
 const ROUTE_TABLE: Array<{ method: string, path: string, body?: unknown, role: Role }> = [
   { method: 'POST', path: '/registry/v1/admin/sync',                                         body: { markets: 0 },                  role: 'operator' },
   { method: 'GET',  path: `/registry/v1/admin/sync-runs/${UNKNOWN}`,                                                                role: 'reader' },
@@ -292,6 +295,7 @@ const ROUTE_TABLE: Array<{ method: string, path: string, body?: unknown, role: R
   { method: 'GET',  path: `/registry/v1/admin/versions/${UNKNOWN}`,                                                                 role: 'reader' },
   { method: 'GET',  path: `/registry/v1/admin/versions/${UNKNOWN}/changes`,                                                         role: 'reader' },
   { method: 'POST', path: `/registry/v1/admin/versions/${UNKNOWN}/validate`,                 body: {},                              role: 'admin' },
+  { method: 'POST', path: `/registry/v1/admin/versions/${UNKNOWN}/approve`,                  body: APPROVAL,                        role: 'admin' },
   { method: 'POST', path: `/registry/v1/admin/versions/${UNKNOWN}/activate`,                 body: { reason: 'not this one' },      role: 'admin' },
   { method: 'POST', path: `/registry/v1/admin/versions/${UNKNOWN}/rollback`,                 body: { reason: 'not this one' },      role: 'admin' },
   { method: 'PUT',  path: `/registry/v1/admin/versions/${UNKNOWN}/networks/1/overlay`,       body: { reason: 'x', overlay: {} },    role: 'operator' },

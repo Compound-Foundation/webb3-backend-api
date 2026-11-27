@@ -28,16 +28,23 @@ type RegistryConfig = {
   snapshotTtlSeconds:      number,
   // how old an answer may be when D1 cannot be reached; zero switches the fallback off
   staleFallbackSeconds:    number,
+  // how long an approval lets its version be switched on, from when it is given
+  approvalTtlSeconds:      number,
   // every setting set to something it does not take, by the name it is set under
   invalid:                 string[],
 };
 
 type NumericSetting = Exclude<keyof RegistryConfig, 'invalid'>;
 
+// the whole numbers a setting takes, the largest a safe integer unless it says otherwise
+type Range = { minimum: number, maximum?: number };
+
 /*
- * Each number by the variable that sets it, with its default and the least
- * value it takes: only the fallback window takes zero, which is how an
- * environment that would rather fail than serve an older version says so.
+ * Each number by the variable that sets it, with its default and the range it
+ * takes: only the fallback window takes zero, which is how an environment
+ * that would rather fail than serve an older version says so. An approval
+ * lasts a week at most: one zero too many would otherwise keep an approval
+ * good for months, long after anybody remembers giving it.
  */
 const NUMBERS = {
   leaseSeconds:            { name: 'COMET_SYNC_LEASE_SECONDS',          fallback: 900,   minimum: 1 },
@@ -45,6 +52,7 @@ const NUMBERS = {
   upstreamIntervalSeconds: { name: 'COMET_UPSTREAM_CHECK_INTERVAL_S',   fallback: 86400, minimum: 1 },
   snapshotTtlSeconds:      { name: 'REGISTRY_SNAPSHOT_CACHE_TTL_S',     fallback: 300,   minimum: 1 },
   staleFallbackSeconds:    { name: 'REGISTRY_STALE_FALLBACK_MAX_S',     fallback: 3600,  minimum: 0 },
+  approvalTtlSeconds:      { name: 'COMET_REGISTRY_APPROVAL_TTL_S',     fallback: 86400, minimum: 1, maximum: 604800 },
 } as const;
 
 // the settings an import reads, which it refuses to start with while one of them is invalid
@@ -56,13 +64,18 @@ const IMPORT_SETTINGS: ReadonlySet<string> = new Set([
   NUMBERS.upstreamIntervalSeconds.name,
 ]);
 
+function requirementOf({ minimum, maximum }: Range): string {
+  if (maximum !== undefined) {
+    return `an integer from ${minimum} to ${maximum}`;
+  }
+  return minimum === 0 ? 'a non-negative integer' : 'a positive integer';
+}
+
 // what each setting takes, as a refusal names it
 const REQUIREMENTS: Record<string, string> = {
   COMET_SOURCE_REPOSITORY: 'owner/repository',
   COMET_SOURCE_REF:        'a git ref',
-  ...Object.fromEntries(Object.values(NUMBERS).map(({ name, minimum }) => (
-    [ name, minimum === 0 ? 'a non-negative integer' : 'a positive integer' ]
-  ))),
+  ...Object.fromEntries(Object.values(NUMBERS).map(number => [ number.name, requirementOf(number) ])),
 };
 
 /*
@@ -72,13 +85,13 @@ const REQUIREMENTS: Record<string, string> = {
  * number, so both are read as the digits they are written with; a sign, a
  * fraction or an exponent is not a whole number written out.
  */
-function numberOf(value: unknown, minimum: number): number | null | undefined {
+function numberOf(value: unknown, { minimum, maximum = Number.MAX_SAFE_INTEGER }: Range): number | null | undefined {
   const text = value === undefined || value === null ? '' : String(value).trim();
   if (text.length === 0) {
     return undefined;
   }
   const parsed = /^[0-9]+$/.test(text) ? Number(text) : NaN;
-  return Number.isSafeInteger(parsed) && parsed >= minimum ? parsed : null;
+  return Number.isSafeInteger(parsed) && parsed >= minimum && parsed <= maximum ? parsed : null;
 }
 
 function registryConfig(env: Env): RegistryConfig {
@@ -88,8 +101,8 @@ function registryConfig(env: Env): RegistryConfig {
     ...(isRef(String(env.COMET_SOURCE_REF ?? '')) ? [] : [ 'COMET_SOURCE_REF' ]),
   ];
   const read = (setting: NumericSetting): number => {
-    const { name, fallback, minimum } = NUMBERS[setting];
-    const value = numberOf(env[name], minimum);
+    const { name, fallback } = NUMBERS[setting];
+    const value = numberOf(env[name], NUMBERS[setting]);
     if (value === null) {
       invalid.push(name);
     }
@@ -101,6 +114,7 @@ function registryConfig(env: Env): RegistryConfig {
     upstreamIntervalSeconds: read('upstreamIntervalSeconds'),
     snapshotTtlSeconds:      read('snapshotTtlSeconds'),
     staleFallbackSeconds:    read('staleFallbackSeconds'),
+    approvalTtlSeconds:      read('approvalTtlSeconds'),
     invalid,
   };
 }

@@ -23,7 +23,7 @@ import { activateVersion, snapshotChecksum } from '../../../src/registry/reposit
 
 import { applyMigrations } from '../../util/d1.js';
 import { refusingKv } from '../../util/kv.js';
-import { loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { approveSeeded, loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
 import { registryWorker } from '../../util/registry-worker.js';
 
 /*
@@ -64,6 +64,7 @@ async function freshEnvironment(): Promise<{ db: D1Database, kv: KVNamespace }> 
 }
 
 async function activate(db: D1Database, versionId: string): Promise<void> {
+  await approveSeeded(db, versionId);
   await activateVersion(db, { versionId, action: 'activate', actor: 'test-admin', reason: 'test' });
 }
 
