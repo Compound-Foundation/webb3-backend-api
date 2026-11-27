@@ -46,6 +46,7 @@ function defaultTestEnv(): Env {
     COMET_SYNC_LEASE_SECONDS:          '',
     REGISTRY_SNAPSHOT_CACHE_TTL_S:     '',
     REGISTRY_STALE_FALLBACK_MAX_S:     '',
+    COMET_REGISTRY_APPROVAL_TTL_S:     '',
   };
 }
 

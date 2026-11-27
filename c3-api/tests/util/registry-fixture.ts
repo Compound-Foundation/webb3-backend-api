@@ -1,14 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
-import type { MarketV1, NetworkV1, RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
+import type { ApprovalV1, MarketV1, NetworkV1, RegistrySnapshotV1 } from '../../lib/model/comet-registry.js';
 import type { NetworkOverlay } from '../../src/registry/overlay.js';
 import { orderNetworks, overlayOfException } from '../../src/registry/overlay.js';
 import {
   activateVersion,
+  approveVersion,
   createCandidate,
   markValidated,
   marketWrites,
+  readActiveVersionId,
   readSnapshot,
   recordValidationResults,
   snapshotChecksum,
@@ -104,6 +106,8 @@ type SeedOptions = {
   attempt?:   number,
   // defaults to the fixture's own commit, so seeded candidates are attempts of one commit
   commitSha?: string,
+  // defaults to now
+  createdAt?: string,
 };
 
 type SeededCandidate = {
@@ -126,6 +130,7 @@ async function seedCandidate(
     sourceChecksum: sha256Hex(`source:${versionId}`),
     attempt:        options.attempt ?? 1,
     createdBy:      'test-seed',
+    ...(options.createdAt === undefined ? {} : { createdAt: options.createdAt }),
   });
 
   /*
@@ -167,8 +172,27 @@ async function validateSeeded(db: D1Database, versionId: string, { checksum }: {
   await markValidated(db, versionId, checksum ?? await snapshotChecksum(orderNetworks(await readSnapshot(db, versionId))));
 }
 
+// the checksum of a version's snapshot, null until it is validated: what an approval of it names
+async function snapshotChecksumOf(db: D1Database, versionId: string): Promise<string | null> {
+  return db.prepare(`SELECT snapshot_checksum FROM registry_versions WHERE id = ?1`).bind(versionId).first<string | null>('snapshot_checksum');
+}
+
+/*
+ * An approval of a validated version by somebody other than the one who
+ * switches it on, as every activation needs: `test-approver` approves what
+ * `test-admin`, or whoever a test names, activates, against the version on
+ * and of the snapshot it has.
+ */
+async function approveSeeded(db: D1Database, versionId: string, actor: string = 'test-approver'): Promise<ApprovalV1> {
+  return approveVersion(db, {
+    versionId, actor, reason: 'test', ttlSeconds: 3600, expectedActiveVersionId: await readActiveVersionId(db),
+    expectedSnapshotChecksum: await snapshotChecksumOf(db, versionId) ?? '',
+  });
+}
+
 async function activateSeeded(db: D1Database, versionId: string): Promise<void> {
   await validateSeeded(db, versionId);
+  await approveSeeded(db, versionId);
   await activateVersion(db, { versionId, action: 'activate', actor: 'test-admin', reason: 'test' });
 }
 
@@ -191,11 +215,13 @@ export type { SeedOptions, SeededCandidate };
 
 export {
   activateSeeded,
+  approveSeeded,
   clearCandidateSnapshot,
   loadRegistrySnapshotFixture,
   overlayOfNetwork,
   seedCandidate,
   sha256Hex,
+  snapshotChecksumOf,
   validateSeeded,
   writeCandidateSnapshot,
 };

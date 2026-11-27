@@ -35,7 +35,11 @@ t.test('a version identical to the one that is on changes nothing', async t => {
 t.test('without a version that is on, everything is added', async t => {
   const changes = compareVersions(null, snapshot.networks, new Set([ '1/weth' ]));
 
-  t.same(changes.networks.added, [ 1, 8453, 534352 ], 'every network');
+  t.same(changes.networks.added.map(entry => entry.chainId), [ 1, 8453, 534352 ], 'every network');
+  const mainnet = snapshot.networks.find(network => network.chainId === 1)!;
+  const { markets: _markets, ...settings } = mainnet;
+  t.same(changes.networks.added[0]!.network, settings, 'each whole, with its name, presentation and price exceptions');
+  t.notOk('markets' in changes.networks.added[0]!.network, 'but for its markets, which are listed as markets');
   t.same(changes.markets.added.map(entry => entry.scope), [
     '1/usdc', '1/usdt', '1/wbtc', '1/weth', '8453/aero', '534352/usdc',
   ], 'every market, by chain and deployment key');

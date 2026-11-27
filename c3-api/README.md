@@ -56,12 +56,14 @@ market contract for `{contract}` and a network (e.g. mainnet) for
 
 The registry's public reads answer `503 REGISTRY_NOT_ACTIVE` until a registry
 version is active. Bring one up as an operator brings up an environment: put
-the hash of an admin token of your own into `.dev.vars`, as an entry of
-`COMET_REGISTRY_ADMIN_TOKENS` with the role `admin`, before starting the
+the hashes of two admin tokens of your own into `.dev.vars`, as entries of
+`COMET_REGISTRY_ADMIN_TOKENS` with the role `admin` under two names — one
+approves the version and the other switches it on — before starting the
 worker ([The admin tokens](./REGISTRY_RUNBOOK.md#the-admin-tokens)), and follow
 [Bringing an environment up for the first time](./REGISTRY_RUNBOOK.md#bringing-an-environment-up-for-the-first-time)
-from the root of the checkout, with your token in `TOKEN`, the scripts its
-requests check the routing with built,
+from the root of the checkout, with your first token in `TOKEN`, and your
+second in it for step 5, the scripts its requests check the routing with
+built,
 `(cd c3-api && npx tsc -p tsconfig.scripts.json)`, and
 `export API=http://localhost:8787 NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1`:
 `NO_PROXY` and `no_proxy` keep the token off any proxy set for plain http.
@@ -79,8 +81,12 @@ migration that has been applied anywhere.
 Migrations are numbered in the order they are applied, not by feature:
 `0001` is the Comet registry schema, `0002` marks the markets nobody has
 reviewed yet, `0003` adds how the frontend lists a market — its slug and
-whether it is institutional — and `0004` drops the columns and indexes
-nothing uses.
+whether it is institutional — `0004` drops the columns and indexes nothing
+uses, `0011` adds the approvals an activation needs, and `0012` takes
+approvals and moves in the order the database recorded them, and an
+approval's expiry by the database's clock as well. `0005` to `0010` are left
+to work merged later, which an environment applies after `0012`:
+`wrangler d1 migrations apply` applies every file not applied yet, by name.
 
 Apply migrations to the local Miniflare database under `.wrangler/state`:
 ```sh
@@ -131,8 +137,10 @@ it, open.
 
 The registry's numbers — `COMET_SYNC_LEASE_SECONDS`,
 `COMET_SYNC_MARKETS_PER_INVOCATION`, `COMET_UPSTREAM_CHECK_INTERVAL_S`,
-`REGISTRY_SNAPSHOT_CACHE_TTL_S` and `REGISTRY_STALE_FALLBACK_MAX_S` — are
-whole numbers, and unset or empty is the default. A value that is not one is
+`REGISTRY_SNAPSHOT_CACHE_TTL_S`, `REGISTRY_STALE_FALLBACK_MAX_S` and
+`COMET_REGISTRY_APPROVAL_TTL_S`, how long an approval lets its version be
+switched on, a day by default and a week at most — are whole numbers, and
+unset or empty is the default. A value that is not one is
 never used: the import refuses to start over one of its own, a read takes
 the default in its place, and `GET /registry/v1/admin/status` names it under
 the alert `configuration-invalid`, as it does a `COMET_SOURCE_REPOSITORY` or
@@ -268,7 +276,7 @@ the cache; and a D1 that answers with a fault, such as a table a migration
 has not created yet, is a `500`, never masked by the cache.
 
 An operator changes what the registry serves by importing, reviewing,
-validating and activating a version; see the admin routes in
+validating, approving and activating a version; see the admin routes in
 [./API.md](./API.md). Each administrative token has a name and a role, and
 an environment lists its tokens in the secret `COMET_REGISTRY_ADMIN_TOKENS`
 ([The admin tokens](./REGISTRY_RUNBOOK.md#the-admin-tokens)); without that
@@ -278,6 +286,19 @@ records only its checks; its role — `monitor`, `reader`, `operator` or
 `admin` — bounds the routes it may call. The step-by-step procedure, with
 what to expect at each step and what to do when something else happens, is
 [./REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md).
+
+A version is switched on by two people: an admin approves it, and an admin
+of another name activates it while the approval is in force, a day unless
+`COMET_REGISTRY_APPROVAL_TTL_S` says otherwise. The approval names the
+version on that its giver read the changes against and the snapshot those
+changes were of, is of the change from that version to that snapshot, and
+lets one activation through. A
+rollback needs nobody's approval, so that undoing a bad version takes one
+person, but it goes back one step only: to the version the one on replaced
+when it was last activated, if that is older. Going further back takes
+another rollback. The code holds these rules for every move, and migrations
+`0011` and `0012` hold them in the database too from an environment's first
+approval on.
 
 ## Bringing a registry up from nothing
 
@@ -323,9 +344,14 @@ curl --disable -X PUT .../registry/v1/admin/versions/$VERSION/overlays \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   --data-binary @registry/seed/production.json
 
-# 4. validate, then activate. The first activation expects nothing to be on;
-#    a later one names the version that is
+# 4. validate; one admin reads the changes and approves them, by the
+#    snapshot they are of, and another activates. The first approval and
+#    activation expect nothing to be on; later ones name the version that is
 curl --disable -X POST .../registry/v1/admin/versions/$VERSION/validate ...
+curl --disable .../registry/v1/admin/versions/$VERSION/changes ...
+curl --disable -X POST .../registry/v1/admin/versions/$VERSION/approve ... \
+  -H "Authorization: Bearer $APPROVER_TOKEN" \
+  -d '{"reason": "read its changes", "expectedActiveVersionId": null, "expectedSnapshotChecksum": "<snapshotChecksum of the changes>"}'
 curl --disable -X POST .../registry/v1/admin/versions/$VERSION/activate ... \
   -d '{"reason": "first registry version", "expectedActiveVersionId": null}'
 ```
