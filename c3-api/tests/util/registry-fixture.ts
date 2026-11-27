@@ -169,14 +169,21 @@ async function validateSeeded(db: D1Database, versionId: string, { checksum }: {
   await markValidated(db, versionId, checksum ?? await snapshotChecksum(orderNetworks(await readSnapshot(db, versionId))));
 }
 
+// the checksum of a version's snapshot, null until it is validated: what an approval of it names
+async function snapshotChecksumOf(db: D1Database, versionId: string): Promise<string | null> {
+  return db.prepare(`SELECT snapshot_checksum FROM registry_versions WHERE id = ?1`).bind(versionId).first<string | null>('snapshot_checksum');
+}
+
 /*
  * An approval of a validated version by somebody other than the one who
  * switches it on, as every activation needs: `test-approver` approves what
- * `test-admin`, or whoever a test names, activates, against the version on.
+ * `test-admin`, or whoever a test names, activates, against the version on
+ * and of the snapshot it has.
  */
 async function approveSeeded(db: D1Database, versionId: string, actor: string = 'test-approver'): Promise<ApprovalV1> {
   return approveVersion(db, {
     versionId, actor, reason: 'test', ttlSeconds: 3600, expectedActiveVersionId: await readActiveVersionId(db),
+    expectedSnapshotChecksum: await snapshotChecksumOf(db, versionId) ?? '',
   });
 }
 
@@ -211,6 +218,7 @@ export {
   overlayOfNetwork,
   seedCandidate,
   sha256Hex,
+  snapshotChecksumOf,
   validateSeeded,
   writeCandidateSnapshot,
 };

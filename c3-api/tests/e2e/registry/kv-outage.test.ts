@@ -9,7 +9,7 @@ import { maintainRegistryCache } from '../../../src/registry/scheduled.js';
 
 import { MemoryKv, refusingKv } from '../../util/kv.js';
 import { activeRegistryDatabase } from '../../util/registry-database.js';
-import { seedCandidate } from '../../util/registry-fixture.js';
+import { seedCandidate, snapshotChecksumOf } from '../../util/registry-fixture.js';
 import { makeTestEnv } from '../../util/test-env.js';
 
 import '../../../shim/node-self.js';
@@ -103,6 +103,7 @@ t.test('a validation, an activation and a rollback answer as committed, though n
 
   const approved = await post(env, `/registry/v1/admin/versions/${next}/approve`, {
     reason: 'the namespace does not answer', expectedActiveVersionId: registry.versionId,
+    expectedSnapshotChecksum: await snapshotChecksumOf(registry.db, next),
   }, BOB);
   t.equal(approved.status, 200, 'an approval answers 200');
   const activated = await post(env, `/registry/v1/admin/versions/${next}/activate`, {

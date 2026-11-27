@@ -1237,21 +1237,29 @@ each with its reason, are the approval and the activation.
 ### description:
 
 Approves a validated version, so that an admin of another name may switch it
-on. Requires a `reason`, stored with the approval, and
-`expectedActiveVersionId`: the version on that the approver read the changes
-against (`GET …/versions/{version_id}/changes`), or `null` when nothing is
-on. An approval is of the version — whose bytes no longer change once it is
-validated, so it covers exactly what goes live — against that version, and
-is given only while it is on: one decided against a version somebody has
-replaced since is refused, rather than given for a change nobody read. It
-lets an activation through only while that version is on.
+on. Requires a `reason`, stored with the approval, and what the approver read
+in the version's changes (`GET …/versions/{version_id}/changes`):
+`expectedActiveVersionId`, the version on they were read against —
+`comparedWith` there, `null` when nothing is on — and
+`expectedSnapshotChecksum`, the snapshot they were of — `snapshotChecksum`
+there. An approval is of that snapshot, whose bytes no longer change once the
+version is validated, so it covers exactly what goes live, against that
+version, and is given only while both hold: one of changes read while the
+version still imported, which name no snapshot, or decided against a version
+somebody has replaced since, is refused, rather than given for a change
+nobody read. It lets an activation through only while that version is on.
 
 ```json
-{ "reason": "read the changes: one market added", "expectedActiveVersionId": "d9698ddd-ab86-46bc-a412-c71df7d20414" }
+{
+  "reason": "read the changes: one market added",
+  "expectedActiveVersionId": "d9698ddd-ab86-46bc-a412-c71df7d20414",
+  "expectedSnapshotChecksum": "1bd74ebe5f0d8a2c7c3e6b9f4a1d2e8c0b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e"
+}
 ```
 
 It answers `200` with the approval, as `GET …/versions/{version_id}` lists
-it under `approvals`:
+it under `approvals`, `usable` included, which is read as the approval is
+written:
 
 ```json
 {
@@ -1288,10 +1296,11 @@ switches its version on.
 
 Every request records an approval of its own. A version that does not exist
 is `404`; a version that is not validated, the version that is on — which is
-no change to approve — and an `expectedActiveVersionId` that is no longer
-what is on are `409` with `details.code` `CANDIDATE_STATE_CONFLICT`; a body
-without a `reason` or without `expectedActiveVersionId`, or with another
-property, is `400`.
+no change to approve — an `expectedSnapshotChecksum` that is not the
+version's and an `expectedActiveVersionId` that is no longer what is on are
+`409` with `details.code` `CANDIDATE_STATE_CONFLICT`; a body without a
+`reason`, `expectedActiveVersionId` or `expectedSnapshotChecksum`, or with
+another property, is `400`.
 
 ## `POST /registry/v1/admin/versions/{version_id}/activate`
 ### description:
@@ -1640,6 +1649,9 @@ when a market the source has added is described: such a market is listed
 under `markets.added` whole, with everything its import read from the source
 and the chain, and `reviewed: false` until someone describes it. With no
 version on, `comparedWith` is `null` and everything is added.
+`snapshotChecksum` is the checksum of the snapshot these changes are of,
+which a version has once it is validated and `null` before: what an approval
+of them names (`expectedSnapshotChecksum`).
 
 `markets.removed` lists the keys the version no longer has; `markets.unserved`
 says what users of the version on lose. It names every Comet the version on
@@ -1662,6 +1674,7 @@ source adds reads as a longer list and one more entry.
 {
   "versionId": "0b7c2e7a-1d5e-4f39-8c55-6f7b1c4f2a10",
   "status": "importing",
+  "snapshotChecksum": null,
   "comparedWith": "d9698ddd-ab86-46bc-a412-c71df7d20414",
   "networks": { "added": [], "removed": [], "changed": [] },
   "markets": {

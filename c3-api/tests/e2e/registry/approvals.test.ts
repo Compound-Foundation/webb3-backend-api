@@ -11,7 +11,7 @@ import { registryConfig } from '../../../src/registry/config.js';
 import { activateVersion, approveVersion, readVersionDecisions } from '../../../src/registry/repository.js';
 
 import { applyMigrations } from '../../util/d1.js';
-import { loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { loadRegistrySnapshotFixture, seedCandidate, snapshotChecksumOf, validateSeeded } from '../../util/registry-fixture.js';
 import { registryWorker } from '../../util/registry-worker.js';
 
 /*
@@ -81,9 +81,18 @@ async function post(path: string, body: unknown, token: string): Promise<Answer>
   return { status: response.status, body: await response.json() as Answer['body'] };
 }
 
-// an approval names the version its giver read the changes against, `against`: null for nothing on
-const approve  = (versionId: string, token: string, against: string | null, body: Record<string, unknown> = {}) =>
-  post(`/registry/v1/admin/versions/${versionId}/approve`, { reason: 'read its changes', expectedActiveVersionId: against, ...body }, token);
+/*
+ * An approval names the version its giver read the changes against,
+ * `against`, null for nothing on, and the snapshot those changes were of: the
+ * version's own, as its changes answer it, or one of nothing for a version
+ * that has none, so that what is refused is the version and not the body.
+ */
+const approve  = async (versionId: string, token: string, against: string | null, body: Record<string, unknown> = {}) => {
+  const { APP_DB } = await server.getWorker<Env>().getEnv();
+  const expectedSnapshotChecksum = await snapshotChecksumOf(APP_DB, versionId) ?? '0'.repeat(64);
+  return post(`/registry/v1/admin/versions/${versionId}/approve`,
+    { reason: 'read its changes', expectedActiveVersionId: against, expectedSnapshotChecksum, ...body }, token);
+};
 const activate = (versionId: string, token: string, body: Record<string, unknown> = {}) =>
   post(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'switch it on', ...body }, token);
 const rollback = (versionId: string, token: string, body: Record<string, unknown> = {}) =>
@@ -305,10 +314,10 @@ t.test('a version switched on in place of a newer one is not rolled back from al
 /*
  * An approval is of one change, from the version on to the one approved, so
  * it names the version its giver read the changes against, null when nothing
- * is on: one without it could be recorded against a version nobody read the
- * changes against.
+ * is on, and the snapshot those changes were of: one without them could be
+ * recorded of a change nobody read.
  */
-t.test('an approval takes a reason and the version it was decided against, and nothing else', async t => {
+t.test('an approval takes a reason, the version it was decided against and the snapshot it read, and nothing else', async t => {
   const db        = await freshDatabase();
   const validated = await versionsOf(db)();
   const { versionId: draft } = await seedCandidate(db, snapshot, { versionId: randomUUID() });
@@ -322,9 +331,45 @@ t.test('an approval takes a reason and the version it was decided against, and n
   t.equal(unread.body.error?.message,
     'expectedActiveVersionId is required: the id of the version on that the changes were read against, or null when nothing is on',
     'saying what to send');
+  const unchecked = await post(`/registry/v1/admin/versions/${validated}/approve`, { reason: 'read its changes', expectedActiveVersionId: null }, BOB);
+  t.same([ unchecked.status, unchecked.body.error?.message ], [
+    400, 'expectedSnapshotChecksum is required: the snapshotChecksum of the changes the approval was read from, 64 hex characters',
+  ], 'and one that does not say which snapshot its changes were of');
+  t.equal((await approve(validated, BOB, null, { expectedSnapshotChecksum: null })).status, 400, 'or says none');
   t.equal((await approve(validated, BOB, null, { actor: 'somebody' })).status, 400, 'and one that names its approver');
   t.equal((await approve(validated, BOB, null, { expectedActiveVersionId: 42 })).status, 400, 'or expects something that is no version');
   t.equal(await db.prepare(`SELECT COUNT(*) AS n FROM registry_approvals`).first<number>('n'), 0, 'none of them is recorded');
+});
+
+/*
+ * An approval covers the bytes that go live: it names the snapshot whose
+ * changes its giver read, and the changes route answers that snapshot's
+ * checksum. A version still importing has none yet, so changes read then
+ * approve nothing; once it is validated, its changes name its snapshot, and
+ * an approval is given of that one and no other.
+ */
+t.test('an approval names the snapshot whose changes its giver read', async t => {
+  const db = await freshDatabase();
+  const { versionId } = await seedCandidate(db, snapshot, { versionId: randomUUID() });
+  const changesOf = async () => await (await server.fetch(`/registry/v1/admin/versions/${versionId}/changes`, {
+    headers: { 'Authorization': `Bearer ${BOB}` },
+  })).json() as { snapshotChecksum: string | null };
+
+  t.equal((await changesOf()).snapshotChecksum, null, 'the changes of a version that still imports name no snapshot');
+  await validateSeeded(db, versionId);
+  const read = (await changesOf()).snapshotChecksum!;
+  t.match(read, /^[0-9a-f]{64}$/, 'once it is validated, they name its snapshot');
+
+  const other = 'f'.repeat(64);
+  const refused = await approve(versionId, BOB, null, { expectedSnapshotChecksum: other });
+  t.ok(refusedFor(refused, 'CANDIDATE_STATE_CONFLICT'), 'an approval of another snapshot is refused');
+  t.equal(refused.body.error?.message,
+    `registry version ${versionId} has the snapshot ${read}, not ${other} as this approval expected; read its changes again`,
+    'naming the snapshot the version has');
+  const given = await approve(versionId, BOB, null, { expectedSnapshotChecksum: read });
+  t.same([ given.status, (given.body as { approval?: ApprovalV1 }).approval?.snapshotChecksum ], [ 200, read ],
+    'one of the snapshot read is given, and names it');
+  t.equal(await db.prepare(`SELECT COUNT(*) AS n FROM registry_approvals`).first<number>('n'), 1, 'and only that one is recorded');
 });
 
 /*
@@ -390,9 +435,15 @@ t.test('a version\'s detail reads its moves and its approvals at one moment', as
   const version = versionsOf(db);
   const first = await version();
   const second = await version();
-  await approveVersion(db, { versionId: first, actor: 'bob', reason: 'first', ttlSeconds: 3600, expectedActiveVersionId: null });
+  await approveVersion(db, {
+    versionId: first, actor: 'bob', reason: 'first', ttlSeconds: 3600, expectedActiveVersionId: null,
+    expectedSnapshotChecksum: (await snapshotChecksumOf(db, first))!,
+  });
   await activateVersion(db, { versionId: first, action: 'activate', actor: 'alice', reason: 'first' });
-  const approval = await approveVersion(db, { versionId: second, actor: 'bob', reason: 'second', ttlSeconds: 3600, expectedActiveVersionId: first });
+  const approval = await approveVersion(db, {
+    versionId: second, actor: 'bob', reason: 'second', ttlSeconds: 3600, expectedActiveVersionId: first,
+    expectedSnapshotChecksum: (await snapshotChecksumOf(db, second))!,
+  });
 
   const landing = landingBeforeApprovals(db, async () => {
     await activateVersion(db, { versionId: second, action: 'activate', actor: 'alice', reason: 'meanwhile' });

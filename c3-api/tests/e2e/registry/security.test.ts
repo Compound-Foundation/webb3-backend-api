@@ -284,7 +284,7 @@ t.test('the addresses of one IPv6 /64 share one budget', async t => {
 const UNKNOWN = '00000000-0000-4000-8000-000000000000';
 
 // unlike a move, an approval always names the version on it was read against
-const APPROVAL = { reason: 'not this one', expectedActiveVersionId: null };
+const APPROVAL = { reason: 'not this one', expectedActiveVersionId: null, expectedSnapshotChecksum: '0'.repeat(64) };
 
 const ROUTE_TABLE: Array<{ method: string, path: string, body?: unknown, role: Role }> = [
   { method: 'POST', path: '/registry/v1/admin/sync',                                         body: { markets: 0 },                  role: 'operator' },

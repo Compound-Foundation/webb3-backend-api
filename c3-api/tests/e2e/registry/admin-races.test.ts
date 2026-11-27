@@ -12,7 +12,7 @@ import { activateVersion, activationStatements, approveVersion, readSnapshot, re
 
 import { applyMigrations } from '../../util/d1.js';
 import { answered, interleaved } from '../../util/interleave.js';
-import { approveSeeded, loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { approveSeeded, loadRegistrySnapshotFixture, seedCandidate, snapshotChecksumOf, validateSeeded } from '../../util/registry-fixture.js';
 import { registryWorker } from '../../util/registry-worker.js';
 
 /*
@@ -417,6 +417,7 @@ t.test('an approval given while an activation of its version is decided is overt
     await new Promise(resolve => setTimeout(resolve, 5));
     between = (await approveVersion(db, {
       versionId: second!, actor: 'carol', reason: 'meanwhile', ttlSeconds: 3600, expectedActiveVersionId: first!,
+      expectedSnapshotChecksum: (await snapshotChecksumOf(db, second!))!,
     })).id;
   });
   const switched = await activateVersion(racing, { versionId: second!, action: 'activate', actor: 'alice', reason: 'switch it on' });
@@ -550,7 +551,10 @@ t.test('an activation refused for moves that brought the pointer back goes throu
 t.test('an approval that expires between an activation\'s check and its write refuses the activation', async t => {
   const { db, versions: [ first, second ] } = await freshVersions();
   await switchTo(db, first!, true);
-  await approveVersion(db, { versionId: second!, actor: 'bob', reason: 'read it', ttlSeconds: 2, expectedActiveVersionId: first! });
+  await approveVersion(db, {
+    versionId: second!, actor: 'bob', reason: 'read it', ttlSeconds: 2, expectedActiveVersionId: first!,
+    expectedSnapshotChecksum: (await snapshotChecksumOf(db, second!))!,
+  });
 
   // the write waits until the approval has expired
   const racing = interleaved(db, /INSERT INTO registry_activations/, async () => {
@@ -567,6 +571,28 @@ t.test('an approval that expires between an activation\'s check and its write re
   t.equal(await activeOf(db), first, 'nothing moved');
   t.equal(await db.prepare(`SELECT COUNT(*) AS n FROM registry_activations WHERE actor = 'alice'`).first<number>('n'), 0,
     'and nothing of it is recorded');
+});
+
+/*
+ * An approval's answer says whether it can be used by the rule every reader
+ * asks, read in the batch that writes it: one written after the expiry its
+ * Worker gave it, here a second, is recorded and answered as not usable.
+ */
+t.test('an approval written after its own expiry answers that it is not usable', async t => {
+  const { db, versions: [ first, second ] } = await freshVersions();
+  await switchTo(db, first!, true);
+
+  // the write waits until the approval's second is over
+  const racing = interleaved(db, /INSERT INTO registry_approvals/, async () => {
+    await new Promise(resolve => setTimeout(resolve, 1_500));
+  });
+  const approval = await approveVersion(racing, {
+    versionId: second!, actor: 'bob', reason: 'read it', ttlSeconds: 1, expectedActiveVersionId: first!,
+    expectedSnapshotChecksum: (await snapshotChecksumOf(db, second!))!,
+  });
+  t.equal(approval.usable, false, 'its answer says it cannot be used');
+  t.same((await readVersionDecisions(db, second!)).approvals.map(listed => [ listed.id, listed.usable ]), [ [ approval.id, false ] ],
+    'as the version\'s detail does');
 });
 
 /*

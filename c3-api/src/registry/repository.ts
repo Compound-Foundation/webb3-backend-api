@@ -1036,16 +1036,20 @@ function approvalOf(row: RegistryApprovalRow & { activation_id: string | null, u
  * a move back. `expectedActiveVersionId` is the version its giver read the
  * changes against, null for nothing on, and the approval is written only
  * while that is what is on: a move made after the reading would have it
- * cover a change nobody read.
+ * cover a change nobody read. `expectedSnapshotChecksum` is the checksum of
+ * the snapshot those changes were of (the changes route answers it), and
+ * the approval is written only of that snapshot: changes read while the
+ * version still imported, or of another version, are not what goes live.
  */
 async function approveVersion(
   db: D1Database,
   input: {
-    versionId:               string,
-    actor:                   string,
-    reason:                  string,
-    ttlSeconds:              number,
-    expectedActiveVersionId: string | null,
+    versionId:                string,
+    actor:                    string,
+    reason:                   string,
+    ttlSeconds:               number,
+    expectedActiveVersionId:  string | null,
+    expectedSnapshotChecksum: string,
   },
 ): Promise<ApprovalV1> {
   const version = await readVersion(db, input.versionId);
@@ -1054,6 +1058,15 @@ async function approveVersion(
   }
   if (version.status !== 'validated' || version.snapshot_checksum === null) {
     throw new RegistryError('CANDIDATE_STATE_CONFLICT', `only a validated version can be approved`, input.versionId);
+  }
+  // a validated snapshot never changes, so a checksum that differs is of other changes than these
+  if (version.snapshot_checksum !== input.expectedSnapshotChecksum) {
+    throw new RegistryError(
+      'CANDIDATE_STATE_CONFLICT',
+      `registry version ${input.versionId} has the snapshot ${version.snapshot_checksum}, not ${input.expectedSnapshotChecksum} `
+        + `as this approval expected; read its changes again`,
+      input.versionId,
+    );
   }
 
   const id  = crypto.randomUUID();
@@ -1069,15 +1082,21 @@ async function approveVersion(
        FROM registry_state
        WHERE singleton_id = 1 AND active_version_id IS NOT ?2`,
       [
-        id, input.versionId, version.snapshot_checksum, input.actor, input.reason,
+        id, input.versionId, input.expectedSnapshotChecksum, input.actor, input.reason,
         new Date(now).toISOString(), new Date(now + input.ttlSeconds * 1000).toISOString(),
       ],
       pointerAt(input.expectedActiveVersionId),
     ),
-    db.prepare(`SELECT * FROM registry_approvals WHERE id = ?1`).bind(id),
+    // whether it is usable, by the rule every reader asks: an approval that expired before its write is not
+    db.prepare(
+      `SELECT approval.*, CASE WHEN ${approvalUsable('approval', 'state.active_version_id', '?2')} THEN 1 ELSE 0 END AS usable
+       FROM registry_approvals AS approval
+       JOIN registry_state AS state ON state.singleton_id = 1
+       WHERE approval.id = ?1`
+    ).bind(id, new Date(now).toISOString()),
   ]);
 
-  const row = (written!.results?.[0] ?? null) as RegistryApprovalRow | null;
+  const row = (written!.results?.[0] ?? null) as (RegistryApprovalRow & { usable: number }) | null;
   if (changedRows(inserted!) === 0 || row === null) {
     const active = await readActiveVersionId(db);
     throw new RegistryError(
@@ -1088,7 +1107,7 @@ async function approveVersion(
       input.versionId,
     );
   }
-  return approvalOf({ ...row, activation_id: null, usable: 1 });
+  return approvalOf({ ...row, activation_id: null });
 }
 
 /*

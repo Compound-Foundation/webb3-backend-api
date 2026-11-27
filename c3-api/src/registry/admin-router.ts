@@ -197,6 +197,24 @@ function requireExpectedActiveVersion(body: Record<string, unknown>): string | n
   return expectedActiveVersionId;
 }
 
+const SNAPSHOT_CHECKSUM = /^[0-9a-f]{64}$/;
+
+/*
+ * An approval covers the bytes that go live, so it names the snapshot its
+ * giver read the changes of: the snapshotChecksum the changes route answers,
+ * which a version has once it is validated, and keeps.
+ */
+function requireExpectedSnapshotChecksum(body: Record<string, unknown>): string {
+  const value = body.expectedSnapshotChecksum;
+  if (typeof(value) !== 'string' || !SNAPSHOT_CHECKSUM.test(value)) {
+    throw new ApiError(
+      'BAD_REQUEST',
+      `expectedSnapshotChecksum is required: the snapshotChecksum of the changes the approval was read from, 64 hex characters`,
+    );
+  }
+  return value;
+}
+
 /*
  * The period every environment configures for both administrative limiters
  * (wrangler.toml [3]). A refused caller is told to wait it out: by then its
@@ -543,10 +561,11 @@ async function routeAdmin(
       requireExactKeys(body, []);
       return await postValidate(context, versionId!);
     case 'approve':
-      requireExactKeys(body, [ 'reason', 'expectedActiveVersionId' ]);
-      return await postApproval(
-        admin, versionId!, requireReason(body), registryConfig(env).approvalTtlSeconds, requireExpectedActiveVersion(body),
-      );
+      requireExactKeys(body, [ 'reason', 'expectedActiveVersionId', 'expectedSnapshotChecksum' ]);
+      return await postApproval(admin, versionId!, requireReason(body), registryConfig(env).approvalTtlSeconds, {
+        expectedActiveVersionId:  requireExpectedActiveVersion(body),
+        expectedSnapshotChecksum: requireExpectedSnapshotChecksum(body),
+      });
     case 'activate':
       requireExactKeys(body, [ 'reason', 'expectedActiveVersionId' ]);
       return await postActivation(admin, versionId!, 'activate', requireReason(body), expectedActiveVersionOf(body));

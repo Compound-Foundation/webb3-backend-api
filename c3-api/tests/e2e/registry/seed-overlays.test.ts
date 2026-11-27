@@ -9,7 +9,7 @@ import type { MarketOverlay } from '../../../src/registry/overlay.js';
 import { readSnapshot, readUnreviewed } from '../../../src/registry/repository.js';
 
 import { applyMigrations } from '../../util/d1.js';
-import { loadRegistrySnapshotFixture, seedCandidate, sha256Hex } from '../../util/registry-fixture.js';
+import { loadRegistrySnapshotFixture, seedCandidate, sha256Hex, snapshotChecksumOf } from '../../util/registry-fixture.js';
 import { bodyFor, readSeed, readSeedComets, readSeedText } from '../../util/registry-seed.js';
 import { registryWorker } from '../../util/registry-worker.js';
 
@@ -151,7 +151,9 @@ t.test('the seed, cut to what the draft holds, reviews a first import once', asy
   t.equal(closed.status, 409, 'and takes no overlay from then on');
   t.match((await closed.json() as Refused).error.message, /validated registry version cannot be changed/, 'since it is no draft any more');
 
-  const approved = await post(`/registry/v1/admin/versions/${versionId}/approve`, { reason: 'read the seed', expectedActiveVersionId: null }, BOB);
+  const approved = await post(`/registry/v1/admin/versions/${versionId}/approve`, {
+    reason: 'read the seed', expectedActiveVersionId: null, expectedSnapshotChecksum: await snapshotChecksumOf(db, versionId),
+  }, BOB);
   t.equal(approved.status, 200, 'one admin approves it');
   const activated = await post(`/registry/v1/admin/versions/${versionId}/activate`, { reason: 'first registry version', expectedActiveVersionId: null });
   t.equal(activated.status, 200, 'and another switches it on');

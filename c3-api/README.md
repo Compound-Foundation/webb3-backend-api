@@ -290,8 +290,9 @@ what to expect at each step and what to do when something else happens, is
 A version is switched on by two people: an admin approves it, and an admin
 of another name activates it while the approval is in force, a day unless
 `COMET_REGISTRY_APPROVAL_TTL_S` says otherwise. The approval names the
-version on that its giver read the changes against, is of the change from
-that version to the approved one, and lets one activation through. A
+version on that its giver read the changes against and the snapshot those
+changes were of, is of the change from that version to that snapshot, and
+lets one activation through. A
 rollback needs nobody's approval, so that undoing a bad version takes one
 person, but it goes back one step only: to the version the one on replaced
 when it was last activated, if that is older. Going further back takes
@@ -343,13 +344,14 @@ curl --disable -X PUT .../registry/v1/admin/versions/$VERSION/overlays \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   --data-binary @registry/seed/production.json
 
-# 4. validate; one admin approves, and another activates. The first
-#    approval and activation expect nothing to be on; later ones name the
-#    version that is
+# 4. validate; one admin reads the changes and approves them, by the
+#    snapshot they are of, and another activates. The first approval and
+#    activation expect nothing to be on; later ones name the version that is
 curl --disable -X POST .../registry/v1/admin/versions/$VERSION/validate ...
+curl --disable .../registry/v1/admin/versions/$VERSION/changes ...
 curl --disable -X POST .../registry/v1/admin/versions/$VERSION/approve ... \
   -H "Authorization: Bearer $APPROVER_TOKEN" \
-  -d '{"reason": "read its changes", "expectedActiveVersionId": null}'
+  -d '{"reason": "read its changes", "expectedActiveVersionId": null, "expectedSnapshotChecksum": "<snapshotChecksum of the changes>"}'
 curl --disable -X POST .../registry/v1/admin/versions/$VERSION/activate ... \
   -d '{"reason": "first registry version", "expectedActiveVersionId": null}'
 ```

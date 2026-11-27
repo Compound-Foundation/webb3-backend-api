@@ -524,8 +524,10 @@ async function getChanges(context: RegistryContext, versionId: string): Promise<
 
   return jsonResponse({
     versionId,
-    status:       version.status,
-    comparedWith: activeId,
+    status:           version.status,
+    // the snapshot these changes are of, which an approval of them names; null until the version is validated
+    snapshotChecksum: version.snapshot_checksum,
+    comparedWith:     activeId,
     ...compareVersions(before === null ? null : orderNetworks(before), orderNetworks(after), new Set(unreviewed.markets)),
   });
 }
@@ -636,21 +638,22 @@ async function postActivation(
 
 /*
  * Approves a validated version for an activation by somebody else, against
- * the version its giver read the changes against, which must still be on
- * (approveVersion). Every request records an approval of its own.
+ * the version its giver read the changes against, which must still be on,
+ * and of the snapshot those changes were of (approveVersion). Every request
+ * records an approval of its own.
  */
 async function postApproval(
   context: AdminContext,
   versionId: string,
   reason: string,
   ttlSeconds: number,
-  expectedActiveVersionId: string | null,
+  expected: { expectedActiveVersionId: string | null, expectedSnapshotChecksum: string },
 ): Promise<Response> {
   // a version that does not exist is not a state conflict, and answers as every other route does
   if (await readVersion(context.db, versionId) === null) {
     throw new ApiError('NOT_FOUND', `no registry version with that id`);
   }
-  const approval = await approveVersion(context.db, { versionId, actor: context.actor, reason, ttlSeconds, expectedActiveVersionId });
+  const approval = await approveVersion(context.db, { versionId, actor: context.actor, reason, ttlSeconds, ...expected });
   return jsonResponse({ approval });
 }
 

@@ -10,7 +10,7 @@ import { overlayOfMarket } from '../../../src/registry/overlay.js';
 import { recordValidationResults } from '../../../src/registry/repository.js';
 
 import { applyMigrations } from '../../util/d1.js';
-import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate, snapshotChecksumOf, validateSeeded } from '../../util/registry-fixture.js';
 import { registryWorker } from '../../util/registry-worker.js';
 
 /*
@@ -85,8 +85,10 @@ function admin(path: string, body: unknown = {}, token: string = ADMIN_TOKEN): [
  * activates it.
  */
 async function switchOn(versionId: string, reason: string, replacing: string | null = null): ReturnType<typeof server.fetch> {
+  const expectedSnapshotChecksum = await snapshotChecksumOf((await server.getWorker<Env>().getEnv()).APP_DB, versionId);
   await server.fetch(...admin(
-    `/registry/v1/admin/versions/${versionId}/approve`, { reason: `approved: ${reason}`, expectedActiveVersionId: replacing }, BOB,
+    `/registry/v1/admin/versions/${versionId}/approve`,
+    { reason: `approved: ${reason}`, expectedActiveVersionId: replacing, expectedSnapshotChecksum }, BOB,
   ));
   return server.fetch(...admin(`/registry/v1/admin/versions/${versionId}/activate`, { reason }, ALICE));
 }
@@ -562,7 +564,9 @@ t.test('a move decided against a version someone has since replaced is refused',
   const move = async (action: string, versionId: string, expected: string | null) => {
     if (action === 'activate') {
       await server.fetch(...admin(
-        `/registry/v1/admin/versions/${versionId}/approve`, { reason: `approved against ${expected}`, expectedActiveVersionId: expected }, BOB,
+        `/registry/v1/admin/versions/${versionId}/approve`,
+        { reason: `approved against ${expected}`, expectedActiveVersionId: expected, expectedSnapshotChecksum: await snapshotChecksumOf(db, versionId) },
+        BOB,
       ));
     }
     return server.fetch(...admin(
@@ -1484,7 +1488,7 @@ t.test('what a candidate changes against the active version is served while it i
   const response = await server.fetch(`/registry/v1/admin/versions/${versionId}/changes`, auth);
   t.equal(response.status, 200);
   const changes = await response.json() as {
-    status: string, comparedWith: string,
+    status: string, snapshotChecksum: string | null, comparedWith: string,
     markets: {
       added:    Array<{ scope: string, reviewed: boolean }>,
       removed:  string[],
@@ -1493,6 +1497,7 @@ t.test('what a candidate changes against the active version is served while it i
     },
   };
   t.equal(changes.status, 'importing', 'a candidate that still imports is comparable');
+  t.equal(changes.snapshotChecksum, null, 'with no snapshot yet for an approval to name');
   t.equal(changes.comparedWith, activeId, 'against the version that is on');
   t.same(
     changes.markets.added.map(({ scope, reviewed }) => ({ scope, reviewed })),
