@@ -11,6 +11,7 @@ import { readSnapshot, snapshotChecksum } from '../../../src/registry/repository
 import { applyMigrations } from '../../util/d1.js';
 import { interleaved } from '../../util/interleave.js';
 import { loadRegistrySnapshotFixture, seedCandidate } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * Administrative commands racing each other over one candidate.
@@ -22,7 +23,7 @@ import { loadRegistrySnapshotFixture, seedCandidate } from '../../util/registry-
  * command that does not check that what it read still holds loses an update,
  * or records a decision about rows that are no longer there.
  */
-const server = createTestHarness({ workers: [ { configPath: './wrangler.toml' } ] });
+const server = createTestHarness({ workers: [ registryWorker() ] });
 
 t.before(async () => {
   await server.listen();

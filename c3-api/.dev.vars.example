@@ -2,8 +2,12 @@
 # uncomment only the values you set: a value here overrides wrangler.toml
 # [vars], and an empty value overrides it with an empty string.
 #
-# Deployed environments do not define these in wrangler.toml; set them with:
-#   npx wrangler secret put <NAME> --env <environment>
+# Deployed environments do not define these in wrangler.toml; set them from
+# c3-api, with the account check of "Before you start" in REGISTRY_RUNBOOK.md
+# first:
+#   npx tsc -p tsconfig.scripts.json && ENVIRONMENT=<environment> node dist/scripts/environment-address.js > /dev/null \
+#     && npx wrangler kv key list --binding kv_mainnet --env <environment> --remote --prefix account-check > /dev/null \
+#     && npx wrangler secret put <NAME> --env <environment>
 
 # Tally API key for the governance routes
 # TALLY_API_KEY=
@@ -22,14 +26,16 @@
 # Optional Blocknative API key for /legacy/mainnet/gas-price
 # BLOCK_NATIVE_API_KEY=
 
-# Comet registry admin API: the SHA-256 of the admin bearer token, as 64 hex
-# digits, never the token itself
-# COMET_REGISTRY_ADMIN_TOKEN_HASH=
-
-# Optional name the registry records as the actor of every administrative
-# change: activations and rollbacks, overlay events, and the syncs it asks
-# for. Unset, it is registry-admin:<ENVIRONMENT>
-# COMET_REGISTRY_ADMIN_ACTOR=
+# Comet registry admin API: its tokens, as a JSON list on one line, in single
+# quotes. Each entry names who holds the token, the SHA-256 of the token as
+# 64 hex digits (never the token itself), its role — monitor, reader,
+# operator or admin — and the last instant in UTC it is taken at, or null.
+# The name is the actor the registry records for what the token changes:
+# activations and rollbacks, overlay events, and the syncs it asks for.
+# Unset, blank or [], the admin API refuses every request. A deployed
+# environment's list is one secret, which Cloudflare keeps to 5 KB: a few
+# dozen tokens (REGISTRY_RUNBOOK.md, The admin tokens)
+# COMET_REGISTRY_ADMIN_TOKENS='[{"name":"alice","sha256":"<64 hex digits>","role":"admin","notAfter":null}]'
 
 # GitHub token the registry import reads the Comet repository with: optional
 # here, required in stage and production. Without one GitHub allows 60 API

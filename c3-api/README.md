@@ -56,10 +56,15 @@ market contract for `{contract}` and a network (e.g. mainnet) for
 
 The registry's public reads answer `503 REGISTRY_NOT_ACTIVE` until a registry
 version is active. Bring one up as an operator brings up an environment: put
-the hash of an admin token of your own into `.dev.vars` before starting the
-worker ([The admin token](./REGISTRY_RUNBOOK.md#the-admin-token)), and follow
+the hash of an admin token of your own into `.dev.vars`, as an entry of
+`COMET_REGISTRY_ADMIN_TOKENS` with the role `admin`, before starting the
+worker ([The admin tokens](./REGISTRY_RUNBOOK.md#the-admin-tokens)), and follow
 [Bringing an environment up for the first time](./REGISTRY_RUNBOOK.md#bringing-an-environment-up-for-the-first-time)
-with `API=http://localhost:8787`.
+from the root of the checkout, with your token in `TOKEN`, the scripts its
+requests check the routing with built,
+`(cd c3-api && npx tsc -p tsconfig.scripts.json)`, and
+`export API=http://localhost:8787 NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1`:
+`NO_PROXY` and `no_proxy` keep the token off any proxy set for plain http.
 
 See [API.md](./API.md) for documentation of routes with examples.
 
@@ -97,9 +102,9 @@ and an hourly Cron trigger for its resumable sync.
 `/registry/v1/admin/` before its token is checked, 60 a minute for each
 client address (`CF-Connecting-IP`; an IPv6 client by its /64), so wrong
 tokens and unknown paths are paid for too; `REGISTRY_ADMIN_RATE_LIMITER`
-counts every authenticated one, reads as well as commands, 30 a minute for
-each admin token and route family. Every environment gives each its own
-namespace id. One invocation imports
+counts every authenticated one on a route its token's role reaches, reads as
+well as commands, 30 a minute for each admin token and route family. Every
+environment gives each its own namespace id. One invocation imports
 `COMET_SYNC_MARKETS_PER_INVOCATION` markets and leaves the rest to the next
 one, resuming from the checkpoints in `APP_DB`; upstream is checked for a new
 commit once per `COMET_UPSTREAM_CHECK_INTERVAL_S`. The chain is read again for
@@ -135,11 +140,16 @@ the alert `configuration-invalid`, as it does a `COMET_SOURCE_REPOSITORY` or
 
 The secrets, and every other value an environment sets outside
 `wrangler.toml` — the registry's among them, such as
-`COMET_REGISTRY_ADMIN_ACTOR` — are listed in
+`COMET_GITHUB_TOKEN` — are listed in
 [./.dev.vars.example](./.dev.vars.example). Copy it to
-`.dev.vars` for local runs; deployed environments set them with
-`npx wrangler secret put <NAME> --env <environment>`, never in
-`wrangler.toml`. Stage and production set `COMET_GITHUB_TOKEN`: without a
+`.dev.vars` for local runs. Deployed environments set them, never in
+`wrangler.toml`, from `c3-api`, with the account check of
+[Before you start](./REGISTRY_RUNBOOK.md#before-you-start) first:
+`npx tsc -p tsconfig.scripts.json && ENVIRONMENT=<environment> node dist/scripts/environment-address.js > /dev/null && npx wrangler kv key list --binding kv_mainnet --env <environment> --remote --prefix account-check > /dev/null && npx wrangler secret put <NAME> --env <environment>`.
+The admin token list, `COMET_REGISTRY_ADMIN_TOKENS`, goes in
+only as step 4 of [The admin tokens](./REGISTRY_RUNBOOK.md#the-admin-tokens)
+puts it, after its check. Every deployed environment sets
+`COMET_GITHUB_TOKEN`: without a
 token GitHub allows 60 API requests an hour per address, and a Worker shares
 its address with every other Worker that leaves Cloudflare through it.
 
@@ -259,8 +269,14 @@ has not created yet, is a `500`, never masked by the cache.
 
 An operator changes what the registry serves by importing, reviewing,
 validating and activating a version; see the admin routes in
-[./API.md](./API.md). The step-by-step procedure, with what to expect at each
-step and what to do when something else happens, is
+[./API.md](./API.md). Each administrative token has a name and a role, and
+an environment lists its tokens in the secret `COMET_REGISTRY_ADMIN_TOKENS`
+([The admin tokens](./REGISTRY_RUNBOOK.md#the-admin-tokens)); without that
+list, the admin API refuses every request. Every change a token makes is
+recorded under its name, but for a validation, which decides nothing and
+records only its checks; its role — `monitor`, `reader`, `operator` or
+`admin` — bounds the routes it may call. The step-by-step procedure, with
+what to expect at each step and what to do when something else happens, is
 [./REGISTRY_RUNBOOK.md](./REGISTRY_RUNBOOK.md).
 
 ## Bringing a registry up from nothing
@@ -288,28 +304,29 @@ Those decisions are checked in as the body of `PUT /versions/{id}/overlays`,
 [`registry/seed/production.json`](./registry/seed/README.md), with each
 market's Comet beside it in `production.comets.json`. The operator checks
 that the candidate holds the seed's markets and sends the file, and nothing
-runs outside the environment but the requests:
+runs outside the environment but the requests, which the runbook sends
+behind a check of the routing, each in the same command:
 
 ```sh
 # 1. import the whole source in one request. The run ends "heldForReview";
 #    note the registryVersionId it answers
-curl -X POST .../registry/v1/admin/sync -H "Authorization: Bearer $TOKEN" \
+curl --disable -X POST .../registry/v1/admin/sync -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{}'
 
 # 2. check that the candidate holds every market of the seed, under the Comet
 #    production.comets.json names for it
-curl .../registry/v1/admin/versions/$VERSION/changes -H "Authorization: Bearer $TOKEN" \
+curl --disable .../registry/v1/admin/versions/$VERSION/changes -H "Authorization: Bearer $TOKEN" \
   | jq -r '.markets.added[] | "\(.scope) \(.market.contracts.comet)"'
 
 # 3. send the seed: every decision, one transaction
-curl -X PUT .../registry/v1/admin/versions/$VERSION/overlays \
+curl --disable -X PUT .../registry/v1/admin/versions/$VERSION/overlays \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   --data-binary @registry/seed/production.json
 
 # 4. validate, then activate. The first activation expects nothing to be on;
 #    a later one names the version that is
-curl -X POST .../registry/v1/admin/versions/$VERSION/validate ...
-curl -X POST .../registry/v1/admin/versions/$VERSION/activate ... \
+curl --disable -X POST .../registry/v1/admin/versions/$VERSION/validate ...
+curl --disable -X POST .../registry/v1/admin/versions/$VERSION/activate ... \
   -d '{"reason": "first registry version", "expectedActiveVersionId": null}'
 ```
 
@@ -361,12 +378,12 @@ the new market — and the new network with it, since validation refuses a
 network nobody reviewed that serves a market — and validate:
 
 ```sh
-curl -X POST .../registry/v1/admin/sync ... \
+curl --disable -X POST .../registry/v1/admin/sync ... \
   -d '{"forceNewAttempt": true, "holdForReview": true, "reason": "review the new market"}'
 # a market of a chain no version described yet needs its network reviewed too
-curl -X PUT  .../registry/v1/admin/versions/$VERSION/networks/<chain>/overlay ...
-curl -X PUT  .../registry/v1/admin/versions/$VERSION/markets/<chain>/<key>/overlay ...
-curl -X POST .../registry/v1/admin/versions/$VERSION/validate ...
+curl --disable -X PUT  .../registry/v1/admin/versions/$VERSION/networks/<chain>/overlay ...
+curl --disable -X PUT  .../registry/v1/admin/versions/$VERSION/markets/<chain>/<key>/overlay ...
+curl --disable -X POST .../registry/v1/admin/versions/$VERSION/validate ...
 ```
 
 A new attempt at the same commit inherits what was reviewed for the attempts

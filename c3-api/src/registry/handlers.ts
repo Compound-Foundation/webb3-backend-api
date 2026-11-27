@@ -45,7 +45,6 @@ import { cancelRun } from './sync.js';
  */
 type RegistryContext = {
   db:    D1Database,
-  actor: string,
   // the id the request is answered under, so a line logged about what it came to can name it
   requestId: string,
   /*
@@ -79,6 +78,16 @@ type RegistryContext = {
    * so it is paid for here instead, while nobody is waiting.
    */
   warm: (versionId: string) => Promise<void>,
+};
+
+/*
+ * What an administrative command is given besides: the name of the token
+ * that authenticated it, which every audit row the command writes records as
+ * its actor. Only the admin router makes one, from the token it checked, so
+ * nothing a request sends can name who it was.
+ */
+type AdminContext = RegistryContext & {
+  actor: string,
 };
 
 const SCHEMA_VERSION = 1;
@@ -469,7 +478,7 @@ function syncRunResponse(run: SyncRunRecord, items: SyncRunItemRecord[]): Respon
  * invocation holds, which may be importing into it, until its lease has run
  * out.
  */
-async function cancelSyncRun(context: RegistryContext, syncRunId: string, reason: string): Promise<Response> {
+async function cancelSyncRun(context: AdminContext, syncRunId: string, reason: string): Promise<Response> {
   const { cancelled, run, items } = await cancelRun(context.db, syncRunId, { actor: context.actor, reason });
   if (run === null) {
     throw new ApiError('NOT_FOUND', `no sync run with that id`);
@@ -596,7 +605,7 @@ async function postValidate(context: RegistryContext, versionId: string): Promis
 }
 
 async function postActivation(
-  context: RegistryContext,
+  context: AdminContext,
   versionId: string,
   action: ActivationAction,
   reason: string,
@@ -619,7 +628,7 @@ async function postActivation(
   return jsonResponse(result, { headers: registryHeaders(result.registryVersion) });
 }
 
-export type { RegistryContext };
+export type { AdminContext, RegistryContext };
 
 export {
   cancelSyncRun,

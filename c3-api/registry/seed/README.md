@@ -33,10 +33,12 @@ repository, and they reach neither `dist` nor the bundle.
 Steps 2 and 3 of
 [the first bring-up](../../REGISTRY_RUNBOOK.md#bringing-an-environment-up-for-the-first-time),
 from the root of a checkout: check that the draft holds every market of the
-file under the Comet the companion names, then send it.
+file under the Comet the companion names, then send it, each request behind
+the runbook's routing check, in the same command, as every request there
+that carries a token is.
 
 ```sh
-curl -s -X PUT "$API/registry/v1/admin/versions/$V/overlays" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 -X PUT "$API/registry/v1/admin/versions/$V/overlays" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   --data-binary @c3-api/registry/seed/production.json | jq '.error // {changed, unreviewed}'
 ```
@@ -56,14 +58,14 @@ holds, the networks, the markets and their `expectedDigests` together — a key
 in `expectedDigests` without its document is refused with `400`:
 
 ```sh
-curl -sS "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" > changes.json
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" > changes.json &&
 jq --slurpfile changes changes.json '
   ([ $changes[0].networks.added[] | tostring ] + [ $changes[0].markets.added[].scope ]) as $held
   | (.networks, .markets, .expectedDigests) |= with_entries(select(.key | IN($held[])))
 ' c3-api/registry/seed/production.json > seed.json
 ```
 
-and send `seed.json` the same way. What it leaves out stays switched off, and
+and send `seed.json` as [Sending it](#sending-it) does, with `--data-binary @seed.json`. What it leaves out stays switched off, and
 is described after the bring-up
 ([REGISTRY_RUNBOOK.md](../../REGISTRY_RUNBOOK.md#describing-a-new-market)).
 

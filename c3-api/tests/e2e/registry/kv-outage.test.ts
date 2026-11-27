@@ -28,7 +28,7 @@ type Envelope = { error: { code: string, message: string, requestId: string } };
 async function envWith(overrides: Partial<Env>): Promise<Env> {
   return makeTestEnv({
     MEMORY_CACHE_SEED:                'registry-kv-outage',
-    COMET_REGISTRY_ADMIN_TOKEN_HASH:  await sha256(ADMIN_TOKEN),
+    COMET_REGISTRY_ADMIN_TOKENS:      JSON.stringify([ { name: 'test-admin', sha256: await sha256(ADMIN_TOKEN), role: 'admin', notAfter: null } ]),
     REGISTRY_ADMIN_RATE_LIMITER:      { limit: async () => ({ success: true }) },
     REGISTRY_ADMIN_AUTH_RATE_LIMITER: { limit: async () => ({ success: true }) },
     kv_registry:                      refusingKv(),

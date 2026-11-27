@@ -12,6 +12,7 @@ import {
   seedCandidate,
   writeCandidateSnapshot,
 } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 import { isRegistryError } from '../../../src/registry/errors.js';
 import {
   createCandidate,
@@ -32,7 +33,7 @@ import {
  * tests assert that the repository writes rows the triggers accept and that
  * its checksum matches the frozen contract.
  */
-const server = createTestHarness({ workers: [ { configPath: './wrangler.toml' } ] });
+const server = createTestHarness({ workers: [ registryWorker() ] });
 
 t.before(async () => {
   await server.listen();

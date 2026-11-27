@@ -14,6 +14,7 @@ import { activateVersion, markInvalid, recordValidationResults } from '../../../
 import { applyMigrations } from '../../util/d1.js';
 import { FakeChain, fakeChain } from '../../util/fake-chain.js';
 import { activateSeeded, loadRegistrySnapshotFixture, seedCandidate, validateSeeded } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * The status route: one answer a monitor polls and an operator reads.
@@ -23,18 +24,15 @@ import { activateSeeded, loadRegistrySnapshotFixture, seedCandidate, validateSee
  * "alerts is empty" without the monitor knowing the registry's rules.
  */
 const ADMIN_TOKEN = 'registry-admin-token-for-tests';
-const SECRETS     = { COMET_REGISTRY_ADMIN_TOKEN_HASH: await sha256Hex(ADMIN_TOKEN) };
+const SECRETS     = {
+  COMET_REGISTRY_ADMIN_TOKENS: JSON.stringify([ { name: 'test-admin', sha256: await sha256Hex(ADMIN_TOKEN), role: 'admin', notAfter: null } ]),
+};
 
-const server = createTestHarness({
-  workers: [ {
-    configPath: './wrangler.toml',
-    secrets:    SECRETS,
-  } ],
-});
+const server = createTestHarness({ workers: [ registryWorker(SECRETS) ] });
 
 // the worker again, with `vars` set over the ones wrangler.toml gives it, until the next freshDatabase
 async function withVars(vars: Record<string, string>): Promise<void> {
-  await server.update({ workers: [ { configPath: './wrangler.toml', secrets: SECRETS, vars } ] });
+  await server.update({ workers: [ { ...registryWorker(SECRETS), vars } ] });
 }
 
 t.before(async () => {

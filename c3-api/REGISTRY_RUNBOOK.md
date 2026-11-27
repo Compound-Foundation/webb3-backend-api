@@ -18,46 +18,189 @@ switch, users see no change at all, and after it, one command switches back.
 
 ## Before you start
 
+The commands are for a POSIX shell, zsh or bash, on macOS or Linux; on
+Windows, run them in WSL. Everything here works on one environment at a
+time, which you choose once, before anything else: set `ENVIRONMENT` to the
+environment's name in `wrangler.toml`, as `export ENVIRONMENT=production`
+does for production. Nothing in this runbook sets it again: every command
+below that reaches an environment takes it, and stops while it is not set.
+
+Log in to Cloudflare in the checkout's `c3-api`, with its dependencies
+installed ([Getting Started](./README.md#getting-started)), after the
+address read, which needs no login and stops while one of the variables
+below points Wrangler elsewhere:
+`npx tsc -p tsconfig.scripts.json && node dist/scripts/environment-address.js > /dev/null && npx wrangler login`,
+which may do everything this runbook does. Or set a `CLOUDFLARE_API_TOKEN`
+that may read Workers KV, the environment's zone and its Workers routes
+(Zone Read and Workers Routes Read), and edit Workers scripts. Then read the
+environment's address, `API`, in `c3-api`:
+
+```sh
+unset API; npx tsc -p tsconfig.scripts.json && node dist/scripts/environment-routing.js && API="$(node dist/scripts/environment-address.js)" && export API && echo "API=$API"
+```
+
+It prints the https address of the environment's custom domain once it has
+checked how Cloudflare routes it, or stops, leaving `API` empty, so that no
+token goes there:
+
+- while `ENVIRONMENT` names no environment deployed to one custom domain of
+  its own. That is the one address `wrangler.toml` gives: Cloudflare creates
+  the custom domain's DNS record, which points to the Worker, and its
+  certificate. A route of a zone is no such address: it runs the Worker only
+  for the requests the zone's DNS sends through Cloudflare, and a route
+  written with `http://` only for plain http;
+- while Cloudflare routes the domain otherwise, which `wrangler.toml` cannot
+  show. The check reads, with your login, the zone of the host, whose account
+  must hold the environment's `kv_mainnet`, the Worker the custom domain is
+  attached to, which must be the environment's, and the zone's Workers
+  routes, of which none may run another Worker on the host: a route runs
+  before a custom domain, and would take every request, its token too. One
+  that a more specific route without a Worker would negate is refused all
+  the same, since Cloudflare lists exceptions to its route specificity among
+  its known issues: no route of another Worker may cover the host. A login
+  that may not read the zone or its routes stops the check at
+  `no active zone that this login reads …`, or at a `403` for the routes;
+- while this machine's clock is more than an hour from Cloudflare's, which
+  its answers carry: step 4 counts a rotation's 30 days by it;
+- while a variable that points Wrangler elsewhere than Cloudflare's own API
+  is set, in the shell or in a `.env` file of `c3-api` that Wrangler reads
+  for the environment (`.env`, `.env.local`, `.env.<environment>` and
+  `.env.<environment>.local`): `CLOUDFLARE_API_BASE_URL` or its old name
+  `CF_API_BASE_URL`, `WRANGLER_API_ENVIRONMENT`, `CLOUDFLARE_COMPLIANCE_REGION`,
+  or the login's `WRANGLER_AUTH_DOMAIN`, `WRANGLER_AUTH_URL`,
+  `WRANGLER_TOKEN_URL` and `WRANGLER_REVOKE_URL`. With one of the first
+  four, Wrangler can send its requests there, your login and the secrets
+  the commands below put among them, and with one of the login's, your
+  login, while the check reads Cloudflare's own API. Unset it, or remove it
+  from the file. `DOTENV_KEY` too, with which Wrangler reads each of those
+  files from the encrypted `.vault` beside it, such as `.env.vault`, where
+  the check cannot look. The
+  address read alone stops on all of them, which is why it comes before
+  the login.
+
+For a worker you run on your own machine, such as the preflight's, `API` is
+`http://localhost:8787` instead, which the check passes without reading
+anything: the token does not leave the machine.
+
+Wrangler puts or deletes a secret in the Worker `wrangler.toml` names for the
+environment, in the account it uses: the one `CLOUDFLARE_ACCOUNT_ID` names,
+in the shell or in a `.env` file of `c3-api`, which Wrangler reads too
+(`wrangler.toml` sets no `account_id`, which would come first), else the one
+it remembers from an earlier run in this checkout, in
+`node_modules/.cache/wrangler`, else the only one you can reach, and through
+the API it uses, another than Cloudflare's own while one of the variables
+above points it elsewhere. So every command below that puts or deletes a
+secret first reads the environment's address, in the same command,
+`node dist/scripts/environment-address.js > /dev/null`, which stops while
+one of them is set and needs neither a login nor a deploy, and then checks
+the account: it lists the keys of the environment's `kv_mainnet` that start
+with
+`account-check`, of which there are none, by the namespace id `wrangler.toml`
+gives it, with
+`npx wrangler kv key list --binding kv_mainnet --env "$ENVIRONMENT" --remote --prefix account-check`.
+That id pins the account: only the environment's account holds the
+namespace, which its deployed Worker already reads, so in any other account
+the list fails, and the command stops before it writes. Read the address and
+check the account the same way, in the same command, before you create the
+environment's database or namespaces, as `wrangler.toml` asks. The
+migrations need no account check: they write to the environment's database
+by its id, which no other account holds. They read the address first all
+the same, since one of the variables above would send them, and your login,
+elsewhere.
+
+The account check never asks, so it also stops while you can reach several
+accounts and none is chosen, and while you are not logged in.
+`Authentication error [code: 10000]` is a login or token that cannot read
+the environment's account. When it stops for another account, run
+`export CLOUDFLARE_ACCOUNT_ID=<its account ID>` with the account the
+environment runs in, one of those `npx wrangler whoami` lists, and run the
+whole command again: set for the check alone, it would not reach the
+commands after it.
+
 - The environment's database has every migration applied, and this happened
   **before** the worker release that needs it:
-  `npm run d1:migrate:stage` or `npm run d1:migrate:production`.
+  `npx tsc -p tsconfig.scripts.json && node dist/scripts/environment-address.js > /dev/null && npm run "d1:migrate:$ENVIRONMENT"`.
 - The worker is deployed, and it reaches the node provider proxy.
-- The environment has `COMET_REGISTRY_ADMIN_TOKEN_HASH` set, and you have the
-  admin token itself — not its hash. See
-  [The admin token](#the-admin-token) if the environment has none yet.
-- Stage and production have `COMET_GITHUB_TOKEN` set. Without a token GitHub
+- The environment has admin tokens, and you hold one of your own with the
+  role `admin` — the token itself, not its hash. See
+  [The admin tokens](#the-admin-tokens) if the environment has none yet, or
+  none for you.
+- The environment has `COMET_GITHUB_TOKEN` set. Without a token GitHub
   allows the import 60 API requests an hour per address, which the Worker
   shares with every other Worker leaving Cloudflare through it, and an import
   fails with `SOURCE_REQUEST_FAILED`, "its rate limit is used up". A
   fine-grained GitHub token with read-only access to public repositories, and
-  no other permission, is enough; Wrangler prompts for it:
+  no other permission, is enough; Wrangler prompts for it once the account
+  is checked, run in `c3-api`:
 
   ```sh
-  npx wrangler secret put COMET_GITHUB_TOKEN --env stage
-  npx wrangler secret put COMET_GITHUB_TOKEN --env production
+  npx tsc -p tsconfig.scripts.json && node dist/scripts/environment-address.js > /dev/null \
+    && npx wrangler kv key list --binding kv_mainnet --env "${ENVIRONMENT:?export it first}" --remote --prefix account-check > /dev/null \
+    && npx wrangler secret put COMET_GITHUB_TOKEN --env "$ENVIRONMENT"
   ```
 
 - [The preflight](#the-preflight) has passed on the commit being deployed.
 
-Nothing runs on your machine but the requests: the Worker being deployed
-imports the source, and checks the decisions you send it against the source
-and the chain. Those decisions are the seed of the commit being deployed,
-[`c3-api/registry/seed/production.json`](./registry/seed/README.md), so run
-the terminal commands from the root of a checkout of that commit, with `jq`
-installed, after:
+Nothing of the bring-up runs on your machine but the requests and the
+address read above: the Worker being deployed imports the source, and checks
+the decisions you send it against the source and the chain. Those decisions
+are the seed of the commit being deployed,
+[`c3-api/registry/seed/production.json`](./registry/seed/README.md), so send
+the requests to `API` from the root of a checkout of that commit, with `jq`
+installed, after setting your token:
 
 ```sh
-export API=https://v3-api-stage.compound.xyz        # the environment you work on
-export TOKEN='<admin token>'
+export TOKEN='<your admin token>'
 ```
+
+Once the environment lists your token, the status names the environment that
+answers at `API`, which must be `$ENVIRONMENT`; any other answer is one step 5
+of [The admin tokens](#the-admin-tokens) explains. Read it in `c3-api`, the
+routing checked again right before it, as every request that carries a
+token is: a route can change between one command and the next, and the
+check stops the request when it has:
+
+```sh
+API="$API" node dist/scripts/environment-routing.js && curl --disable -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq -r '.environment // .error.code'
+```
+
+Every command below that sends your token runs the same check first, in
+the same command: from the root of the checkout,
+`(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable …`,
+and in step 5 of [The admin tokens](#the-admin-tokens), which runs in
+`c3-api`, `API="$API" node dist/scripts/environment-routing.js && curl --disable …`.
+Send every request that carries your token this way, those this runbook
+names only in prose too. A route that has moved since, while you waited for
+an import or after a deploy, stops the command before the token goes out,
+and running it again checks again. `API="$API"` hands the check the address
+`curl` uses, exported or not. A worker on your own machine passes the check
+at once. These commands also pass `--disable` first, so that curl reads no
+`.curlrc`, whose `url` or `header` lines would send the request, the token
+with it, somewhere the check never looked, and `--noproxy` for the loopback
+addresses, so no proxy set for plain http sees a token sent to such a worker.
+
+Run every other `npm run`, `npx` and `node` command in the checkout's `c3-api`,
+which holds the Worker's configuration and the Wrangler it is built with:
+from the root, npm finds no such script, and Wrangler no Worker.
 
 Every step shows the terminal command, and beside it the same request for
 Postman, written as the request itself: the method and URL on the first line,
-then the headers, then the body. To use them:
+then the headers, then the body. Postman is for a worker you run on your own
+machine alone. It runs no routing check, and nothing ties a check run in a
+terminal to the request it then sends, so send a token to a deployed
+environment from the terminal only, where every command runs the check first,
+in the same command. To use them:
 
-- Create a Postman environment with the variables `API` (the environment's
-  address, e.g. `https://v3-api-stage.compound.xyz`, or `http://localhost:8787`),
-  `TOKEN` (the admin token) and `V` (the draft's id, filled in step 1).
+- Create a Postman environment with the variables `API`,
+  `http://localhost:8787`; `TOKEN`, the admin token your worker's list in
+  `.dev.vars` takes, as its current value alone, its initial value left empty,
+  since Postman shares an initial value with your team along with the
+  environment; and `V`, the draft's id, filled in step 1. Send from the
+  Postman desktop app, or on the web through the Desktop Agent: the Cloud
+  Agent sends each request from Postman's servers, which do not reach your
+  machine. Add `localhost`, `127.0.0.1` and `::1` to the proxy bypass of
+  **Settings → Proxy**, or turn the proxy off, so the token in plain http goes
+  to no proxy.
 - Send every administrative request with `Authorization: Bearer {{TOKEN}}` —
   or set **Authorization → Bearer Token → `{{TOKEN}}`** once on the collection
   and let the requests inherit it.
@@ -65,70 +208,269 @@ then the headers, then the body. To use them:
   `Content-Type: application/json` itself.
 - Postman shows the whole answer; each step says which fields to look at.
 
-### The admin token
+### The admin tokens
 
-Every administrative route takes one bearer token per environment, and the
-worker keeps only its SHA-256: what is configured cannot be used as the
-token. Issue the token once, keep it in the team's password manager, and put
-the hash — never the token — into the environment.
+Every administrative route takes a bearer token. Each person who works on
+the registry, and each monitor, has a token of their own, with a name and a
+role. The name is who holds the token: every change it makes is recorded
+under that name, but for a validation, which decides nothing and records
+only its checks. The role is what it may call, and each role may call
+everything the one before it may:
 
-**1. Make a token.** 32 random bytes are plenty:
+| Role | May call | For |
+|---|---|---|
+| `monitor` | `GET /admin/status` | a monitor that polls the status |
+| `reader` | every `GET` under `/admin` | someone who reads drafts and versions |
+| `operator` | besides, imports, cancelling a run, and overlay writes | someone who reviews drafts |
+| `admin` | besides, validate, activate and rollback | someone who decides what is served |
+
+An import not held for review validates its draft by itself once it
+completes, so an `operator` can import a version that validates; switching
+it on is an `admin`'s.
+
+The worker keeps only the SHA-256 of each token: what is configured cannot
+be used as a token. Tokens go to their holders through the team's password
+manager, and their hashes — never the tokens — into the environment, as one
+secret: the list `COMET_REGISTRY_ADMIN_TOKENS`. Whoever can put that secret
+can make a token of any name and role, so leave it to the environment's
+owner. Each environment has tokens and a list of its own: a token is made
+for one environment and listed in no other.
+
+The steps below work on the environment `ENVIRONMENT` names, as
+[Before you start](#before-you-start) sets it; set it there first if you came
+here directly. The environment's list is the file
+`~/tokens.$ENVIRONMENT.json`. Step 4 puts it with `--env "$ENVIRONMENT"`, and
+reads the environment's address into `API` again, where step 5 checks the
+token.
+
+A worker you run on your own machine, such as the preflight's, takes its
+list from `.dev.vars` instead. Make its token and write its list as steps 1
+to 3 say, as `~/tokens.local.json`, the entries of each new token's holder
+checked with the command step 3 gives for it; put it into `.dev.vars` as the
+end of step 4 says, never with Wrangler, before the worker starts; and check
+it as step 5 says, after `export API=http://localhost:8787`, where the
+status names `local`.
+
+**1. Make a token** for its holder. 32 random bytes are plenty:
 
 ```sh
-export TOKEN="$(openssl rand -hex 32)"
+export NEW_TOKEN="$(openssl rand -hex 32)"
 ```
 
 **2. Hash it.** Use `printf`, not `echo`: `echo` adds a newline, the newline
 would be part of what is hashed, and the token you then send would not match.
 
 ```sh
-printf '%s' "$TOKEN" | shasum -a 256 | cut -d ' ' -f 1
+printf '%s' "$NEW_TOKEN" | shasum -a 256 | cut -d ' ' -f 1
 ```
 
 On Linux `sha256sum` takes the place of `shasum -a 256`, and OpenSSL works
 anywhere. Keep the `cut` with either: each prints more than the hash — `  -`
-or ` *stdin` after it — and the environment takes the 64 hex digits alone.
+or ` *stdin` after it — and the list takes the 64 hex digits alone.
 
 ```sh
-printf '%s' "$TOKEN" | openssl dgst -sha256 -r | cut -d ' ' -f 1
+printf '%s' "$NEW_TOKEN" | openssl dgst -sha256 -r | cut -d ' ' -f 1
 ```
 
-**3. Put the hash into the environment.** Wrangler prompts for the value and
-stores it as a secret, so it never reaches the repository:
+**3. Write the list**, `~/tokens.$ENVIRONMENT.json`, with an entry for each
+token. Keep it outside the checkout, where git would not ignore it:
+
+```json
+[
+  { "name": "alice",          "sha256": "<the hash from step 2>", "role": "admin",    "notAfter": null },
+  { "name": "olga",           "sha256": "<her token's hash>",     "role": "operator", "notAfter": null },
+  { "name": "status-monitor", "sha256": "<the monitor's hash>",   "role": "monitor",  "notAfter": null }
+]
+```
+
+Each entry has these four, and nothing else:
+
+- `name` — who holds the token: 1 to 64 lowercase letters, digits, `.`,
+  `_`, `@` or `-`, the first a letter or a digit. Two entries share a name
+  only while their holder rotates a token, and then the token it replaces has
+  a `notAfter` within 30 days: step 4 refuses a list with two tokens of one
+  name that both last longer, which would leave the old one taken for good,
+  and the worker one past 31 days, a day more by its own clock, so that a
+  clock a little off never has it refuse a list step 4 put.
+- `sha256` — the hash from step 2. A token is listed once.
+- `role` — `monitor`, `reader`, `operator` or `admin`.
+- `notAfter` — `null`, or the last instant the token is taken at, in UTC,
+  such as `2027-05-01T00:00:00Z`.
+
+Cloudflare stores a secret of at most 5 KB, which is about thirty entries,
+so drop the entries of expired tokens whenever you put the list again. It
+never shows a secret again either: keep the file, which holds hashes and no
+token, where the next change will start from, such as the password manager.
+Each environment's list has one owner, and each change starts from that file
+as the last put left it, one change at a time: step 4 replaces the secret
+whole, so a list made from an older copy would put back a token dropped
+since.
+
+Check the entry the file gives each new token, and in a rotation its
+holder's other entry, before you put the list:
+the worker records every change under that name, and allows what that role
+allows, so a hash in the entry of another holder of the same role would
+pass every check below, and the worker would record that holder's name.
+With the token in `NEW_TOKEN`, this prints every entry of its holder, its
+own marked `"new":true`:
 
 ```sh
-npx wrangler secret put COMET_REGISTRY_ADMIN_TOKEN_HASH --env stage
-npx wrangler secret put COMET_REGISTRY_ADMIN_TOKEN_HASH --env production
+: "${NEW_TOKEN:?make it first, as step 1 does}" && jq -c --arg sha "$(printf '%s' "$NEW_TOKEN" | shasum -a 256 | cut -d ' ' -f 1)" '[.[] | select((.sha256 | strings | ascii_downcase) == $sha) | .name] as $holders | [.[] | select(.name as $n | any($holders[]; . == $n)) | {name, role, notAfter, new: (((.sha256 | strings | ascii_downcase) == $sha) // false)}]' "$HOME/tokens.${ENVIRONMENT:?export it first}.json"
 ```
 
-For a worker you run on your own machine, the same line goes into `.dev.vars`,
-which git ignores:
-
-```
-COMET_REGISTRY_ADMIN_TOKEN_HASH=<the hash from step 2>
-```
-
-**4. Check it** with any administrative read — an unknown version id is
-enough, because reaching a `404` means the token was accepted:
+On Linux `sha256sum` takes the place of `shasum -a 256`, as in step 2.
+There must be one entry marked `"new":true`, with its holder's name and
+role, and the `notAfter` you meant: `null`, or the instant the token is to
+stop being taken. For a new holder it is the only entry: one marked
+`"new":false` is someone else's, whose name the new entry took. In a
+rotation there is one more, `"new":false`, the token being replaced, which
+must have the cutoff you gave it, a few days ahead, never `null`; a rotation
+that prints no such entry has lost the old entry, or has the new one under
+another name than the old one's. Any further `"new":false` entry is an older
+token of the holder's, which must have a cutoff too, and goes once that has
+passed. `[]` is a token the file does not list, or one hashed with `echo`;
+two entries marked `"new":true`, or another name, role or `notAfter`, a hash
+in the wrong entry. Correct the file and check again. For a worker you run
+on your own machine, check its list, `~/tokens.local.json`:
 
 ```sh
-curl -s -o /dev/null -w '%{http_code}\n' \
-  "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000000000" \
-  -H "Authorization: Bearer $TOKEN"
+: "${NEW_TOKEN:?make it first, as step 1 does}" && jq -c --arg sha "$(printf '%s' "$NEW_TOKEN" | shasum -a 256 | cut -d ' ' -f 1)" '[.[] | select((.sha256 | strings | ascii_downcase) == $sha) | .name] as $holders | [.[] | select(.name as $n | any($holders[]; . == $n)) | {name, role, notAfter, new: (((.sha256 | strings | ascii_downcase) == $sha) // false)}]' "$HOME/tokens.local.json"
 ```
 
-`404` is what you want. `401` means the hash in the environment is not this
-token's: one made with `echo`, another token's, or the token itself, stored
-in place of its hash. `403` means the environment has no hash it can use:
-none at all — an unconfigured admin API is a closed one — or a value that is
-not 64 hex digits, such as a hash copied with the `  -` or ` *stdin` printed
-after it. The answer's message says which; run the command again without
-`-o /dev/null` to see it. Either way, put the hash in again (steps 2 and 3).
+**4. Put the list into the environment**, from `c3-api`. The command builds
+the scripts it runs, and reads the environment's address into `API` again,
+its routing checked first, as [Before you start](#before-you-start) does,
+and prints it: step 5 checks the token there. A list the worker cannot read
+closes the administrative API to every token, the owner's too, so it then
+reads the file exactly as the worker will read the secret, with the worker's
+own code (`scripts/admin-tokens.ts`), and puts nothing the worker would
+refuse. It then checks the account Wrangler uses, as
+[Before you start](#before-you-start) says, and makes sure the environment's
+Worker exists in it: put into a Worker that is not there, Wrangler creates
+one by that name, without asking when it reads from a pipe. Wrangler reads
+the secret from the pipe, and it takes effect without a deploy:
 
-**Rotating.** Repeat steps 1–3. The previous token stops working the moment
-the secret is updated, without a deploy, so replace it in the password
-manager first and tell whoever else holds it. There is one token per
-environment: a stage token is not a production one.
+```sh
+unset API; npx tsc -p tsconfig.scripts.json \
+  && node dist/scripts/environment-routing.js \
+  && API="$(node dist/scripts/environment-address.js)" && export API && echo "API=$API" \
+  && LIST="$(node dist/scripts/admin-tokens.js "$HOME/tokens.${ENVIRONMENT:?export it first}.json")" \
+  && npx wrangler kv key list --binding kv_mainnet --env "$ENVIRONMENT" --remote --prefix account-check > /dev/null \
+  && npx wrangler secret list --env "$ENVIRONMENT" > /dev/null \
+  && printf '%s\n' "$LIST" | npx wrangler secret put COMET_REGISTRY_ADMIN_TOKENS --env "$ENVIRONMENT"
+```
+
+Wherever the address read of [Before you start](#before-you-start) would
+stop, the command stops too, and puts nothing, leaving `API` empty.
+
+When the worker would refuse the list, the check prints what the worker
+would log, such as `COMET_REGISTRY_ADMIN_TOKENS[1].sha256 must be 64 hex
+digits` for a hash not yet filled in, or `COMET_REGISTRY_ADMIN_TOKENS[0]
+names notAfter twice` for a field written twice, which JSON alone would read
+by its last value, or `… are two tokens of … that last more than 30 days`
+for a rotation in which neither token stops within 30 days.
+`cannot read …` is a file that is not there, and `… is empty` an empty one.
+An error from `kv key list` is the account check stopping, for one of the
+reasons [Before you start](#before-you-start) gives, and
+`Worker "…" (env: …) not found` an environment whose Worker is not deployed
+yet. In each case nothing is put: correct it and run the command again. A
+list of no token, `[]`, is put, with a word that it closes the
+administrative API to every request.
+
+For a worker you run on your own machine, write its list as
+`~/tokens.local.json` and run the check alone, from `c3-api`:
+
+```sh
+npx tsc -p tsconfig.scripts.json && node dist/scripts/admin-tokens.js "$HOME/tokens.local.json"
+```
+
+and put the line it prints into `.dev.vars`, which git ignores, in single
+quotes:
+
+```
+COMET_REGISTRY_ADMIN_TOKENS='[{"name":"alice","sha256":"<the hash from step 2>","role":"admin","notAfter":null}]'
+```
+
+**5. Check each token** with two requests that change nothing. The first is
+a validation of a version that does not exist, with a body the worker
+refuses, `[]` in place of an object: the role is checked before the body is
+read, so the answer says whether the token is taken, and with which role.
+The second reads the status, which names the environment that takes the
+token at `API`. Each goes out, from `c3-api`, only once the routing of `API`
+is checked again right before it, the check of
+[Before you start](#before-you-start), since a route can change after step
+4, a deploy among the things in between, or between the two. In another
+shell, read `API` again first, as Before you start does. For a worker on
+your own machine, `API` is `http://localhost:8787`, which the check passes:
+the token never leaves the machine, and `--noproxy` keeps it off any proxy
+set for plain http.
+
+```sh
+API="$API" node dist/scripts/environment-routing.js && curl --disable -sS --noproxy localhost,127.0.0.1,::1 -X POST "$API/registry/v1/admin/versions/00000000-0000-4000-8000-000000000000/validate" \
+  -H "Authorization: Bearer $NEW_TOKEN" -H 'Content-Type: application/json' -d '[]' | jq -c .error
+API="$API" node dist/scripts/environment-routing.js && curl --disable -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/status" -H "Authorization: Bearer $NEW_TOKEN" | jq -r '.environment // .error.code'
+```
+
+- `"code":"BAD_REQUEST"`, "the request body must be a JSON object": the
+  token is an `admin`'s. The body is refused before any version is looked
+  up, so nothing is validated, whatever the id.
+- `"code":"FORBIDDEN"` with `"details":{"role":"…","requiredRole":"admin"}`:
+  the token is taken, with the role `details.role` names, which must be the
+  role its entry lists.
+- The status prints the environment's name, which must be `$ENVIRONMENT`, or
+  `local` for a worker you run on your own machine. A token is listed in its
+  own environment alone, so another environment never names itself here: it
+  refuses the token, as below.
+
+`API is empty`, from the check, is an `API` this shell has not read. Where
+step 4 stopped before reading it, it also put nothing: run step 4 again once
+what stopped it is fixed. Otherwise read `API` again, as
+[Before you start](#before-you-start) says, or, for a worker on your own
+machine, run `export API=http://localhost:8787`. A `curl: (N) …` line is a
+request that did not reach the API, the host down or out of reach: wait for
+the host. Either way nothing was checked: run the block again. If `jq`
+reports a parse error, that answer is not JSON: run its line again, its
+check with it, without its `| jq …` to see it. Any other answer to the first
+request names its `code` and `message`, and the second prints that `code`:
+
+- `UNAUTHORIZED` (`401`), "a bearer token is required": `NEW_TOKEN` is empty
+  in this shell.
+- `UNAUTHORIZED` (`401`), "the bearer token is not valid": the environment at
+  `API` has no entry for this token. Either `API` is not `$ENVIRONMENT`'s
+  address, and another environment answered, or the list has no entry for
+  it: a hash made with `echo`, another token's, or the token itself, listed
+  in place of its hash. Read `API` again first, as
+  [Before you start](#before-you-start) says, then hash the token again
+  (step 2) and put the list again. If step 4 put a list into an environment
+  you did not mean, put that environment's own list back the same way.
+- `UNAUTHORIZED` (`401`), "the bearer token has expired": its `notAfter` has
+  passed.
+- `FORBIDDEN` (`403`), "… COMET_REGISTRY_ADMIN_TOKENS is malformed": the
+  worker cannot read the list, such as one with a hash copied with the `  -`
+  or ` *stdin` printed after it, or an entry that names a field twice, and
+  refuses every token until it can. Step 4 puts no such list, so it came
+  another way. The worker's log line `registry route refused`, under the
+  answer's `requestId`, names the entry and what is wrong with it; correct
+  the file and put it again (step 4).
+- `FORBIDDEN` (`403`), "… is not configured in this environment": the
+  environment at `API` has no list, or one with no entry, and an unconfigured
+  admin API is a closed one. Put the list (step 4), or, if you did, read
+  `API` again, as [Before you start](#before-you-start) says.
+
+**Rotating a token.** Make a new token for the same holder (steps 1 and 2),
+add its entry under the same name and role, give the old entry a `notAfter`
+a few days ahead, check the holder's entries as the end of step 3 does, and
+put the list (step 4). Step 4 refuses the list while both entries last more
+than 30 days, but it cannot tell which is the old one, and it takes a list
+whose new token is meant to stop within 30 days while the old one never
+does. Step 3's check tells them apart: the old token's entry,
+`"new":false`, must show the cutoff you gave it. Both tokens are taken until
+then: the holder switches, and after it the old one is refused as expired.
+Drop its entry the next time you put the list. A token that may have leaked
+is not rotated: drop its entry and put the list, which refuses it. Step 5
+with that token then answers "the bearer token is not valid"; run that
+check again after the next put, since a list made from an older copy would
+put the token back (step 3).
 
 ### The preflight
 
@@ -141,13 +483,13 @@ on your machine, on a database of its own, against the real chain. Nothing of
 it reaches any environment.
 
 **Set it up.** In `c3-api` of a checkout of the commit being deployed, put
-into `.dev.vars` the hash of an admin token of your own
-(`COMET_REGISTRY_ADMIN_TOKEN_HASH`, see [The admin token](#the-admin-token)),
-a `COMET_GITHUB_TOKEN`, and the `NODE_PROXY_HOST` and `NODE_PROXY_KEY` of a
-deployed node provider proxy whose providers keep archive state: the creation
-blocks are read at past blocks. The local source is the one stage and
-production import, `Compound-Foundation/comet` at `main`. Then start the
-worker on an empty database, kept apart from your usual local one:
+into `.dev.vars` a `COMET_REGISTRY_ADMIN_TOKENS` that lists an admin token of
+your own (see [The admin tokens](#the-admin-tokens)), a `COMET_GITHUB_TOKEN`,
+and the `NODE_PROXY_HOST` and `NODE_PROXY_KEY` of a deployed node provider
+proxy whose providers keep archive state: the creation blocks are read at
+past blocks. The local source is the one production imports,
+`Compound-Foundation/comet` at `main`. Then start the worker on an empty
+database, kept apart from your usual local one:
 
 ```sh
 cd c3-api
@@ -163,7 +505,11 @@ proxy, in `../node-provider-proxy/.dev.vars`, the keys of providers that keep
 archive state, and add `-c wrangler.local-proxy.toml` to both commands.
 
 **Bring it up.** In another terminal, from the root of the checkout, with
-`export API=http://localhost:8787` and your token in `TOKEN`, run steps 1 to 6
+`export API=http://localhost:8787` and your token in `TOKEN`, with
+`export NO_PROXY=localhost,127.0.0.1,::1 no_proxy=localhost,127.0.0.1,::1`,
+which keeps the token off any proxy set for plain http, and with the
+scripts built, `(cd c3-api && npx tsc -p tsconfig.scripts.json)`, since
+each request runs the routing check first, run steps 1 to 6
 of [the first bring-up](#bringing-an-environment-up-for-the-first-time), and
 time them.
 
@@ -194,12 +540,12 @@ once you are done, too.
 ### 1. Import — take a snapshot of the source
 
 ```sh
-curl -s -X POST "$API/registry/v1/admin/sync" -H "Authorization: Bearer $TOKEN" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 -X POST "$API/registry/v1/admin/sync" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{}' | jq
 export V=<registryVersionId from the answer>
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 POST {{API}}/registry/v1/admin/sync
@@ -305,13 +651,14 @@ After either `idle` answer, take the draft from the status, which also says
 how the job's import went:
 
 ```sh
-curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" \
   | jq '{draft: .candidates.importing, lastRun: .sync.lastRun}'
 export V=<the versionId listed under draft>
 ```
 
-In Postman, `GET {{API}}/registry/v1/admin/status` with the token: the
-`versionId` under `candidates.importing`, and `sync.lastRun`;
+In Postman, for a worker on your own machine,
+`GET {{API}}/registry/v1/admin/status` with the token: the `versionId`
+under `candidates.importing`, and `sync.lastRun`;
 `GET /registry/v1/admin/versions?status=importing` lists the same draft.
 
 Use the draft only if the job imported every market: in `sync.lastRun`,
@@ -330,13 +677,13 @@ closes the incomplete one.
 ```sh
 set -o pipefail
 jq -r 'to_entries[] | "\(.key) \(.value)"' c3-api/registry/seed/production.comets.json | LC_ALL=C sort > seed-markets.txt &&
-curl -sS "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" > changes.json &&
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -sS --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" > changes.json &&
 jq -r '.markets.added[] | "\(.scope) \(.market.contracts.comet)"' changes.json | LC_ALL=C sort > draft-markets.txt &&
 LC_ALL=C comm -3 seed-markets.txt draft-markets.txt &&
 echo "compared: $(wc -l < draft-markets.txt | tr -d ' ') markets in the draft"
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 GET {{API}}/registry/v1/admin/versions/{{V}}/changes
@@ -380,19 +727,21 @@ the Comet of one line of the file.
 - `jq: error … Cannot iterate over null` means the request was refused, and
   nothing was compared: `jq .error changes.json` says why
   ([When something goes wrong](#when-something-goes-wrong)).
-- A `curl: (N) …` line means the request did not reach the API — `API`
-  unset, or the host down or out of reach — and nothing was compared. Set
-  `API`, or wait for the host, and run the block again.
+- `API is empty`, from the check, is an `API` this shell has not read, and a
+  `curl: (N) …` line a request that did not reach the API, the host down or
+  out of reach; either way nothing was compared. Read `API` again, as
+  [Before you start](#before-you-start) says, or wait for the host, and run
+  the block again.
 
 ### 3. Send the seed
 
 ```sh
-curl -s -X PUT "$API/registry/v1/admin/versions/$V/overlays" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 -X PUT "$API/registry/v1/admin/versions/$V/overlays" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   --data-binary @c3-api/registry/seed/production.json | jq '.error // {changed, unreviewed}'
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 PUT {{API}}/registry/v1/admin/versions/{{V}}/overlays
@@ -441,11 +790,11 @@ Any other answer is in [When something goes wrong](#when-something-goes-wrong).
 ### 4. Let the registry check the draft
 
 ```sh
-curl -s -X POST "$API/registry/v1/admin/versions/$V/validate" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 -X POST "$API/registry/v1/admin/versions/$V/validate" \
   -H "Authorization: Bearer $TOKEN" | jq '.error // {status: .version.status}'
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 POST {{API}}/registry/v1/admin/versions/{{V}}/validate
@@ -466,10 +815,10 @@ website. A draft that passes is **frozen**: nothing can change it any more.
 them to a developer:
 
 ```sh
-curl -s "$API/registry/v1/admin/versions/$V" -H "Authorization: Bearer $TOKEN" | jq .validation
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$V" -H "Authorization: Bearer $TOKEN" | jq .validation
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 GET {{API}}/registry/v1/admin/versions/{{V}}
@@ -490,12 +839,12 @@ the seed as steps 2 and 3 say.
 ### 5. Switch it on
 
 ```sh
-curl -s -X POST "$API/registry/v1/admin/versions/$V/activate" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 -X POST "$API/registry/v1/admin/versions/$V/activate" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"reason":"first registry version", "expectedActiveVersionId":null}' | jq
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 POST {{API}}/registry/v1/admin/versions/{{V}}/activate
@@ -524,7 +873,7 @@ curl -s "$API/registry/v1/active" | jq '[.networks[].markets | length] | add'
 curl -si "$API/registry/v1/active" | grep -i x-registry-version
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 GET {{API}}/registry/v1/active
@@ -554,7 +903,7 @@ commit ends as a version that is `validated` and waiting to be switched on,
 or `invalid`, with the checks it failed. The status names the one waiting:
 
 ```sh
-curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq '.candidates.validated, .alerts'
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq '.candidates.validated, .alerts'
 export V=<the first versionId listed>
 ```
 
@@ -574,10 +923,10 @@ itself, because it would fail the same way.
 Every version there is, newest first, with the one that is on named:
 
 ```sh
-curl -s "$API/registry/v1/admin/versions" -H "Authorization: Bearer $TOKEN" | jq
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions" -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 GET {{API}}/registry/v1/admin/versions
@@ -595,12 +944,12 @@ imported, the answer names the draft in `registryVersionId` — set `V` from it
 only when the answer is `completed` with `imported`:
 
 ```sh
-curl -s -X POST "$API/registry/v1/admin/sync" -H "Authorization: Bearer $TOKEN" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 -X POST "$API/registry/v1/admin/sync" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' -d '{}' | jq '.error // {status, outcome, registryVersionId, reason}'
 export V=<registryVersionId>
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 POST {{API}}/registry/v1/admin/sync
@@ -620,13 +969,13 @@ it answers with that commit's draft, importing it first if there is none.
 ### 2. See what switching it on would change
 
 ```sh
-curl -s "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" \
   | jq '{status, comparedWith, added: [.markets.added[] | {scope, reviewed}], removed: .markets.removed,
          unserved: .markets.unserved,
          changed: [.markets.changed[] | "\(.scope) \(.field): \(.before) -> \(.after)"], networks}'
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 GET {{API}}/registry/v1/admin/versions/{{V}}/changes
@@ -689,13 +1038,13 @@ The scheduled job's draft of a commit is checked and frozen as soon as it is
 imported, so describing a market needs a new attempt of that commit, held open:
 
 ```sh
-curl -s -X POST "$API/registry/v1/admin/sync" -H "Authorization: Bearer $TOKEN" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 -X POST "$API/registry/v1/admin/sync" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"forceNewAttempt": true, "holdForReview": true, "reason": "describe <chainId>/<deploymentKey>"}' | jq
 export V=<registryVersionId>
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 POST {{API}}/registry/v1/admin/sync
@@ -723,11 +1072,11 @@ described before (step 5).
 ### 2. See what the import read about it
 
 ```sh
-curl -s "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$V/changes" -H "Authorization: Bearer $TOKEN" \
   | jq '.markets.added[] | select(.reviewed | not)'
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 GET {{API}}/registry/v1/admin/versions/{{V}}/changes
@@ -748,11 +1097,11 @@ most decisions — the reward feed, the quote unit, the USD feed. Read its
 document:
 
 ```sh
-curl -s "$API/registry/v1/admin/versions/$V/markets/<chainId>/<similar deploymentKey>/overlay" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/$V/markets/<chainId>/<similar deploymentKey>/overlay" \
   -H "Authorization: Bearer $TOKEN" | jq .overlay
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 GET {{API}}/registry/v1/admin/versions/{{V}}/markets/<chainId>/<similar deploymentKey>/overlay
@@ -792,12 +1141,12 @@ as soon as it is sent.
 ### 5. Send it, then check and switch on
 
 ```sh
-curl -s -X PUT "$API/registry/v1/admin/versions/$V/markets/<chainId>/<deploymentKey>/overlay" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 -X PUT "$API/registry/v1/admin/versions/$V/markets/<chainId>/<deploymentKey>/overlay" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"reason": "describe <chainId>/<deploymentKey>", "overlay": { ... }}' | jq
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 PUT {{API}}/registry/v1/admin/versions/{{V}}/markets/<chainId>/<deploymentKey>/overlay
@@ -834,7 +1183,7 @@ none. `"expectedDigest": null` says it is decided against a network nobody
 has reviewed, so a description somebody else sent first is not overwritten:
 
 ```sh
-curl -s -X PUT "$API/registry/v1/admin/versions/$V/networks/<chainId>/overlay" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 -X PUT "$API/registry/v1/admin/versions/$V/networks/<chainId>/overlay" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"reason": "describe <chainId>", "overlay": {"displayName": "<the name the website shows>",
        "assetDisplayOverrides": [], "unwrappedCollateralAssets": [], "priceExceptions": []},
@@ -859,7 +1208,7 @@ or switched on by itself: that is yours to do.
 ### 1. Read what changed
 
 ```sh
-curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq '.chainCheck'
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq '.chainCheck'
 ```
 
 Each entry of `drifts` names the network, the market (`chainId/deploymentKey`)
@@ -879,13 +1228,13 @@ registry's feeds would use.
 ### 2. Import the commit again
 
 ```sh
-curl -s -X POST "$API/registry/v1/admin/sync" -H "Authorization: Bearer $TOKEN" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 -X POST "$API/registry/v1/admin/sync" -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"forceNewAttempt": true, "reason": "read the chain again: 130/weth changed the feed of rsETH"}' | jq
 export V=<registryVersionId from the answer>
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 POST {{API}}/registry/v1/admin/sync
@@ -953,12 +1302,12 @@ stores what drifted keeps it raised.
 ## Switching back
 
 ```sh
-curl -s -X POST "$API/registry/v1/admin/versions/<previous version id>/rollback" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 -X POST "$API/registry/v1/admin/versions/<previous version id>/rollback" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"reason":"why", "expectedActiveVersionId":"<the version that is on>"}' | jq
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 POST {{API}}/registry/v1/admin/versions/<previous version id>/rollback
@@ -995,11 +1344,11 @@ is the `previousVersionId` in the answer of the activation you are undoing.
 The history of the version that is on has it too:
 
 ```sh
-curl -s "$API/registry/v1/admin/versions/<the version that is on>" -H "Authorization: Bearer $TOKEN" \
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/versions/<the version that is on>" -H "Authorization: Bearer $TOKEN" \
   | jq '.version.id as $on | first(.activations[] | select(.targetVersionId == $on)) | .previousVersionId'
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 GET {{API}}/registry/v1/admin/versions/<the version that is on>
@@ -1017,10 +1366,10 @@ back to.
 One request tells you whether the registry is well:
 
 ```sh
-curl -s "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
+(cd c3-api && API="$API" node dist/scripts/environment-routing.js > /dev/null) && curl --disable -s --noproxy localhost,127.0.0.1,::1 "$API/registry/v1/admin/status" -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-Postman:
+Postman, for a worker on your own machine:
 
 ```http
 GET {{API}}/registry/v1/admin/status
@@ -1051,8 +1400,10 @@ When `alerts` is not empty, each name says what to do:
 | `snapshot-not-cached` | The active version is not in the cache | Harmless by itself — the next request refills it. If it persists, the KV namespace is misconfigured for this environment |
 | `cache-unreadable` | The KV namespace itself did not answer | Check the `kv_registry` binding of this environment: until it answers there is no cache, and no older version to fall back on if the database fails |
 
-This is the request to point a monitor at: poll it every few minutes and
-alert when `alerts` is not empty, or when the request itself fails.
+A monitor sends this request alone, `GET $API/registry/v1/admin/status`,
+every few minutes, with a `monitor` token of its own, and alerts when
+`alerts` is not empty, or when the request fails. It runs no routing check,
+so give it no other token: its role reads the status and nothing else.
 
 ## What the registry keeps
 
@@ -1092,9 +1443,9 @@ whose reasons are in the draft it names.
 
 | What you see | What it means | What to do |
 |---|---|---|
-| `INTERNAL` from the import, with a `requestId` | A fault rather than a service being down — most often the environment's database has no migrations applied. The worker's log has the error under `registry sync failed unexpectedly` | Apply the migrations (`npm run d1:migrate:<env>`), then import again; anything else is a bug to report with the log line |
+| `INTERNAL` from the import, with a `requestId` | A fault rather than a service being down — most often the environment's database has no migrations applied. The worker's log has the error under `registry sync failed unexpectedly` | Apply the migrations (`node dist/scripts/environment-address.js > /dev/null && npm run "d1:migrate:$ENVIRONMENT"`, in `c3-api`), then import again; anything else is a bug to report with the log line |
 | `UPSTREAM_UNAVAILABLE: the import was interrupted by a service that did not answer` | The database did not answer, or was restarted under the request; the log line `registry sync failed` has its message | Import again; if it persists, check the database |
-| `503 UPSTREAM_UNAVAILABLE`, `details.code` `SOURCE_REQUEST_FAILED` | GitHub did not answer, or not within 20 seconds, or answered with an error status. "its rate limit is used up until …" is its hourly allowance spent, and "too many requests at once" its limit on bursts | Import again — after the time the message names, if it names one. Without `COMET_GITHUB_TOKEN` the allowance is 60 API requests an hour: set it ([Before you start](#before-you-start)) |
+| `503 UPSTREAM_UNAVAILABLE`, `details.code` `SOURCE_REQUEST_FAILED` | GitHub did not answer, or not within 20 seconds, or answered with an error status. "its rate limit is used up until …" is its hourly allowance spent, and "too many requests at once" its limit on bursts | Import again — after the time the message names, if it names one. Without `COMET_GITHUB_TOKEN` the allowance is 60 API requests an hour: set it, in `c3-api` ([Before you start](#before-you-start)) |
 | `422`, `details.code` `SOURCE_CONFIGURATION_INVALID`, from the import | A setting the import reads is not what it takes, and the message names it; `/admin/status` raises `configuration-invalid` | Correct the value in `wrangler.toml` and deploy |
 | `422`, `details.code` `SOURCE_TREE_TRUNCATED`, `SOURCE_CONTENT_TOO_LARGE` or `SOURCE_RESPONSE_INVALID` | GitHub answered, but with something the import cannot use, and would answer the same way again | Report it to a developer with the message; importing again does not help |
 | `422`, "validation failed", from the import, with `details.syncRunId` and `details.registryVersionId` | The import finished and its draft failed a check: the draft is `invalid`, and can no longer change. `/admin/status` raises `last-sync-failed`, and `commit-rejected` as well when every root imported | Read the draft's checks: `GET /registry/v1/admin/versions/<registryVersionId>`, under `validation`. If `all-roots-imported` failed, `GET /registry/v1/admin/sync-runs/<syncRunId>` names the roots the run gave up, and why. Otherwise correct the decisions in a held attempt (step 1 of [Describing a new market](#describing-a-new-market)) and validate it, or wait for a new commit |
@@ -1103,10 +1454,13 @@ whose reasons are in the draft it names.
 | A network under `chainCheck.unreadable` in `/admin/status` | The check of the chain could not read that network, for the reason it names — most often `CHAIN_REQUEST_FAILED`, as in the row above. Nothing new is known about its markets: it raises no `chain-drift` of its own and clears none, since a drift found there before stays, with the `seenAt` of the last read that found it. The warning `registry chain not read` in the worker's log has the cause | Fix the proxy for that network. The check reads it again at the next hourly invocation, until it has read every network |
 | `chain-drift` in `/admin/status` | The chain answers a market's feed or collateral otherwise than the version on stores it | [A market that changed on chain](#a-market-that-changed-on-chain) |
 | `422`, `details.code` `OVERLAY_CREATION_BLOCK_WRONG`, writing an overlay, the seed among them | A `creationBlock` the document changes is not the block the market's Comet was deployed in; the message says whether it is before the deployment, after it, or past the latest block. Nothing was written | Send the block the chain's explorer gives as the Comet's "Contract Creation" (step 4 of [Describing a new market](#describing-a-new-market)). From the seed, the file's block is wrong, or the key now names another Comet: see step 3 of [the first bring-up](#3-send-the-seed) |
-| `401` | The token is wrong, or is the hash | Use the admin token itself |
+| `401`, "the bearer token is not valid" | The token is not one the environment lists: a wrong one, or its hash in its place | Use the token itself; check it as step 5 of [The admin tokens](#the-admin-tokens) says |
+| `401`, "the bearer token has expired" | Your token's `notAfter` has passed: it was rotated out | Use the token that replaced it, or ask the environment's owner for one |
+| `403`, "the token … has the role …, and this route needs …" | Your token's role does not reach the route; `details.requiredRole` names the role that does | Ask for a token with that role, or ask its holder to make the change |
+| `403`, "the administrative API is misconfigured in this environment: …", or "… is not configured …" | The environment has no token in its list, or a list the worker cannot read, so every token is refused | Step 5 of [The admin tokens](#the-admin-tokens) says what each message means and what to do |
 | `413` | The request body is larger than the route takes | Send less: a directory of overlays in several requests |
 | `429`, "too many administrative requests from this address" | More than 60 administrative requests in a minute from your address — over IPv6, from your /64 — whatever they were: every request under `/registry/v1/admin/` is counted by address before its token is checked, a wrong token or a path no route takes included, and the right token is refused too once the address has spent its budget | Wait the seconds its `Retry-After` names — a minute at most. A script in a loop, or a monitor sharing your address, is what spends it |
-| `429`, "too many … requests with this token" | More than 30 administrative requests in a minute with your token, counted per family of routes. Reads count too, and every read shares one budget — a monitor polling `/admin/status` with your token spends it with you — while each kind of command has its own | Wait the seconds its `Retry-After` names. The environment has one token, so a monitor polls the status every few minutes, not in a loop |
+| `429`, "too many … requests with this token" | More than 30 administrative requests in a minute with your token, counted per family of routes. Reads count too, and every read shares one budget, while each kind of command has its own; anyone using your token spends it with you | Wait the seconds its `Retry-After` names. A monitor polls with a `monitor` token of its own, which spends nothing of yours |
 | `422`, `details.code` `OVERLAY_FEED_UNREADABLE`, writing an overlay | A feed the overlay names does not answer its decimals on that chain: it reverts, or nothing is deployed at that address there — most often a feed of another chain | Check the address against the chain's feed; a `503` instead is the node provider not answering, and worth trying again |
 | `409` writing overlays, "… registry version cannot be changed" or "is no longer importing" | The draft is no longer open: it was validated, switched on, or replaced by a newer attempt of its commit (`GET /registry/v1/admin/versions/<id>` says which) | Look for the newest open draft first (`GET /registry/v1/admin/versions?status=importing`) and continue there; start a new attempt (step 1 with `forceNewAttempt`) only if there is none |
 | `409` on validate, "the import … is still running" | The import has not finished | Send step 1 again until it completes |

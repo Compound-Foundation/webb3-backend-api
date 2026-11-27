@@ -16,6 +16,7 @@ import { bodyFor } from '../../util/registry-seed.js';
 
 import { applyMigrations } from '../../util/d1.js';
 import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate } from '../../util/registry-fixture.js';
+import { registryWorker } from '../../util/registry-worker.js';
 
 /*
  * What an overlay write reads of the chain: the scale of a feed it
@@ -29,7 +30,7 @@ import { loadRegistrySnapshotFixture, overlayOfNetwork, seedCandidate } from '..
  * creation block the chain contradicts. A node that did not serve the read
  * says nothing about the document, and is a 503 worth trying again.
  */
-const server = createTestHarness({ workers: [ { configPath: './wrangler.toml' } ] });
+const server = createTestHarness({ workers: [ registryWorker() ] });
 
 t.before(async () => {
   await server.listen();
